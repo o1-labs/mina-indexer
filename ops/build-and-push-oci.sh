@@ -30,20 +30,24 @@ REF="${REGISTRY:-local}/${IMAGE}:${TAG}"
 
 echo ">> Building OCI image with Nix (.#dockerImage)" >&2
 nix build .#dockerImage --print-build-logs
-# `nix build` leaves a docker-archive tarball at ./result
+# streamLayeredImage: ./result is an executable that streams a docker-archive
+# tarball to stdout (not a tarball itself).
+tarball="$(mktemp --suffix=.tar)"
+trap 'rm -f "$tarball"' EXIT
+./result > "$tarball"
 
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
-  echo ">> DRY_RUN=1, not pushing. Would push: ${REF}" >&2
+  echo ">> DRY_RUN=1, built $(du -h "$tarball" | cut -f1) image, not pushing. Would push: ${REF}" >&2
   exit 0
 fi
 
 echo ">> Pushing ${REF}" >&2
 if command -v skopeo >/dev/null 2>&1; then
-  # Daemonless push straight from the Nix tarball (preferred in CI).
-  skopeo copy "docker-archive:./result" "docker://${REF}"
+  # Daemonless push (preferred in CI).
+  skopeo copy "docker-archive:${tarball}" "docker://${REF}"
 else
   # Fallback via the Docker daemon.
-  loaded="$(docker load < ./result | sed -n 's/^Loaded image: //p' | head -1)"
+  loaded="$(docker load < "$tarball" | sed -n 's/^Loaded image: //p' | head -1)"
   docker tag "${loaded:-mina-indexer:$(git rev-parse --short=8 HEAD)}" "${REF}"
   docker push "${REF}"
 fi
