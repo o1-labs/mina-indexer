@@ -28,6 +28,7 @@ smart-default = { version = "0.*", default-features = false }
 clap = { version = "4.*", default-features = false, features = ["help", "usage", "std", "derive", "string"] }
 thiserror = { version = "1.*", default-features = false }
 glob = { version = "0.*", default-features = false }
+serde_path_to_error = "0.1"
 mina_serialization_proc_macros = { path = "mina_serialization_macros/proc_macros" }
 mina_serialization_versioned = { path = "mina_serialization_macros/versioned" }
 ark-ec = { version = "0.3.*", default-features = false }

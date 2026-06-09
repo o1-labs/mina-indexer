@@ -1,11 +1,11 @@
 //! GraphQL representation of zkapp account
 
-use crate::{constants::ZKAPP_STATE_FIELD_ELEMENTS_NUM, mina_blocks::v2};
+use crate::mina_blocks::v2;
 use async_graphql::SimpleObject;
 
 #[derive(SimpleObject)]
 pub struct ZkappAccount {
-    pub app_state: [String; ZKAPP_STATE_FIELD_ELEMENTS_NUM],
+    pub app_state: Vec<String>,
     pub action_state: [String; 5],
     pub verification_key: VerificationKey,
     pub proved_state: bool,
@@ -23,7 +23,7 @@ pub struct VerificationKey {
 impl From<v2::ZkappAccount> for ZkappAccount {
     fn from(value: v2::ZkappAccount) -> Self {
         Self {
-            app_state: value.app_state.0.map(|s| s.0),
+            app_state: value.app_state.0.into_iter().map(|s| s.0).collect(),
             action_state: value.action_state.map(|s| s.0),
             verification_key: value.verification_key.into(),
             proved_state: value.proved_state,

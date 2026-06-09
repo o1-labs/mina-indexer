@@ -331,6 +331,21 @@ impl StagedLedgerStore for IndexerStore {
                     ledger_hash: LedgerHash::new_or_panic(HARDFORK_GENESIS_LEDGER_HASH.into()),
                 },
             )))?;
+        } else if state_hash.0 == MESA_GENESIS_PREV_STATE_HASH
+            && self
+                .add_staged_ledger_hash(
+                    &LedgerHash::new_or_panic(MESA_GENESIS_LEDGER_HASH.into()),
+                    state_hash,
+                )
+                .unwrap_or(false)
+        {
+            self.add_event(&IndexerEvent::Db(DbEvent::Ledger(
+                DbLedgerEvent::NewLedger {
+                    blockchain_length: MESA_GENESIS_BLOCKCHAIN_LENGTH - 1,
+                    state_hash: state_hash.clone(),
+                    ledger_hash: LedgerHash::new_or_panic(MESA_GENESIS_LEDGER_HASH.into()),
+                },
+            )))?;
         } else {
             match self.get_block_staged_ledger_hash(state_hash)? {
                 Some(ledger_hash) => {
@@ -639,4 +654,5 @@ impl StagedLedgerStore for IndexerStore {
 fn is_genesis_prev_state_hash(state_hash: &StateHash) -> bool {
     state_hash.0 == MAINNET_GENESIS_PREV_STATE_HASH
         || state_hash.0 == HARDFORK_GENESIS_PREV_STATE_HASH
+        || state_hash.0 == MESA_GENESIS_PREV_STATE_HASH
 }

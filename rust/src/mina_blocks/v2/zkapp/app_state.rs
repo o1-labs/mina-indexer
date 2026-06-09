@@ -3,8 +3,18 @@
 use crate::constants::ZKAPP_STATE_FIELD_ELEMENTS_NUM;
 use serde::{Deserialize, Serialize};
 
-#[derive(Default, Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Hash, Serialize, Deserialize)]
-pub struct ZkappState(pub [AppState; ZKAPP_STATE_FIELD_ELEMENTS_NUM]);
+/// zkApp on-chain state. Variable-length to support protocols with different
+/// field counts: mainnet/devnet use [`ZKAPP_STATE_FIELD_ELEMENTS_NUM`] (8),
+/// while the mesa protocol (transaction version 3) uses 32. The `Default` is
+/// the 8-field all-zero state used by mainnet/devnet new-account creation.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Hash, Serialize, Deserialize)]
+pub struct ZkappState(pub Vec<AppState>);
+
+impl Default for ZkappState {
+    fn default() -> Self {
+        Self(vec![AppState::default(); ZKAPP_STATE_FIELD_ELEMENTS_NUM])
+    }
+}
 
 /// 32 bytes
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Hash, Serialize, Deserialize)]
@@ -75,15 +85,10 @@ impl quickcheck::Arbitrary for AppState {
 #[cfg(test)]
 impl quickcheck::Arbitrary for ZkappState {
     fn arbitrary(g: &mut quickcheck::Gen) -> Self {
-        Self([
-            AppState::arbitrary(g),
-            AppState::arbitrary(g),
-            AppState::arbitrary(g),
-            AppState::arbitrary(g),
-            AppState::arbitrary(g),
-            AppState::arbitrary(g),
-            AppState::arbitrary(g),
-            AppState::arbitrary(g),
-        ])
+        Self(
+            (0..ZKAPP_STATE_FIELD_ELEMENTS_NUM)
+                .map(|_| AppState::arbitrary(g))
+                .collect(),
+        )
     }
 }

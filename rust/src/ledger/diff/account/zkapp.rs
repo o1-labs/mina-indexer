@@ -4,7 +4,6 @@ use super::{AccountDiff, DelegationDiff, PaymentDiff};
 use crate::{
     base::nonce::Nonce,
     command::TxnHash,
-    constants::ZKAPP_STATE_FIELD_ELEMENTS_NUM,
     ledger::{
         account::{Permissions, Timing, VotingFor},
         token::{TokenAddress, TokenSymbol},
@@ -35,7 +34,7 @@ pub struct ZkappDiff {
     pub increment_nonce: bool,
     pub proved_state: bool,
     pub payment_diffs: Vec<ZkappPaymentDiff>,
-    pub app_state_diff: [Option<AppState>; ZKAPP_STATE_FIELD_ELEMENTS_NUM],
+    pub app_state_diff: Vec<Option<AppState>>,
     pub delegate: Option<PublicKey>,
     pub verification_key: Option<VerificationKey>,
     pub permissions: Option<Permissions>,
@@ -63,7 +62,7 @@ pub enum ZkappPaymentDiff {
 pub struct ZkappStateDiff {
     pub token: TokenAddress,
     pub public_key: PublicKey,
-    pub diffs: [Option<AppState>; ZKAPP_STATE_FIELD_ELEMENTS_NUM],
+    pub diffs: Vec<Option<AppState>>,
     pub txn_hash: TxnHash,
 }
 
@@ -285,7 +284,7 @@ impl ZkappDiff {
         account_diffs: &mut Vec<AccountDiff>,
         token: TokenAddress,
         pk: PublicKey,
-        app_state_diff: [Option<AppState>; ZKAPP_STATE_FIELD_ELEMENTS_NUM],
+        app_state_diff: Vec<Option<AppState>>,
         txn_hash: TxnHash,
     ) {
         if !app_state_diff.iter().all(|state| state.is_none()) {
