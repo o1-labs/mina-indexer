@@ -1,0 +1,29 @@
+[Unit]
+Description=Mina Indexer
+Documentation=https://github.com/o1-labs/mina-indexer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mina-indexer
+Group=mina-indexer
+# Arguments to `mina-indexer server start` come from this file (edit before starting).
+EnvironmentFile=/etc/mina-indexer/mina-indexer.env
+ExecStart=/usr/bin/mina-indexer --socket /run/mina-indexer/mina-indexer.sock server start $MINA_INDEXER_ARGS
+Restart=on-failure
+RestartSec=5
+# The indexer needs a high open-file limit (see README: ulimit -n >= 4096).
+LimitNOFILE=65536
+RuntimeDirectory=mina-indexer
+StateDirectory=mina-indexer
+WorkingDirectory=/var/lib/mina-indexer
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/mina-indexer
+
+[Install]
+WantedBy=multi-user.target
