@@ -68,6 +68,11 @@ impl ChainId {
         Self(HARDFORK_CHAIN_ID.to_string())
     }
 
+    /// mesa-mut chain id
+    pub fn mesa() -> Self {
+        Self(MESA_CHAIN_ID.to_string())
+    }
+
     /// Checks length & hex
     pub fn is_valid<T>(chain_id: T) -> bool
     where

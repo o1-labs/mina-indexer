@@ -52,8 +52,40 @@ pub struct FeeExcess {
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct SupplyAdjustment {
+    #[serde(deserialize_with = "deserialize_magnitude_nanomina")]
     pub magnitude: Balance,
     pub sgn: (SupplyAdjustmentSign,),
+}
+
+/// Deserialize a supply-adjustment magnitude into nanomina.
+///
+/// V2 precomputed blocks are inconsistent about amount encoding: mainnet/devnet
+/// emit `balance_change.magnitude` as an integer count of nanomina, while the
+/// mesa protocol emits it as a decimal MINA string (e.g. `"6.000659988"`).
+/// Strings containing a `.` are treated as decimal MINA and scaled to nanomina;
+/// plain integers are taken as nanomina verbatim, so existing networks are
+/// unaffected.
+fn deserialize_magnitude_nanomina<'de, D>(deserializer: D) -> Result<Balance, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use rust_decimal::{prelude::ToPrimitive, Decimal};
+    use serde::Deserialize as _;
+
+    let s = String::deserialize(deserializer)?;
+    let nanomina = if s.contains('.') {
+        let mina = s
+            .parse::<Decimal>()
+            .map_err(|e| serde::de::Error::custom(format!("invalid decimal magnitude: {e}")))?;
+        (mina * crate::constants::MINA_SCALE_DEC)
+            .round()
+            .to_u64()
+            .ok_or_else(|| serde::de::Error::custom("magnitude out of range"))?
+    } else {
+        s.parse::<u64>()
+            .map_err(|e| serde::de::Error::custom(format!("invalid integer magnitude: {e}")))?
+    };
+    Ok(Balance::from(nanomina))
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]

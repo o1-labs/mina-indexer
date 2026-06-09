@@ -450,6 +450,10 @@ impl BlockStore for IndexerStore {
             return Ok(Some(HARDFORK_GENESIS_BLOCKCHAIN_LENGTH - 1));
         }
 
+        if state_hash.0 == MESA_GENESIS_PREV_STATE_HASH {
+            return Ok(Some(MESA_GENESIS_BLOCKCHAIN_LENGTH - 1));
+        }
+
         Ok(self
             .database
             .get_cf(self.block_height_cf(), state_hash.0.as_bytes())?
@@ -1922,7 +1926,9 @@ fn block_parent(db: &IndexerStore, state_hash: &StateHash) -> Result<StateHash> 
 }
 
 fn is_genesis_hash(hash: &StateHash) -> bool {
-    hash.0 == MAINNET_GENESIS_HASH || hash.0 == HARDFORK_GENESIS_HASH
+    hash.0 == MAINNET_GENESIS_HASH
+        || hash.0 == HARDFORK_GENESIS_HASH
+        || hash.0 == MESA_GENESIS_HASH
 }
 
 fn block_cmp(db: &IndexerStore, a: &StateHash, b: &StateHash) -> std::cmp::Ordering {

@@ -759,6 +759,20 @@ impl GenesisVersion {
             global_slot: HARDFORK_GENESIS_GLOBAL_SLOT,
         }
     }
+
+    pub fn mesa() -> Self {
+        use std::str::FromStr;
+        let last_vrf_output =
+            VrfOutput::from_str(MESA_GENESIS_LAST_VRF_OUTPUT).expect("mesa last vrf output");
+
+        Self {
+            last_vrf_output,
+            state_hash: MESA_GENESIS_HASH.into(),
+            prev_hash: MESA_GENESIS_PREV_STATE_HASH.into(),
+            blockchain_lenth: MESA_GENESIS_BLOCKCHAIN_LENGTH,
+            global_slot: MESA_GENESIS_GLOBAL_SLOT,
+        }
+    }
 }
 
 impl IndexerVersion {
@@ -777,6 +791,15 @@ impl IndexerVersion {
             version: PcbVersion::V2,
             chain_id: ChainId::v2(),
             genesis: GenesisVersion::v2(),
+        }
+    }
+
+    pub fn mesa() -> Self {
+        Self {
+            network: Network::from("mesa"),
+            version: PcbVersion::V2,
+            chain_id: ChainId::mesa(),
+            genesis: GenesisVersion::mesa(),
         }
     }
 }

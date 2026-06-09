@@ -298,9 +298,15 @@ impl IndexerState {
             .indexer_store
             .set_chain_id_for_network(&config.version.chain_id, &config.version.network)?;
 
-        let genesis_block = match config.version.version {
-            PcbVersion::V1 => GenesisBlock::new_v1()?,
-            PcbVersion::V2 => GenesisBlock::new_v2()?,
+        // Select the genesis block by genesis state hash so mesa-mut (also
+        // PcbVersion::V2) gets its own fork block rather than the mainnet one.
+        let genesis_block = if config.version.genesis.state_hash.0 == MESA_GENESIS_HASH {
+            GenesisBlock::new_mesa()?
+        } else {
+            match config.version.version {
+                PcbVersion::V1 => GenesisBlock::new_v1()?,
+                PcbVersion::V2 => GenesisBlock::new_v2()?,
+            }
         };
         let genesis_bytes = genesis_block.1;
         let genesis_block = genesis_block.0;
@@ -529,7 +535,9 @@ impl IndexerState {
                         vec![]
                     };
 
-                    if diff.state_hash.0 != HARDFORK_GENESIS_HASH {
+                    if diff.state_hash.0 != HARDFORK_GENESIS_HASH
+                        && diff.state_hash.0 != MESA_GENESIS_HASH
+                    {
                         ledger_diffs.push((diff.clone(), accounts_accessed));
                     }
 

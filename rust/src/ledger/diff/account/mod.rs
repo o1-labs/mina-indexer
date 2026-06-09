@@ -824,12 +824,18 @@ impl AccountDiff {
         };
 
         // update app state
-        let app_state_diff = elt.account_update.body.update.app_state.to_owned().map(
-            |update_kind| match update_kind {
+        let app_state_diff = elt
+            .account_update
+            .body
+            .update
+            .app_state
+            .iter()
+            .cloned()
+            .map(|update_kind| match update_kind {
                 UpdateKind::Keep(_) => None,
                 UpdateKind::Set((_, state)) => Some(state.into()),
-            },
-        );
+            })
+            .collect::<Vec<_>>();
 
         let proved_state = matches!(
             elt.account_update.body.authorization_kind,
