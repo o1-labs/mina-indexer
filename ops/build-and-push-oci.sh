@@ -20,10 +20,13 @@
 # Requires x86_64-linux to build the image (see README "Generating OCI Images").
 set -euo pipefail
 
-: "${REGISTRY:?set REGISTRY, e.g. europe-west3-docker.pkg.dev/o1labs-192920/euro-docker-repo}"
 IMAGE="${IMAGE:-mina-indexer}"
 TAG="${TAG:-$(git rev-parse --short=8 HEAD)}"
-REF="${REGISTRY}/${IMAGE}:${TAG}"
+# REGISTRY is only required for an actual push; build-only/DRY_RUN works without it.
+if [[ "${DRY_RUN:-0}" != "1" ]]; then
+  : "${REGISTRY:?set REGISTRY, e.g. europe-west3-docker.pkg.dev/o1labs-192920/euro-docker-repo}"
+fi
+REF="${REGISTRY:-local}/${IMAGE}:${TAG}"
 
 echo ">> Building OCI image with Nix (.#dockerImage)" >&2
 nix build .#dockerImage --print-build-logs

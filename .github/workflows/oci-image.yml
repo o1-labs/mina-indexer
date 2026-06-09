@@ -1,0 +1,73 @@
+# Build the mina-indexer OCI image (Nix, reproducible) and optionally push it
+# to a container registry — e.g. the o1labs Artifact Registry.
+#
+# Push is OPT-IN and only happens when a registry is configured:
+#   - on a version tag (v*), or
+#   - via manual "Run workflow" with push=true.
+# Otherwise the image is only built (DRY_RUN), so PRs/branches stay side-effect free.
+#
+# To enable pushing, set on the repository:
+#   - Variable  REGISTRY               e.g. europe-west3-docker.pkg.dev/o1labs-192920/euro-docker-repo
+#   - Secret    GCP_WIF_PROVIDER       Workload Identity Federation provider resource name
+#   - Secret    GCP_SERVICE_ACCOUNT    service account email with Artifact Registry Writer
+name: OCI image
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      push:
+        description: "Push image to the configured REGISTRY"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write # for GCP Workload Identity Federation
+
+jobs:
+  oci-image:
+    # x86-64-linux is required to build the image (see README).
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: mina-indexer
+      REGISTRY: ${{ vars.REGISTRY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+      - name: Nix build cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      # Decide whether this run should push.
+      - name: Determine push
+        id: mode
+        run: |
+          push=false
+          if [ -n "${REGISTRY}" ]; then
+            if [ "${{ github.event_name }}" = "push" ] || [ "${{ inputs.push }}" = "true" ]; then
+              push=true
+            fi
+          fi
+          echo "push=$push" >> "$GITHUB_OUTPUT"
+          echo "Push enabled: $push (registry='${REGISTRY:-unset}')"
+
+      # Authenticate to Google Artifact Registry only when pushing there.
+      - name: Authenticate to GCP
+        if: steps.mode.outputs.push == 'true' && startsWith(env.REGISTRY, 'europe-west3-docker.pkg.dev')
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - name: Configure docker auth for Artifact Registry
+        if: steps.mode.outputs.push == 'true' && startsWith(env.REGISTRY, 'europe-west3-docker.pkg.dev')
+        run: |
+          gcloud auth configure-docker europe-west3-docker.pkg.dev --quiet
+
+      - name: Build (and optionally push) the OCI image
+        env:
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
+          DRY_RUN: ${{ steps.mode.outputs.push == 'true' && '0' || '1' }}
+        run: ops/build-and-push-oci.sh
