@@ -1,0 +1,11 @@
+#!/bin/sh
+# postrm for mina-indexer: reload systemd after removal. State under
+# /var/lib/mina-indexer and the service user are left in place on purge so an
+# operator never loses an indexed database by accident; remove them manually.
+set -e
+
+if [ -d /run/systemd/system ]; then
+  systemctl daemon-reload || true
+fi
+
+exit 0

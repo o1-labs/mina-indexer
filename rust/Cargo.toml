@@ -87,3 +87,28 @@ incremental = true
 [profile.dev]
 debug = 0
 strip = "debuginfo"
+
+# Debian packaging (cargo-deb). The manifest lives in rust/, so assets at the
+# repo root are referenced with `../`. Build the binary with the Nix toolchain
+# first, then `cargo deb --no-build` (see .github/workflows/debian.yml).
+[package.metadata.deb]
+name = "mina-indexer"
+maintainer = "o1Labs <build@o1labs.org>"
+copyright = "2022-2026, Granola Systems Inc."
+license-file = ["../LICENSE", "0"]
+extended-description = """\
+The Mina Indexer constructs and serves indices of the Mina blockchain from \
+precomputed blocks, exposing GraphQL and REST APIs. Ships a systemd service \
+(mina-indexer.service); configure /etc/mina-indexer/mina-indexer.env before \
+starting."""
+section = "net"
+priority = "optional"
+depends = "$auto"
+assets = [
+    ["target/release/mina-indexer", "usr/bin/", "755"],
+    ["../ops/debian/mina-indexer.service", "lib/systemd/system/mina-indexer.service", "644"],
+    ["../ops/debian/mina-indexer.env", "etc/mina-indexer/mina-indexer.env", "644"],
+    ["../README.md", "usr/share/doc/mina-indexer/README", "644"],
+]
+conf-files = ["/etc/mina-indexer/mina-indexer.env"]
+maintainer-scripts = "../ops/debian/maintainer-scripts"
