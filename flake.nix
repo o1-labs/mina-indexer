@@ -135,25 +135,32 @@
 
           default = mina-indexer;
 
-          dockerImage = pkgs.dockerTools.buildImage {
+          # Production OCI image. Uses streamLayeredImage for cache-friendly
+          # layers, ships only the runtime closure (no source tree), runs as a
+          # non-root user, and is reproducible (pinned `created`).
+          dockerImage = pkgs.dockerTools.streamLayeredImage {
             name = "mina-indexer";
-            created = "now";
             tag = builtins.substring 0 8 (self.rev or "dev");
-            copyToRoot = pkgs.buildEnv {
-              paths = with pkgs; [
-                mina-indexer
-                bash
-                self
-              ];
-              name = "mina-indexer-root";
-              pathsToLink = [
-                "/bin"
-                "/share"
-                "/lib"
-              ];
-            };
+            created = "1970-01-01T00:00:01Z";
+            contents = with pkgs; [
+              mina-indexer
+              bash
+              cacert # CA roots for any outbound HTTPS (block/ledger fetch)
+              dockerTools.fakeNss # /etc/passwd & /etc/group so the non-root user resolves
+            ];
+            # Create a world-writable data dir for the speedb database + blocks.
+            fakeRootCommands = ''
+              mkdir -p ./data
+              chmod 1777 ./data
+            '';
             config = {
+              # Cmd (not Entrypoint) so callers can override, e.g.
+              #   docker run IMAGE mina-indexer server start --help
               Cmd = [ "${pkgs.lib.getExe mina-indexer}" ];
+              User = "65534:65534"; # nobody — never root
+              WorkingDir = "/data";
+              Volumes = { "/data" = { }; };
+              ExposedPorts = { "8080/tcp" = { }; };
             };
           };
         };
