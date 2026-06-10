@@ -56,11 +56,11 @@ docker run --rm \
     cargo build --release --bin mina-indexer
 
     # cargo-deb needs a newer rustc than the project pins (1.85.1); build it with
-    # stable. Cached in the shared cargo volume, so only built once.
-    if ! command -v cargo-deb >/dev/null; then
-      rustup toolchain install stable --profile minimal
-      cargo +stable install cargo-deb --locked
-    fi
+    # stable. Install PER-CONTAINER (not the shared cargo bin): the compiled
+    # cargo-deb links this distro glibc and would not run on another codename.
+    export PATH="/tmp/cargo-deb/bin:$PATH"
+    rustup toolchain install stable --profile minimal
+    cargo +stable install cargo-deb --locked --root /tmp/cargo-deb
     cargo deb --no-build --fast --deb-version "$VER"
     cp /target/debian/*.deb /out/
     chmod 0644 /out/*.deb
