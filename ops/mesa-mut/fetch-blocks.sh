@@ -36,27 +36,31 @@ echo "Fetching mesa-mut blocks ${START}..${END} into $OUT_DIR" >&2
 
 downloaded=0
 for h in $(seq "$START" "$END"); do
-  # The bucket can hold several blocks per height (forks); take the first.
-  name="$(curl -fsS \
+  # A height can have several blocks (forks). Download EVERY one: the indexer's
+  # canonical-chain discovery needs all candidates to pick the canonical chain.
+  # Grabbing only one risks fetching a non-canonical fork whose parent is absent,
+  # which dead-ends the chain at that height.
+  names="$(curl -fsS \
     "https://storage.googleapis.com/storage/v1/b/${BUCKET}/o?prefix=${SRC_PREFIX}-${h}-&fields=items(name)" \
-    | grep -oE '"name": "[^"]+\.json"' | head -1 | sed -E 's/"name": "(.*)"/\1/')"
-  if [[ -z "$name" ]]; then
+    | grep -oE '"name": "[^"]+\.json"' | sed -E 's/"name": "(.*)"/\1/')"
+  if [[ -z "$names" ]]; then
     echo "  (no block at height $h)" >&2
     continue
   fi
 
-  # mina-mesa-mut-1-<height>-<hash>.json -> mesa-<height>-<hash>.json
-  rest="${name#"${SRC_PREFIX}"-}"
-  dst="${DST_NETWORK}-${rest}"
-  if [[ -f "$OUT_DIR/$dst" ]]; then
-    continue
-  fi
+  while IFS= read -r name; do
+    [[ -z "$name" ]] && continue
+    # mina-mesa-mut-1-<height>-<hash>.json -> mesa-<height>-<hash>.json
+    rest="${name#"${SRC_PREFIX}"-}"
+    dst="${DST_NETWORK}-${rest}"
+    [[ -f "$OUT_DIR/$dst" ]] && continue
 
-  curl -fsS "https://storage.googleapis.com/${BUCKET}/${name}" -o "$OUT_DIR/$dst"
-  downloaded=$((downloaded + 1))
-  if (( downloaded % 25 == 0 )); then
-    echo "  downloaded $downloaded blocks (through height $h)..." >&2
-  fi
+    curl -fsS "https://storage.googleapis.com/${BUCKET}/${name}" -o "$OUT_DIR/$dst"
+    downloaded=$((downloaded + 1))
+    if (( downloaded % 25 == 0 )); then
+      echo "  downloaded $downloaded blocks (through height $h)..." >&2
+    fi
+  done <<< "$names"
 done
 
 echo "Done: $downloaded new blocks in $OUT_DIR" >&2
