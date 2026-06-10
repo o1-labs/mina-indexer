@@ -1,19 +1,18 @@
 # Build the mina-indexer Debian package per distro codename and publish it to
-# the signed Mina apt repositories via deb-s3.
+# the packages.o1test.net apt repo via deb-s3 (unsigned multichannel repo, same
+# as MinaFoundation/minimina).
 #
-#   tag  v*    -> component "stable",   bucket stable.apt.packages.minaprotocol.com
-#   push main  -> component "unstable", bucket unstable.apt.packages.minaprotocol.com
+#   tag  v*    -> component "stable"
+#   push main  -> component "unstable"
 #   PRs        -> build the .deb only (no publish)
 #
 # Each codename builds inside that distro's container so the binary links the
 # distro's glibc (portable .deb). The build uses the system gcc toolchain and
 # overrides rust/.cargo/config.toml's clang+mold linker, so no Nix is needed.
 #
-# Required repo secrets to publish (these are "the key"):
-#   APT_S3_ACCESS_KEY_ID      AWS access key for the apt S3 buckets
+# Required repo secrets to publish:
+#   APT_S3_ACCESS_KEY_ID      AWS access key for the packages.o1test.net bucket
 #   APT_S3_SECRET_ACCESS_KEY  AWS secret key
-#   APT_GPG_PRIVATE_KEY       ASCII-armored GPG private key that signs the repo
-#   APT_GPG_KEY_ID            key id/fingerprint to sign with
 name: Debian package
 
 on:
@@ -95,15 +94,13 @@ jobs:
           name: mina-indexer-${{ matrix.codename }}
           path: rust/target/debian/*.deb
 
-      - name: Publish to signed apt repo
+      - name: Publish to packages.o1test.net
         if: >-
           (github.ref_type == 'tag' || github.ref == 'refs/heads/main')
           && env.APT_S3_ACCESS_KEY_ID != ''
         env:
           APT_S3_ACCESS_KEY_ID: ${{ secrets.APT_S3_ACCESS_KEY_ID }}
           APT_S3_SECRET_ACCESS_KEY: ${{ secrets.APT_S3_SECRET_ACCESS_KEY }}
-          APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
-          APT_GPG_KEY_ID: ${{ secrets.APT_GPG_KEY_ID }}
           CODENAME: ${{ matrix.codename }}
           LANG: en_US.UTF-8
           LC_ALL: en_US.UTF-8
@@ -113,21 +110,16 @@ jobs:
 
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             COMPONENT=stable
-            BUCKET=stable.apt.packages.minaprotocol.com
           else
             COMPONENT=unstable
-            BUCKET=unstable.apt.packages.minaprotocol.com
           fi
 
-          echo "$APT_GPG_PRIVATE_KEY" | gpg --batch --import
-          echo "Publishing ${{ steps.deb.outputs.file }} -> $BUCKET / $CODENAME / $COMPONENT"
+          echo "Publishing ${{ steps.deb.outputs.file }} -> packages.o1test.net / $CODENAME / $COMPONENT"
           deb-s3 upload \
             --s3-region=us-west-2 \
-            --bucket="$BUCKET" \
+            --bucket=packages.o1test.net \
             --codename="$CODENAME" \
             --component="$COMPONENT" \
-            --sign="$APT_GPG_KEY_ID" \
-            --gpg-options="--pinentry-mode loopback --batch --yes --no-tty" \
             --preserve-versions --lock \
             --access-key-id="$APT_S3_ACCESS_KEY_ID" \
             --secret-access-key="$APT_S3_SECRET_ACCESS_KEY" \
