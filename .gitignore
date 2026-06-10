@@ -22,3 +22,9 @@ files-to-fetch.list
 # Our ephemeral build output
 /.build
 /result
+
+# Downloaded mesa-mut precomputed blocks (see ops/mesa-mut/)
+/mesa-mut-blocks/
+
+# claude-mem local memory (not part of the repo)
+/memory/

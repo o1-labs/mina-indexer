@@ -80,6 +80,29 @@ pub const HARDFORK_GENESIS_LEDGER_HASH: &str =
 pub const HARDFORK_GENESIS_LAST_VRF_OUTPUT: &str =
     "FSBXKqZKgSiy1T6SsjbrT0i84oDkBpUVsLH1zRviuIj0DjuGEXs=";
 
+// mesa-mut hardfork network (protocol transaction version 3).
+//
+// Values are taken from the fork block `mina-mesa-mut-1-297734-3NLp6dKN…json`
+// (the genesis/root of the mesa-mut chain). The genesis ledger is supplied at
+// runtime via `--genesis-ledger` (the state dump). See the `ops/mesa-mut`
+// tooling and the embedded genesis block in `block::genesis`.
+pub const MESA_GENESIS_BLOCKCHAIN_LENGTH: u32 = 297734;
+pub const MESA_GENESIS_GLOBAL_SLOT: u32 = 449499;
+pub const MESA_GENESIS_HASH: &str = "3NLp6dKNhYtsqUj49QYV5GtDaeocSJBAa2y2ER2QQLqLukE3wuZT";
+// The pre-fork chain's genesis hash, which mesa-mut blocks carry in their
+// `genesis_state_hash` field for protocol continuity. The indexer remaps it to
+// MESA_GENESIS_HASH so the whole mesa chain shares one genesis for canonicity.
+pub const MESA_ORIGINAL_GENESIS_HASH: &str =
+    "3NL4ZJ3SEfc7yZwiyh6otjopKGgfFhGmU2R3HQbjBuXCFtLJQcoY";
+pub const MESA_GENESIS_PREV_STATE_HASH: &str =
+    "3NLuhgUFeeHyLdvFtg9QDSqP81YyQd4yidJtsVy4qamrWcaZhQVa";
+pub const MESA_GENESIS_LEDGER_HASH: &str = "jxicjVogngTDjJh5EEsTUrvBxa3R4fhepqrAeexiRVMogJGqHdT";
+pub const MESA_GENESIS_LAST_VRF_OUTPUT: &str = "8oxYNPIKw0xNLJJrhcXRICHIS34t4z-8fsvfTfSbIAA=";
+// Placeholder chain id (valid 64-char hex). mesa-mut's real chain id depends on
+// its constraint-system digests, which are not needed for indexing block data.
+pub const MESA_CHAIN_ID: &str =
+    "6d6573612d6d75740000000000000000000000000000000000000000000000aa";
+
 pub const HARDFORK_CONSTRAINT_SYSTEM_DIGESTS: &[&str] = &[
     HARDFORK_DIGEST_TXN_MERGE,
     HARDFORK_DIGEST_TXN_BASE,

@@ -358,9 +358,14 @@ impl Account {
 
         let mut zkapp = self.zkapp.unwrap_or_default();
 
-        // modify app state
+        // modify app state. The state vector length is protocol-dependent
+        // (8 for mainnet/devnet, 32 for mesa), so grow it to fit the diff
+        // rather than assuming a fixed size.
         for (idx, diff) in diff.diffs.iter().enumerate() {
             if let Some(app_state) = diff.to_owned() {
+                if zkapp.app_state.0.len() <= idx {
+                    zkapp.app_state.0.resize(idx + 1, v2::AppState::default());
+                }
                 zkapp.app_state.0[idx] = app_state;
             }
         }
@@ -913,8 +918,8 @@ mod tests {
             ..Default::default()
         };
 
-        let mut app_state_diff: [Option<AppState>; ZKAPP_STATE_FIELD_ELEMENTS_NUM] =
-            Default::default();
+        let mut app_state_diff: Vec<Option<AppState>> =
+            vec![None; ZKAPP_STATE_FIELD_ELEMENTS_NUM];
         app_state_diff[0] = Some(app_state_elem.clone());
 
         let zkapp_diff = ZkappDiff {

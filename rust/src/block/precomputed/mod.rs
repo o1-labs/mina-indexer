@@ -699,8 +699,17 @@ impl PrecomputedBlock {
 
     pub fn genesis_state_hash(&self) -> StateHash {
         let state_hash = self.state_hash();
-        if state_hash.0 == MAINNET_GENESIS_HASH || state_hash.0 == HARDFORK_GENESIS_HASH {
+        if state_hash.0 == MAINNET_GENESIS_HASH
+            || state_hash.0 == HARDFORK_GENESIS_HASH
+            || state_hash.0 == MESA_GENESIS_HASH
+        {
             return state_hash;
+        }
+
+        // mesa-mut blocks carry varying genesis_state_hash values (pre-fork
+        // continuity metadata); the whole mesa chain shares the fork genesis.
+        if self.network().to_string() == "mesa" {
+            return MESA_GENESIS_HASH.into();
         }
 
         match self {

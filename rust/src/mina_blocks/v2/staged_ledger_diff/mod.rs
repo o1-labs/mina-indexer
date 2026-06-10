@@ -9,7 +9,7 @@ use crate::{
         scheduled_time::ScheduledTime, Balance,
     },
     command::{to_mina_format, to_zkapp_json, TxnHash},
-    constants::{MAINNET_ACCOUNT_CREATION_FEE, MINA_TOKEN_ADDRESS, ZKAPP_STATE_FIELD_ELEMENTS_NUM},
+    constants::{MAINNET_ACCOUNT_CREATION_FEE, MINA_TOKEN_ADDRESS},
     ledger::{token::TokenAddress, LedgerHash},
     protocol::serialization_types::staged_ledger_diff::{
         TransactionStatus2, TransactionStatusFailedType,
@@ -371,7 +371,7 @@ pub struct ZkappEvents(pub Vec<String>);
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct Update {
-    pub app_state: [UpdateKind; ZKAPP_STATE_FIELD_ELEMENTS_NUM],
+    pub app_state: Vec<UpdateKind>,
     pub delegate: UpdateKind,
     pub verification_key: UpdateVerificationKey,
     pub permissions: UpdatePermissions,
@@ -448,7 +448,7 @@ pub struct AccountPreconditions {
     pub nonce: Precondition<NumericBoundsU32>,
     pub receipt_chain_hash: Precondition<String>,
     pub delegate: Precondition<PublicKey>,
-    pub state: [Precondition<AppState>; ZKAPP_STATE_FIELD_ELEMENTS_NUM],
+    pub state: Vec<Precondition<AppState>>,
     pub action_state: Precondition<String>,
     pub proved_state: Precondition<bool>,
     pub is_new: Precondition<bool>,

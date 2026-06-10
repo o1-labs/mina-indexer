@@ -1,6 +1,6 @@
 use super::{
     account::{Account, ReceiptChainHash, Timing, VotingFor},
-    token::{TokenAddress, TokenId},
+    token::TokenAddress,
     Ledger, TokenLedger,
 };
 use crate::{
@@ -58,14 +58,17 @@ pub struct GenesisAccount {
     pub token_permissions: Option<TokenPermissions>,
     pub receipt_chain_hash: Option<ReceiptChainHash>,
     pub voting_for: Option<VotingFor>,
-    pub permissions: Option<Permissions>,
+    // Permissions are parsed but not used downstream; accept any shape so the
+    // mesa v2 ledger format (richer permissions, nested set_verification_key,
+    // "none"/"none"-valued perms) parses alongside the mainnet format.
+    pub permissions: Option<serde_json::Value>,
     pub timing: Option<GenesisAccountTiming>,
 
     #[serde(default)]
     pub nonce: Option<Nonce>,
 
     #[serde(default)]
-    pub token: Option<TokenId>,
+    pub token: Option<TokenAddress>,
 }
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
@@ -208,7 +211,7 @@ impl GenesisLedger {
                     balance,
                     nonce: account.nonce,
                     delegate: delegate.into(),
-                    token: account.token.map(TokenAddress::from),
+                    token: account.token,
                     receipt_chain_hash: account.receipt_chain_hash,
                     voting_for: account.voting_for,
                     timing: account.timing.map(Into::into),
