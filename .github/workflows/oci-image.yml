@@ -1,16 +1,14 @@
 # Build the mina-indexer OCI image (Nix, reproducible) and push it to the GitHub
 # Container Registry: ghcr.io/<owner>/mina-indexer.
 #
-#   tag v*    -> :<tag> and :latest
-#   push main -> :main
-#   PRs       -> build only (no push)
+#   tag v*  -> :<tag> and :latest
+#   PRs     -> build only (no push)
 #
 # Auth uses the built-in GITHUB_TOKEN (packages: write) — no extra secrets.
 name: OCI image
 
 on:
   push:
-    branches: [main, "ci/**"]
     tags: ["v*"]
   pull_request:
     branches: [main]
@@ -42,13 +40,6 @@ jobs:
         run: |
           if [ "${{ github.ref_type }}" = "tag" ]; then
             echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-            echo "push=true" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.ref }}" = "refs/heads/main" ]; then
-            echo "tag=main" >> "$GITHUB_OUTPUT"
-            echo "push=true" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.event_name }}" = "push" ]; then
-            # push to a ci/** branch -> publish an image tagged by the branch
-            echo "tag=$(echo "${GITHUB_REF_NAME}" | tr '/' '-')" >> "$GITHUB_OUTPUT"
             echo "push=true" >> "$GITHUB_OUTPUT"
           else
             echo "tag=pr-${{ github.run_id }}" >> "$GITHUB_OUTPUT"
