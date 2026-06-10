@@ -24,4 +24,4 @@ jobs:
       - name: Run tests
         run: |
           export GIT_COMMIT_HASH="$(git rev-parse --short=8 HEAD || echo unknown)"
-          nix develop --command bash -c 'cd rust && cargo test --release'
+          nix develop --command bash -c 'cd rust && cargo nextest run --release'
