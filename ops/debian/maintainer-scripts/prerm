@@ -1,0 +1,12 @@
+#!/bin/sh
+# prerm for mina-indexer: stop + disable the unit on removal.
+set -e
+
+if [ "$1" = "remove" ] || [ "$1" = "deconfigure" ]; then
+  if [ -d /run/systemd/system ]; then
+    systemctl stop mina-indexer.service || true
+    systemctl disable mina-indexer.service || true
+  fi
+fi
+
+exit 0

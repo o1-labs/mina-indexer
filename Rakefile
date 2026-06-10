@@ -234,7 +234,8 @@ namespace :build do
     puts "--- Building #{IMAGE}"
     run("docker --version")
     run("nom build .#dockerImage")
-    run("docker load < ./result")
+    # streamLayeredImage: ./result streams the image tarball to stdout.
+    run("./result | docker load")
     run("docker run --rm -it #{IMAGE} mina-indexer server start --help")
     FileUtils.rm_f("result")
   end

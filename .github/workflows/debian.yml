@@ -1,0 +1,120 @@
+# Build the mina-indexer Debian package (bookworm) and publish it to the
+# packages.o1test.net apt repo via deb-s3 (unsigned multichannel repo, same as
+# MinaFoundation/minimina).
+#
+#   tag v*  -> publish to component "stable"
+#   PRs     -> build the .deb only (no publish)
+#
+# Each codename builds inside that distro's container so the binary links the
+# distro's glibc (portable .deb). The build uses the system gcc toolchain and
+# overrides rust/.cargo/config.toml's clang+mold linker, so no Nix is needed.
+#
+# Required repo secrets to publish:
+#   AWS_ACCESS_KEY_ID         AWS access key for the packages.o1test.net bucket
+#   AWS_SECRET_ACCESS_KEY     AWS secret key
+name: Debian package
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deb:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { codename: bookworm, image: "debian:12" }
+    container:
+      image: ${{ matrix.image }}
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      # Build with the distro's gcc + default linker instead of clang+mold.
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: cc
+      RUSTFLAGS: ""
+    steps:
+      - name: Install build prerequisites
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl git build-essential pkg-config \
+            libclang-dev clang gnupg ruby ruby-dev locales
+          sed -i 's/# *en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen && locale-gen
+
+      - uses: actions/checkout@v4
+
+      - name: Mark workspace safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Install Rust toolchain (from rust-toolchain.toml)
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none --profile minimal
+          . "$HOME/.cargo/env"
+          ( cd rust && rustup show )   # installs the pinned toolchain
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Build release binary
+        working-directory: rust
+        run: |
+          export LIBCLANG_PATH="$(dirname "$(find /usr/lib /usr/lib64 -name 'libclang.so*' 2>/dev/null | head -1)")"
+          export GIT_COMMIT_HASH="$(git rev-parse --short=8 HEAD || echo unknown)"
+          cargo build --release --bin mina-indexer
+
+      - name: Build .deb
+        id: deb
+        working-directory: rust
+        run: |
+          # cargo-deb needs a newer rustc than the project pins (1.85.1); build
+          # it with a stable toolchain.
+          rustup toolchain install stable --profile minimal
+          cargo +stable install cargo-deb --locked
+          # Version: vX.Y.Z tag -> X.Y.Z ; main/PR -> <cargo-version>~git<sha>
+          base="$(grep -m1 '^version' Cargo.toml | awk -F'\"' '{print $2}')"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            ver="${GITHUB_REF_NAME#v}"
+          else
+            ver="${base}~git$(git rev-parse --short=8 HEAD)"
+          fi
+          cargo deb --no-build --fast --deb-version "$ver"
+          echo "file=$(ls target/debian/*.deb | head -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mina-indexer-${{ matrix.codename }}
+          path: rust/target/debian/*.deb
+
+      - name: Publish to packages.o1test.net
+        if: >-
+          github.ref_type == 'tag'
+          && env.APT_S3_ACCESS_KEY_ID != ''
+        env:
+          APT_S3_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          APT_S3_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          CODENAME: ${{ matrix.codename }}
+          LANG: en_US.UTF-8
+          LC_ALL: en_US.UTF-8
+        run: |
+          set -euo pipefail
+          gem install deb-s3 --no-document
+
+          COMPONENT=stable
+
+          echo "Publishing ${{ steps.deb.outputs.file }} -> packages.o1test.net / $CODENAME / $COMPONENT"
+          deb-s3 upload \
+            --s3-region=us-west-2 \
+            --bucket=packages.o1test.net \
+            --codename="$CODENAME" \
+            --component="$COMPONENT" \
+            --preserve-versions --lock \
+            --access-key-id="$APT_S3_ACCESS_KEY_ID" \
+            --secret-access-key="$APT_S3_SECRET_ACCESS_KEY" \
+            --cache-control=max-age=120 \
+            rust/target/debian/*.deb

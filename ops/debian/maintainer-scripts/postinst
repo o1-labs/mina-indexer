@@ -1,0 +1,30 @@
+#!/bin/sh
+# postinst for mina-indexer: create the service user + state dirs and register
+# the systemd unit. The service is enabled but NOT started — the operator must
+# edit /etc/mina-indexer/mina-indexer.env (and provide a blocks dir / genesis
+# ledger) first, then `systemctl start mina-indexer`.
+set -e
+
+case "$1" in
+  configure)
+    if ! getent group mina-indexer >/dev/null; then
+      addgroup --system mina-indexer
+    fi
+    if ! getent passwd mina-indexer >/dev/null; then
+      adduser --system --ingroup mina-indexer --home /var/lib/mina-indexer \
+        --no-create-home --disabled-login --quiet mina-indexer
+    fi
+
+    install -d -o mina-indexer -g mina-indexer -m 0750 \
+      /var/lib/mina-indexer \
+      /var/lib/mina-indexer/db \
+      /var/lib/mina-indexer/blocks
+
+    if [ -d /run/systemd/system ]; then
+      systemctl daemon-reload || true
+      systemctl enable mina-indexer.service || true
+    fi
+    ;;
+esac
+
+exit 0

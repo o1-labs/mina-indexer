@@ -28,3 +28,6 @@ files-to-fetch.list
 
 # claude-mem local memory (not part of the repo)
 /memory/
+
+# local Debian package build output
+/dist/

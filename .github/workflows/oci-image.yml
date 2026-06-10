@@ -1,0 +1,64 @@
+# Build the mina-indexer OCI image (Nix, reproducible) and push it to the GitHub
+# Container Registry: ghcr.io/<owner>/mina-indexer.
+#
+#   tag v*  -> :<tag> and :latest
+#   PRs     -> build only (no push)
+#
+# Auth uses the built-in GITHUB_TOKEN (packages: write) — no extra secrets.
+name: OCI image
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  oci-image:
+    # x86-64-linux is required to build the image (see README).
+    runs-on: ubuntu-latest
+    env:
+      REGISTRY: ghcr.io/${{ github.repository_owner }}
+      IMAGE: mina-indexer
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+      - name: Nix build cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+      - name: Install skopeo
+        run: sudo apt-get update && sudo apt-get install -y skopeo
+
+      - name: Determine tag + push
+        id: meta
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "push=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=pr-${{ github.run_id }}" >> "$GITHUB_OUTPUT"
+            echo "push=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Log in to GHCR
+        if: steps.meta.outputs.push == 'true'
+        run: skopeo login ghcr.io -u "${{ github.actor }}" --password-stdin <<<"${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Build (and push) the OCI image
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          DRY_RUN: ${{ steps.meta.outputs.push == 'true' && '0' || '1' }}
+        run: ops/build-and-push-oci.sh
+
+      - name: Also tag :latest (on release tag)
+        if: github.ref_type == 'tag'
+        run: |
+          skopeo copy \
+            "docker://${REGISTRY}/${IMAGE}:${{ steps.meta.outputs.tag }}" \
+            "docker://${REGISTRY}/${IMAGE}:latest"
