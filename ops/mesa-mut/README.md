@@ -1,73 +1,48 @@
-# mesa-mut precomputed-blocks app
+# mesa-mut: run a local indexer / connect to precomputed blocks
 
-Tooling to **connect to the precomputed blocks of the `mesa-mut` network** and
-decode them with the Mina Indexer's own block types.
+Tooling to bootstrap and run a local Mina Indexer for the **mesa-mut** network.
 
-`mesa-mut` (internal name `hetzner-pre-mesa-1`) is a **preflight / preview**
-network running the post-hardfork protocol, so its precomputed blocks are in
-**PCB V2** format. Its public, no-auth precomputed-block bucket is
-`gs://mesa-hf-precomputed-blocks`, with objects named
-`hetzner-pre-mesa-1-<height>-<state_hash>.json`.
+mesa-mut is a hardfork at height **297734** (its genesis,
+`3NLp6dKNhYtsqUj49QYV5GtDaeocSJBAa2y2ER2QQLqLukE3wuZT`). Its precomputed blocks
+live in the public bucket `gs://mesa-mut-precomputed-blocks`
+(`mina-mesa-mut-1-<height>-<state_hash>.json`); its genesis ledger is the
+hardfork **state dump** under `gs://o1labs-gitops-infrastructure/mina-mesa-mut-1/`.
 
-## 1. Fetch blocks
-
-```bash
-ops/mesa-mut/fetch-blocks.sh ./mesa-mut-blocks 200
-```
-
-Downloads up to 200 blocks and renames them to the indexer's filename
-convention `mesa-<height>-<state_hash>.json`.
-
-> **Why rename?** The indexer parses a block file name as
-> `<network>-<height>-<hash>.json`, splitting on the **first** dash to get the
-> network and requiring the next segment to be a `u32` height
-> (`extract_network_height_hash`, `rust/src/block/mod.rs`). The bucket's
-> multi-dash `hetzner-pre-mesa-1-...` prefix would make it read `"pre"` as the
-> height and panic, so we collapse the prefix to the single token `mesa`.
-
-## 2. Report
+## Run a local instance
 
 ```bash
-mina-indexer-target/release/mesa-mut-blocks report --blocks-dir ./mesa-mut-blocks
-mina-indexer-target/release/mesa-mut-blocks report --blocks-dir ./mesa-mut-blocks --json
+# build the binary first (needs the Nix toolchain):
+#   nix develop --command bash -c 'cd rust && cargo build --release'
+
+export INSTANCE=~/mesa-indexer        # where db + ledger + blocks live
+ops/mesa-mut/run-local.sh setup        # download the genesis ledger (~79MB gz -> ~900MB)
+ops/mesa-mut/run-local.sh fetch 200    # download 200 blocks from genesis
+ops/mesa-mut/run-local.sh create       # build the indexer database
+ops/mesa-mut/run-local.sh start        # serve GraphQL/REST on :8080 (watches blocks dir)
+ops/mesa-mut/run-local.sh status       # chain summary
+ops/mesa-mut/run-local.sh stop
 ```
 
-Decodes every block with `PrecomputedBlock::parse_file(.., PcbVersion::V2)` and
-prints a per-block table plus aggregate stats (height range, command counts,
-SNARK counts, genesis state hash).
-
-## 3. Serve
+The server runs with `--blocks-dir`, so re-running `fetch` while it's up makes
+it auto-ingest the new blocks. Query it:
 
 ```bash
-mesa-mut-blocks serve --blocks-dir ./mesa-mut-blocks --port 8080
+curl -s localhost:8080/summary | jq
+curl -s -X POST localhost:8080/graphql -H 'content-type: application/json' \
+  -d '{"query":"{ blocks(query:{blockHeight:297736},limit:1){ blockHeight stateHash transactions{ userCommands{ hash kind amount fee } } } }"}'
 ```
 
-| Route | Description |
-|-------|-------------|
-| `GET /` | index + summary |
-| `GET /blocks` | all decoded block summaries (JSON) |
-| `GET /blocks/{height}` | summaries at a height |
-| `GET /blocks/{height}/raw` | raw precomputed block JSON |
+## Lower-level helpers
 
-## Building
+- `fetch-blocks.sh OUTPUT_DIR [START] [END]` — download mesa-mut blocks from the
+  bucket and rename `mina-mesa-mut-1-<h>-<hash>.json` -> `mesa-<h>-<hash>.json`
+  (single-token network prefix the indexer's filename parser requires).
+- `mesa-mut-blocks` (binary, `rust/src/bin/`) — `report` / `serve` / `diag` over
+  a directory of precomputed blocks, decoding them with the crate's V2 parser.
 
-The app is a binary target in the `mina-indexer` crate, built by the normal
-flow (it needs `clang` + `mold` from the Nix dev shell):
+## How the network is wired
 
-```bash
-nix develop --command bash -c 'cd rust && cargo build --release --bin mesa-mut-blocks'
-```
-
-## Scope note — why this app, and not full indexer ingestion
-
-The full `mina-indexer database create` pipeline bootstraps a network from a
-hardcoded **genesis block** (`GenesisBlock::new_v2()`) and **genesis ledger**
-keyed off the *mainnet* hardfork hash (`HARDFORK_GENESIS_HASH`). `mesa-mut` has
-its own genesis (`3NKKivyyG1o3WerC5ivPoJNWFBCAkwkTJTHfkE2Q6t6EvGBX7j63`,
-height 1, slot 0), whose genesis **block** file is not published in the bucket
-(the lowest available block is height 2). Wiring that genesis in would require a
-mesa genesis block + ledger and new genesis constants — a separate change.
-
-Decoding and serving individual precomputed blocks only needs the V2 decoder,
-which is exactly what this app exercises end-to-end against real `mesa-mut`
-data.
+The genesis (fork block, ledger, constants) and the txn-v3 decoder support live
+in the crate itself (selected by `--network mesa --genesis-hash 3NLp6dKN…`). See
+the `feat(mesa)` commit. The genesis ledger is supplied at runtime via
+`--genesis-ledger` (the state dump); the genesis block is embedded in the binary.

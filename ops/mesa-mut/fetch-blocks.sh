@@ -1,78 +1,62 @@
 #!/usr/bin/env bash
 #
-# Fetch precomputed blocks for the `mesa-mut` (a.k.a. `hetzner-pre-mesa-1`)
-# Mina network from the public GCS bucket and rename them into the filename
-# convention the Mina Indexer expects.
+# Fetch precomputed blocks for the mesa-mut network from its public GCS bucket
+# and rename them into the filename convention the Mina Indexer expects.
 #
-# The indexer parses block file names as `<network>-<height>-<state_hash>.json`
-# and splits on the FIRST dash to obtain the network, then requires the next
-# segment to parse as a u32 height (see `extract_network_height_hash` in
-# rust/src/block/mod.rs). The bucket stores blocks as
-#   hetzner-pre-mesa-1-<height>-<state_hash>.json
-# whose multi-dash prefix would make the parser read "pre" as the height and
-# panic. We therefore rewrite the prefix to a single token: `mesa`.
+# mesa-mut blocks live in `gs://mesa-mut-precomputed-blocks`, named
+#   mina-mesa-mut-1-<height>-<state_hash>.json
+# The indexer parses block file names as `<network>-<height>-<hash>.json`,
+# splitting on the FIRST dash for the network and requiring the next segment to
+# be a u32 height (extract_network_height_hash, rust/src/block/mod.rs). The
+# multi-dash `mina-mesa-mut-1-...` prefix would make it read "mesa" as the
+# network and "mut" as the height and panic, so we rewrite the prefix to the
+# single token `mesa` -> `mesa-<height>-<state_hash>.json`.
+#
+# mesa-mut is a hardfork at height 297734 (its genesis); ingest from there up.
 #
 # Usage:
-#   ops/mesa-mut/fetch-blocks.sh [OUTPUT_DIR] [MAX_BLOCKS]
+#   ops/mesa-mut/fetch-blocks.sh OUTPUT_DIR [START_HEIGHT] [END_HEIGHT]
 #
-#   OUTPUT_DIR   Destination directory for the renamed blocks
-#                (default: ./mesa-mut-blocks)
-#   MAX_BLOCKS   Stop after downloading this many blocks (default: 200)
-#
+#   OUTPUT_DIR     destination directory for the renamed blocks
+#   START_HEIGHT   first height to fetch (default 297735, i.e. genesis+1;
+#                  the genesis block 297734 is embedded in the binary)
+#   END_HEIGHT     last height to fetch (default START+199)
 set -euo pipefail
 
-BUCKET="mesa-hf-precomputed-blocks"
-SRC_PREFIX="hetzner-pre-mesa-1"
+BUCKET="mesa-mut-precomputed-blocks"
+SRC_PREFIX="mina-mesa-mut-1"
 DST_NETWORK="mesa"
 
-OUT_DIR="${1:-./mesa-mut-blocks}"
-MAX_BLOCKS="${2:-200}"
+OUT_DIR="${1:?usage: fetch-blocks.sh OUTPUT_DIR [START_HEIGHT] [END_HEIGHT]}"
+START="${2:-297735}"
+END="${3:-$((START + 199))}"
 
 mkdir -p "$OUT_DIR"
+echo "Fetching mesa-mut blocks ${START}..${END} into $OUT_DIR" >&2
 
-echo "Fetching up to $MAX_BLOCKS mesa-mut precomputed blocks into $OUT_DIR" >&2
-
-page_token=""
 downloaded=0
-
-while :; do
-  url="https://storage.googleapis.com/storage/v1/b/${BUCKET}/o?maxResults=1000&fields=items(name),nextPageToken"
-  if [[ -n "$page_token" ]]; then
-    url="${url}&pageToken=${page_token}"
+for h in $(seq "$START" "$END"); do
+  # The bucket can hold several blocks per height (forks); take the first.
+  name="$(curl -fsS \
+    "https://storage.googleapis.com/storage/v1/b/${BUCKET}/o?prefix=${SRC_PREFIX}-${h}-&fields=items(name)" \
+    | grep -oE '"name": "[^"]+\.json"' | head -1 | sed -E 's/"name": "(.*)"/\1/')"
+  if [[ -z "$name" ]]; then
+    echo "  (no block at height $h)" >&2
+    continue
   fi
 
-  resp="$(curl -fsS "$url")"
+  # mina-mesa-mut-1-<height>-<hash>.json -> mesa-<height>-<hash>.json
+  rest="${name#"${SRC_PREFIX}"-}"
+  dst="${DST_NETWORK}-${rest}"
+  if [[ -f "$OUT_DIR/$dst" ]]; then
+    continue
+  fi
 
-  # Extract object names (one per line) without jq.
-  names="$(printf '%s' "$resp" | grep -oE '"name": "[^"]+\.json"' | sed -E 's/"name": "(.*)"/\1/')"
-
-  while IFS= read -r name; do
-    [[ -z "$name" ]] && continue
-
-    # hetzner-pre-mesa-1-<height>-<hash>.json  ->  mesa-<height>-<hash>.json
-    rest="${name#"${SRC_PREFIX}"-}"          # <height>-<hash>.json
-    dst="${DST_NETWORK}-${rest}"
-
-    if [[ -f "$OUT_DIR/$dst" ]]; then
-      continue
-    fi
-
-    curl -fsS "https://storage.googleapis.com/${BUCKET}/${name}" -o "$OUT_DIR/$dst"
-    downloaded=$((downloaded + 1))
-
-    if (( downloaded % 25 == 0 )); then
-      echo "  downloaded $downloaded blocks..." >&2
-    fi
-    if (( downloaded >= MAX_BLOCKS )); then
-      echo "Done: $downloaded blocks in $OUT_DIR" >&2
-      exit 0
-    fi
-  done <<< "$names"
-
-  page_token="$(printf '%s' "$resp" | grep -oE '"nextPageToken": "[^"]+"' | sed -E 's/"nextPageToken": "(.*)"/\1/' || true)"
-  if [[ -z "$page_token" ]]; then
-    break
+  curl -fsS "https://storage.googleapis.com/${BUCKET}/${name}" -o "$OUT_DIR/$dst"
+  downloaded=$((downloaded + 1))
+  if (( downloaded % 25 == 0 )); then
+    echo "  downloaded $downloaded blocks (through height $h)..." >&2
   fi
 done
 
-echo "Done: $downloaded blocks in $OUT_DIR" >&2
+echo "Done: $downloaded new blocks in $OUT_DIR" >&2
