@@ -185,7 +185,7 @@ async fn check_token_accounts() -> anyhow::Result<()> {
                     set_timing: Permission::Signature,
                 }),
                 zkapp: Some(ZkappAccount {
-                    app_state: ZkappState([
+                    app_state: ZkappState(vec![
                         "0x0000000000000000000000000000000000000000000000000000000000000001".into(),
                         Default::default(),
                         Default::default(),

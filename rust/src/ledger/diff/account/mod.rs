@@ -837,6 +837,14 @@ impl AccountDiff {
             })
             .collect::<Vec<_>>();
 
+        // An all-Keep app_state update is a no-op: record no diff rather than a
+        // vec of Nones (keeps index alignment when at least one field is Set).
+        let app_state_diff = if app_state_diff.iter().all(Option::is_none) {
+            vec![]
+        } else {
+            app_state_diff
+        };
+
         let proved_state = matches!(
             elt.account_update.body.authorization_kind,
             Authorization::Proof(_) | Authorization::Proof_(_)
