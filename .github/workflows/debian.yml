@@ -77,7 +77,10 @@ jobs:
         id: deb
         working-directory: rust
         run: |
-          cargo install cargo-deb --locked
+          # cargo-deb needs a newer rustc than the project pins (1.85.1); build
+          # it with a stable toolchain.
+          rustup toolchain install stable --profile minimal
+          cargo +stable install cargo-deb --locked
           # Version: vX.Y.Z tag -> X.Y.Z ; main/PR -> <cargo-version>~git<sha>
           base="$(grep -m1 '^version' Cargo.toml | awk -F'\"' '{print $2}')"
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
