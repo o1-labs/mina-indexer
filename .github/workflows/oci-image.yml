@@ -1,38 +1,32 @@
-# Build the mina-indexer OCI image (Nix, reproducible) and optionally push it
-# to a container registry — e.g. the o1labs Artifact Registry.
+# Build the mina-indexer OCI image (Nix, reproducible) and push it to the GitHub
+# Container Registry: ghcr.io/<owner>/mina-indexer.
 #
-# Push is OPT-IN and only happens when a registry is configured:
-#   - on a version tag (v*), or
-#   - via manual "Run workflow" with push=true.
-# Otherwise the image is only built (DRY_RUN), so PRs/branches stay side-effect free.
+#   tag v*    -> :<tag> and :latest
+#   push main -> :main
+#   PRs       -> build only (no push)
 #
-# To enable pushing, set on the repository:
-#   - Variable  REGISTRY               e.g. europe-west3-docker.pkg.dev/o1labs-192920/euro-docker-repo
-#   - Secret    GCP_WIF_PROVIDER       Workload Identity Federation provider resource name
-#   - Secret    GCP_SERVICE_ACCOUNT    service account email with Artifact Registry Writer
+# Auth uses the built-in GITHUB_TOKEN (packages: write) — no extra secrets.
 name: OCI image
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      push:
-        description: "Push image to the configured REGISTRY"
-        type: boolean
-        default: false
 
 permissions:
   contents: read
-  id-token: write # for GCP Workload Identity Federation
+  packages: write
 
 jobs:
   oci-image:
     # x86-64-linux is required to build the image (see README).
     runs-on: ubuntu-latest
     env:
+      REGISTRY: ghcr.io/${{ github.repository_owner }}
       IMAGE: mina-indexer
-      REGISTRY: ${{ vars.REGISTRY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -40,34 +34,36 @@ jobs:
         uses: DeterminateSystems/nix-installer-action@main
       - name: Nix build cache
         uses: DeterminateSystems/magic-nix-cache-action@main
+      - name: Install skopeo
+        run: sudo apt-get update && sudo apt-get install -y skopeo
 
-      # Decide whether this run should push.
-      - name: Determine push
-        id: mode
+      - name: Determine tag + push
+        id: meta
         run: |
-          push=false
-          if [ -n "${REGISTRY}" ]; then
-            if [ "${{ github.event_name }}" = "push" ] || [ "${{ inputs.push }}" = "true" ]; then
-              push=true
-            fi
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "push=true" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "tag=main" >> "$GITHUB_OUTPUT"
+            echo "push=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=pr-${{ github.run_id }}" >> "$GITHUB_OUTPUT"
+            echo "push=false" >> "$GITHUB_OUTPUT"
           fi
-          echo "push=$push" >> "$GITHUB_OUTPUT"
-          echo "Push enabled: $push (registry='${REGISTRY:-unset}')"
 
-      # Authenticate to Google Artifact Registry only when pushing there.
-      - name: Authenticate to GCP
-        if: steps.mode.outputs.push == 'true' && startsWith(env.REGISTRY, 'europe-west3-docker.pkg.dev')
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-      - name: Configure docker auth for Artifact Registry
-        if: steps.mode.outputs.push == 'true' && startsWith(env.REGISTRY, 'europe-west3-docker.pkg.dev')
-        run: |
-          gcloud auth configure-docker europe-west3-docker.pkg.dev --quiet
+      - name: Log in to GHCR
+        if: steps.meta.outputs.push == 'true'
+        run: skopeo login ghcr.io -u "${{ github.actor }}" --password-stdin <<<"${{ secrets.GITHUB_TOKEN }}"
 
-      - name: Build (and optionally push) the OCI image
+      - name: Build (and push) the OCI image
         env:
-          TAG: ${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
-          DRY_RUN: ${{ steps.mode.outputs.push == 'true' && '0' || '1' }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          DRY_RUN: ${{ steps.meta.outputs.push == 'true' && '0' || '1' }}
         run: ops/build-and-push-oci.sh
+
+      - name: Also tag :latest (on release tag)
+        if: github.ref_type == 'tag'
+        run: |
+          skopeo copy \
+            "docker://${REGISTRY}/${IMAGE}:${{ steps.meta.outputs.tag }}" \
+            "docker://${REGISTRY}/${IMAGE}:latest"

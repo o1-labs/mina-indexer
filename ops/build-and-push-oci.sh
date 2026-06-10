@@ -7,15 +7,15 @@
 # with pkgs.dockerTools — no Dockerfile/daemon needed to BUILD). This wrapper
 # adds tagging + push to an external registry.
 #
-# Usage:
-#   REGISTRY=europe-west3-docker.pkg.dev/o1labs-192920/euro-docker-repo \
+# Usage (default target is GHCR; see .github/workflows/oci-image.yml):
+#   REGISTRY=ghcr.io/o1-labs \
 #   IMAGE=mina-indexer \
 #   [TAG=<git-short-sha>] \
 #   ops/build-and-push-oci.sh
 #
-# Auth (run once in CI before this script):
-#   gcloud auth configure-docker europe-west3-docker.pkg.dev
-#   # or, for skopeo: skopeo login europe-west3-docker.pkg.dev
+# Auth (run once in CI before this script), e.g.:
+#   skopeo login ghcr.io -u "$GITHUB_ACTOR" --password-stdin <<<"$GITHUB_TOKEN"
+#   # or another registry, e.g. gcloud auth configure-docker europe-west3-docker.pkg.dev
 #
 # Requires x86_64-linux to build the image (see README "Generating OCI Images").
 set -euo pipefail
