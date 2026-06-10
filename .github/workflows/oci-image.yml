@@ -10,7 +10,7 @@ name: OCI image
 
 on:
   push:
-    branches: [main]
+    branches: [main, "ci/**"]
     tags: ["v*"]
   pull_request:
     branches: [main]
@@ -45,6 +45,10 @@ jobs:
             echo "push=true" >> "$GITHUB_OUTPUT"
           elif [ "${{ github.ref }}" = "refs/heads/main" ]; then
             echo "tag=main" >> "$GITHUB_OUTPUT"
+            echo "push=true" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            # push to a ci/** branch -> publish an image tagged by the branch
+            echo "tag=$(echo "${GITHUB_REF_NAME}" | tr '/' '-')" >> "$GITHUB_OUTPUT"
             echo "push=true" >> "$GITHUB_OUTPUT"
           else
             echo "tag=pr-${{ github.run_id }}" >> "$GITHUB_OUTPUT"
