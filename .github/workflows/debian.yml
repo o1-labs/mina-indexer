@@ -27,6 +27,11 @@ permissions:
 jobs:
   deb:
     runs-on: ubuntu-latest
+    # The job runs inside a distro container whose default shell is sh (dash);
+    # force bash so `set -o pipefail` and other bashisms work.
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
