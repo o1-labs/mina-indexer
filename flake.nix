@@ -148,15 +148,18 @@
               cacert # CA roots for any outbound HTTPS (block/ledger fetch)
               dockerTools.fakeNss # /etc/passwd & /etc/group so the non-root user resolves
             ];
-            # Create a world-writable data dir for the speedb database + blocks.
+            # Create world-writable data + tmp dirs. /tmp must exist: the indexer
+            # writes temp snapshot files there during ingestion (tempfile crate);
+            # the minimal image has no /tmp otherwise, so startup fails with ENOENT.
             fakeRootCommands = ''
-              mkdir -p ./data
-              chmod 1777 ./data
+              mkdir -p ./data ./tmp
+              chmod 1777 ./data ./tmp
             '';
             config = {
               # Cmd (not Entrypoint) so callers can override, e.g.
               #   docker run IMAGE mina-indexer server start --help
               Cmd = [ "${pkgs.lib.getExe mina-indexer}" ];
+              Env = [ "TMPDIR=/tmp" ];
               User = "65534:65534"; # nobody — never root
               WorkingDir = "/data";
               Volumes = { "/data" = { }; };
