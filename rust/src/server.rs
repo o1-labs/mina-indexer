@@ -446,6 +446,13 @@ async fn run_indexer<P: AsRef<Path>>(
                     if let Some(ref missing_block_recovery_exe) = missing_block_recovery_exe {
                         recover_missing_blocks(&state, &blocks_dir, missing_block_recovery_exe, missing_block_recovery_batch).await?
                     }
+
+                    // Safety net: ingest any on-disk block the fs-watcher missed.
+                    // inotify has a bounded event queue; a bulk fetch (hundreds
+                    // of files at once) overflows it and silently drops events,
+                    // leaving connectable blocks orphaned on disk that the fetch
+                    // hook then skips (already downloaded) — wedging the tip.
+                    reconcile_blocks_dir(&state, blocks_dir.as_ref()).await?;
                 }
             }
         }
@@ -599,6 +606,78 @@ async fn process_event(event: Event, state: &Arc<RwLock<IndexerState>>) -> anyho
         }
     }
 
+    Ok(())
+}
+
+/// Re-scan the blocks directory and ingest any valid block the filesystem
+/// watcher missed. inotify has a bounded kernel event queue; a bulk fetch
+/// (hundreds of files mv'd in at once) overflows it and silently drops events,
+/// so connectable blocks sit orphaned on disk while the fetch hook skips them
+/// (already downloaded) — wedging the tip. This periodic reconcile is the
+/// safety net that makes ingestion robust regardless of OS event delivery.
+///
+/// Idempotent: blocks already in the witness tree are skipped. Bounded to the
+/// transition frontier (best tip - k and above) so it doesn't re-stat the whole
+/// chain every cycle. Ascending height so parents are applied before children.
+async fn reconcile_blocks_dir(
+    state: &Arc<RwLock<IndexerState>>,
+    blocks_dir: &Path,
+) -> anyhow::Result<()> {
+    let floor = {
+        let st = state.read().await;
+        st.best_tip_block()
+            .blockchain_length
+            .saturating_sub(MAINNET_TRANSITION_FRONTIER_K)
+    };
+
+    let mut candidates: Vec<(u32, PathBuf)> = match std::fs::read_dir(blocks_dir) {
+        Ok(rd) => rd
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| block::is_valid_block_file(p))
+            .map(|p| (extract_network_height_hash(&p).1, p))
+            .filter(|(height, _)| *height >= floor)
+            .collect(),
+        Err(e) => {
+            error!("reconcile: cannot read {blocks_dir:#?}: {e}");
+            return Ok(());
+        }
+    };
+    candidates.sort_by_key(|(height, _)| *height);
+
+    let mut reconciled = 0;
+    for (_, path) in candidates {
+        // quiet presence check (unlike check_block, which logs per block)
+        let (_, _, state_hash) = extract_network_height_hash(&path);
+        let state_hash: StateHash = state_hash.into();
+        if state.read().await.diffs_map.contains_key(&state_hash) {
+            continue;
+        }
+
+        let version = state.read().await.version.version.clone();
+        match retry_parse_precomputed_block(&path, version).await {
+            Ok(block) => {
+                let len = match path.metadata() {
+                    Ok(m) => m.len(),
+                    Err(_) => continue,
+                };
+                let summary = block.summary();
+                let mut st = state.write().await;
+                match st.block_pipeline(&block, len) {
+                    Ok(true) => {
+                        reconciled += 1;
+                        info!("Reconciled on-disk block {summary}");
+                    }
+                    Ok(false) => {}
+                    Err(e) => error!("Error reconciling block {summary}: {e}"),
+                }
+            }
+            // unparseable blocks are skipped (logged once on the watcher path)
+            Err(e) => trace!("reconcile: skipping {path:#?}: {e}"),
+        }
+    }
+    if reconciled > 0 {
+        info!("Reconcile: ingested {reconciled} on-disk block(s) the fs-watcher missed");
+    }
     Ok(())
 }
 
