@@ -468,11 +468,20 @@ async fn run_indexer<P: AsRef<Path>>(
     Ok(())
 }
 
-async fn retry_parse_precomputed_block(path: &Path) -> anyhow::Result<PrecomputedBlock> {
+async fn retry_parse_precomputed_block(
+    path: &Path,
+    version: PcbVersion,
+) -> anyhow::Result<PrecomputedBlock> {
     let num_attempts = 5;
     let mut last_err = None;
     for attempt in 1..num_attempts {
-        match PrecomputedBlock::from_path(path) {
+        // Parse with the indexer's configured network version, NOT
+        // `from_path` (which guesses the version from blockchain length via the
+        // mainnet hardfork threshold). On a non-mainnet hardfork like mesa-mut
+        // that guess is wrong — every live-fetched block would be parsed as the
+        // pre-fork version and fail with "missing field protocol_state", so the
+        // tip could only ever advance via the BuildDB scan, never live fetch.
+        match PrecomputedBlock::parse_file(path, version.clone()) {
             Ok(block) => return Ok(block),
             Err(e) => {
                 warn!("Attempt {attempt}: {e}. Retrying in 100ms...");
@@ -535,7 +544,9 @@ async fn process_event(event: Event, state: &Arc<RwLock<IndexerState>>) -> anyho
                 }
 
                 // if the block isn't in the witness tree, parse & pipeline it
-                match retry_parse_precomputed_block(&path).await {
+                // using the indexer's configured network version
+                let pcb_version = state.read().await.version.version.clone();
+                match retry_parse_precomputed_block(&path, pcb_version).await {
                     Ok(block) => {
                         let mut state = state.write().await;
                         let block_summary = block.summary();
