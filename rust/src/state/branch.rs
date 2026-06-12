@@ -169,9 +169,17 @@ impl Branch {
             }
         }
 
-        // guaranteed to exist because of the height precondition
-        let new_root_id = new_root_id.unwrap();
-        let prune_point_id = prune_point_id.unwrap();
+        // The prune point is the (k+1)-th ancestor of the best tip. The caller's
+        // height precondition (`root_branch.height() > prune_interval * k`)
+        // counts forks, so it can be satisfied while the best tip's *ancestor
+        // chain* is still only k long (e.g. with `prune_interval = 1`, pruning
+        // is requested at root height k+1 but the chain has just k ancestors).
+        // In that case there is nothing to prune yet, so bail out instead of
+        // unwrapping a `None` and panicking — the next call prunes once the
+        // witness chain is deep enough.
+        let (Some(new_root_id), Some(prune_point_id)) = (new_root_id, prune_point_id) else {
+            return;
+        };
 
         // remove all prune point siblings
         for node_id in self

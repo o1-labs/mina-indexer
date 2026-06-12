@@ -118,3 +118,40 @@ async fn transition_frontier() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn prune_is_noop_when_chain_too_short() -> anyhow::Result<()> {
+    // Regression: with `prune_interval = 1` the height precondition can request
+    // pruning while the best tip's ancestor chain is only `k` long, so there is
+    // no `(k + 1)`-th prune point. Pruning must be a no-op, not a panic
+    // (previously `prune_point_id.unwrap()` on `None` crashed the indexer).
+
+    let blocks_dir = PathBuf::from("./tests/data/sequential_blocks");
+    let mut block_parser = BlockParser::new_testing(&blocks_dir).unwrap();
+
+    let (root_block, _) = block_parser
+        .get_precomputed_block("3NKizDx3nnhXha2WqHDNUvJk9jW7GsonsEGYs26tCPW2Wow1ZoR3")
+        .await?;
+    let (main_1_block, _) = block_parser
+        .get_precomputed_block("3NKAqzELKDp2BbdKKwdRWEoMNehyMrxJGCoGCyH1t1PyyH7VQMgk")
+        .await?;
+
+    // root -> main_1: the best tip (main_1) has exactly k = 1 ancestor (root),
+    // so there is nothing deep enough to prune.
+    let mut branch = Branch::new(&root_block)?;
+    let (best_tip_id, _) = branch.simple_extension(&main_1_block).unwrap();
+
+    // Must not panic.
+    branch.prune_transition_frontier(
+        1,
+        &branch.branches.get(&best_tip_id).unwrap().data().clone(),
+    );
+
+    // The root is unchanged because no prune happened.
+    assert_eq!(
+        branch.root_block().state_hash,
+        root_block.state_hash(),
+        "root must be unchanged when the witness chain is too short to prune"
+    );
+    Ok(())
+}
