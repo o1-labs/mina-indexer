@@ -295,6 +295,10 @@ impl IndexerStore {
         database_opts.set_compression_type(DBCompressionType::Zstd);
         database_opts.create_missing_column_families(true);
         database_opts.create_if_missing(true);
+        // Atomic flush: a single flush() persists every column family together,
+        // so a clean shutdown drains the memtables and the next `server start`
+        // opens without replaying a multi-GB WAL (minutes of recovery).
+        database_opts.set_atomic_flush(true);
 
         let column_families: Vec<ColumnFamilyDescriptor> = Self::COLUMN_FAMILIES
             .iter()
