@@ -178,7 +178,15 @@ impl ServerCommand {
                 } else if args.self_check {
                     (*args, InitializationMode::Replay)
                 } else {
-                    (*args, InitializationMode::Sync)
+                    // Self-initialize: if there's no database yet, build it from
+                    // blocks; otherwise just open and sync. Lets `server start`
+                    // run standalone without a separate `database create` first.
+                    let mode = if args.db.database_dir.join("CURRENT").exists() {
+                        InitializationMode::Sync
+                    } else {
+                        InitializationMode::BuildDB
+                    };
+                    (*args, mode)
                 }
             }
         };

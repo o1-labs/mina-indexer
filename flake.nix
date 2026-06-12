@@ -135,6 +135,17 @@
 
           default = mina-indexer;
 
+          # In-image block puller for the --fetch-new-blocks-exe /
+          # --missing-block-recovery-exe hooks (self-contained: bundles its
+          # curl/grep/sed/coreutils deps, so the minimal image needs nothing).
+          mesa-pull = pkgs.writeShellApplication {
+            name = "mesa-pull";
+            runtimeInputs = with pkgs; [ curl gnugrep gnused coreutils ];
+            # the script tolerates per-block failures, so no `errexit`
+            bashOptions = [ "nounset" "pipefail" ];
+            text = builtins.readFile ./ops/mesa-mut/mesa-pull.sh;
+          };
+
           # Production OCI image. Uses streamLayeredImage for cache-friendly
           # layers, ships only the runtime closure (no source tree), runs as a
           # non-root user, and is reproducible (pinned `created`).
@@ -144,19 +155,23 @@
             created = "1970-01-01T00:00:01Z";
             contents = with pkgs; [
               mina-indexer
+              mesa-pull # /bin/mesa-pull for the fetch/recovery hooks
               bash
               cacert # CA roots for any outbound HTTPS (block/ledger fetch)
               dockerTools.fakeNss # /etc/passwd & /etc/group so the non-root user resolves
             ];
-            # Create a world-writable data dir for the speedb database + blocks.
+            # World-writable data + tmp dirs. /tmp must exist: the indexer writes
+            # temp snapshot files there during ingestion (the minimal image has
+            # no /tmp otherwise, so startup fails with ENOENT).
             fakeRootCommands = ''
-              mkdir -p ./data
-              chmod 1777 ./data
+              mkdir -p ./data ./tmp
+              chmod 1777 ./data ./tmp
             '';
             config = {
               # Cmd (not Entrypoint) so callers can override, e.g.
               #   docker run IMAGE mina-indexer server start --help
               Cmd = [ "${pkgs.lib.getExe mina-indexer}" ];
+              Env = [ "TMPDIR=/tmp" ];
               User = "65534:65534"; # nobody — never root
               WorkingDir = "/data";
               Volumes = { "/data" = { }; };
