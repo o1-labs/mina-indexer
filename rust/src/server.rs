@@ -470,37 +470,53 @@ async fn run_indexer<P: AsRef<Path>>(
 
 async fn retry_parse_precomputed_block(path: &Path) -> anyhow::Result<PrecomputedBlock> {
     let num_attempts = 5;
+    let mut last_err = None;
     for attempt in 1..num_attempts {
         match PrecomputedBlock::from_path(path) {
             Ok(block) => return Ok(block),
             Err(e) => {
                 warn!("Attempt {attempt}: {e}. Retrying in 100ms...");
+                last_err = Some(e);
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
         }
     }
 
-    panic!(
-        "All {} attempts to parse the staking ledger failed.",
-        num_attempts
+    // Don't panic on a single bad block — flag it and let the caller skip it so
+    // the indexer stays up. A transiently-bad block (e.g. a partial download) is
+    // re-fetched later by missing-block-recovery and inserted then; a
+    // permanently-incompatible one (e.g. a pre-fork block) stays skipped.
+    anyhow::bail!(
+        "Failed to parse precomputed block {} after {num_attempts} attempts: {}",
+        path.display(),
+        last_err
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "unknown error".to_string()),
     )
 }
 
 async fn retry_parse_staking_ledger(path: &Path) -> anyhow::Result<StakingLedger> {
     let num_attempts = 5;
+    let mut last_err = None;
     for attempt in 1..num_attempts {
         match StakingLedger::parse_file(path).await {
             Ok(ledger) => return Ok(ledger),
             Err(e) => {
                 warn!("Attempt {attempt}: {e}. Retrying in 1s...");
+                last_err = Some(e);
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
         }
     }
 
-    panic!(
-        "All {} attempts to parse the staking ledger failed.",
-        num_attempts
+    // Flag-and-skip instead of crashing the indexer (see
+    // retry_parse_precomputed_block).
+    anyhow::bail!(
+        "Failed to parse staking ledger {} after {num_attempts} attempts: {}",
+        path.display(),
+        last_err
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "unknown error".to_string()),
     )
 }
 
