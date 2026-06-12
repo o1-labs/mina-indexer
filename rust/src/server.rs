@@ -104,6 +104,10 @@ impl IndexerConfiguration {
         });
 
         if let Some(indexer_store) = state.indexer_store.as_ref() {
+            // Persist memtables + WAL so a subsequent open is fast (see the
+            // server-loop shutdown for rationale).
+            let _ = indexer_store.database.flush();
+            let _ = indexer_store.database.flush_wal(true);
             indexer_store.database.cancel_all_background_work(true);
         }
 
@@ -450,6 +454,12 @@ async fn run_indexer<P: AsRef<Path>>(
     // shutdown
     let state = state.write().await;
     if let Some(store) = state.indexer_store.as_ref() {
+        debug!("Flushing db memtables + WAL before shutdown");
+        // Drain memtables to SST and sync the WAL so the next `server start`
+        // opens cleanly instead of replaying a multi-GB WAL (minutes of
+        // recovery). Atomic-flush makes the single flush() cover every CF.
+        let _ = store.database.flush();
+        let _ = store.database.flush_wal(true);
         debug!("Canceling db background work");
         store.database.cancel_all_background_work(true)
     }
