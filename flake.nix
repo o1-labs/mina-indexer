@@ -171,7 +171,15 @@
               # Cmd (not Entrypoint) so callers can override, e.g.
               #   docker run IMAGE mina-indexer server start --help
               Cmd = [ "${pkgs.lib.getExe mina-indexer}" ];
-              Env = [ "TMPDIR=/tmp" ];
+              # SSL_CERT_FILE: the bundled curl (in mesa-pull) has no built-in CA
+              # path, so without this every HTTPS block/ledger fetch fails TLS
+              # verification ("curl failed to verify the legitimacy of the
+              # server") and the fetcher silently pulls 0 blocks.
+              Env = [
+                "TMPDIR=/tmp"
+                "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+                "CURL_CA_BUNDLE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+              ];
               User = "65534:65534"; # nobody — never root
               WorkingDir = "/data";
               Volumes = { "/data" = { }; };
