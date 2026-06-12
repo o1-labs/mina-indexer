@@ -19,6 +19,12 @@ DIR="${3:?blocks_dir}"
 [ "$NET" = "mesa" ] || exit 0   # only mesa is sourced from this bucket
 
 WINDOW="${MESA_FETCH_WINDOW:-200}"
+# Never fetch below the mesa hard-fork genesis (297735). The block at 297734 is
+# the RETIRED pre-fork chain (genesis 3NLp6dKN) with the old structure; the
+# post-fork deserializer can't parse it ("missing field protocol_state") and the
+# indexer panics. missing-block-recovery asks for 297734 because our genesis's
+# previous_state_hash points there, but it must never be ingested.
+MIN_HEIGHT="${MESA_MIN_HEIGHT:-297735}"
 BUCKET="mesa-mut-precomputed-blocks"
 SRC="mina-mesa-mut-1"
 API="https://storage.googleapis.com/storage/v1/b/${BUCKET}/o"
@@ -30,6 +36,7 @@ rcurl() { local i; for i in 1 2 3 4 5; do curl -fsS --max-time 90 "$@" && return
 
 dl=0
 for h in $(seq "$FROM" $((FROM + WINDOW - 1))); do
+  [ "$h" -lt "$MIN_HEIGHT" ] && continue   # skip pre-fork blocks (unparseable, would crash the indexer)
   names="$(rcurl "${API}?prefix=${SRC}-${h}-&fields=items(name)" | grep -oE '"name": "[^"]+\.json"' | sed -E 's/"name": "(.*)"/\1/')" || continue
   [ -z "$names" ] && continue
   while IFS= read -r n; do
