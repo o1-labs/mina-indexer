@@ -71,6 +71,7 @@ pub struct IndexerConfiguration {
     pub do_not_ingest_orphan_blocks: bool,
     pub fetch_new_blocks_exe: Option<PathBuf>,
     pub fetch_new_blocks_delay: Option<u64>,
+    pub verify_block_exe: Option<PathBuf>,
     pub missing_block_recovery_exe: Option<PathBuf>,
     pub missing_block_recovery_delay: Option<u64>,
     pub missing_block_recovery_batch: bool,
@@ -287,6 +288,7 @@ impl IndexerConfiguration {
 
         let fetch_new_blocks_delay = self.fetch_new_blocks_delay;
         let fetch_new_blocks_exe = self.fetch_new_blocks_exe.clone();
+        let verify_block_exe = self.verify_block_exe.clone();
 
         let missing_block_recovery_delay = self.missing_block_recovery_delay;
         let missing_block_recovery_exe = self.missing_block_recovery_exe.clone();
@@ -321,6 +323,7 @@ impl IndexerConfiguration {
             staking_ledgers_dir,
             missing_block_recovery,
             fetch_new_blocks,
+            verify_block_exe,
             state.clone(),
         )
         .await?;
@@ -373,6 +376,7 @@ async fn run_indexer<P: AsRef<Path>>(
     staking_ledgers_dir: Option<P>,
     missing_block_recovery: Option<MissingBlockRecoveryOptions>,
     fetch_new_blocks_opts: Option<FetchNewBlocksOptions>,
+    verify_block_exe: Option<PathBuf>,
     state: Arc<RwLock<IndexerState>>,
 ) -> anyhow::Result<()> {
     // setup fs-based precomputed block & staking ledger watchers
@@ -426,7 +430,7 @@ async fn run_indexer<P: AsRef<Path>>(
             // watch for precomputed blocks & staking ledgers
             Some(res) = rx.recv() => {
                 match res {
-                    Ok(event) => process_event(event, &state).await?,
+                    Ok(event) => process_event(event, &state, verify_block_exe.as_deref()).await?,
                     Err(e) => {
                         error!("Filesystem watcher error: {e}");
                         break;
@@ -452,7 +456,7 @@ async fn run_indexer<P: AsRef<Path>>(
                     // of files at once) overflows it and silently drops events,
                     // leaving connectable blocks orphaned on disk that the fetch
                     // hook then skips (already downloaded) — wedging the tip.
-                    reconcile_blocks_dir(&state, blocks_dir.as_ref()).await?;
+                    reconcile_blocks_dir(&state, blocks_dir.as_ref(), verify_block_exe.as_deref()).await?;
                 }
             }
         }
@@ -537,7 +541,11 @@ async fn retry_parse_staking_ledger(path: &Path) -> anyhow::Result<StakingLedger
 }
 
 /// Precomputed block & staking ledger event handler
-async fn process_event(event: Event, state: &Arc<RwLock<IndexerState>>) -> anyhow::Result<()> {
+async fn process_event(
+    event: Event,
+    state: &Arc<RwLock<IndexerState>>,
+    verify_block_exe: Option<&Path>,
+) -> anyhow::Result<()> {
     trace!("{:?}", event);
 
     if matches_event_kind(event.kind) {
@@ -548,6 +556,15 @@ async fn process_event(event: Event, state: &Arc<RwLock<IndexerState>>) -> anyho
                 // exit early if present
                 if check_block(state, &path).await {
                     return Ok(());
+                }
+
+                // trustless gate: only ingest blocks whose proof verifies
+                if let Some(exe) = verify_block_exe {
+                    let network = state.read().await.version.network.clone();
+                    if !verify_block(exe, &network, &path).await {
+                        warn!("Rejected block (proof did not verify): {:#?}", path);
+                        continue;
+                    }
                 }
 
                 // if the block isn't in the witness tree, parse & pipeline it
@@ -622,6 +639,7 @@ async fn process_event(event: Event, state: &Arc<RwLock<IndexerState>>) -> anyho
 async fn reconcile_blocks_dir(
     state: &Arc<RwLock<IndexerState>>,
     blocks_dir: &Path,
+    verify_block_exe: Option<&Path>,
 ) -> anyhow::Result<()> {
     let floor = {
         let st = state.read().await;
@@ -653,6 +671,15 @@ async fn reconcile_blocks_dir(
             continue;
         }
 
+        // trustless gate: only ingest blocks whose proof verifies
+        if let Some(exe) = verify_block_exe {
+            let network = state.read().await.version.network.clone();
+            if !verify_block(exe, &network, &path).await {
+                warn!("Rejected block (proof did not verify): {:#?}", path);
+                continue;
+            }
+        }
+
         let version = state.read().await.version.version.clone();
         match retry_parse_precomputed_block(&path, version).await {
             Ok(block) => {
@@ -679,6 +706,33 @@ async fn reconcile_blocks_dir(
         info!("Reconcile: ingested {reconciled} on-disk block(s) the fs-watcher missed");
     }
     Ok(())
+}
+
+/// Trustless gate: run the external verifier on a block file. The contract
+/// mirrors the fetch hook — `EXE <network> <block-file>` — and a zero exit code
+/// means the block's SNARK proof verified. Fails closed: if the verifier can't
+/// be run, the block is rejected (an unverifiable block is never ingested in
+/// trustless mode).
+async fn verify_block(exe: &Path, network: &Network, path: &Path) -> bool {
+    let mut cmd = std::process::Command::new(exe.display().to_string());
+    cmd.args([&network.to_string(), &path.display().to_string()]);
+
+    match cmd.output() {
+        Ok(output) => {
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let stderr = stderr.trim();
+                if !stderr.is_empty() {
+                    warn!("verify-block-exe rejected {path:#?}: {stderr}");
+                }
+            }
+            output.status.success()
+        }
+        Err(e) => {
+            error!("verify-block-exe failed to run ({exe:#?}): {e}");
+            false
+        }
+    }
 }
 
 /// Checks if the PCB is already present in the witness tree
@@ -948,6 +1002,7 @@ impl From<(ServerArgsJson, PathBuf)> for IndexerConfiguration {
             do_not_ingest_orphan_blocks: value.0.do_not_ingest_orphan_blocks,
             fetch_new_blocks_exe: value.0.fetch_new_blocks_exe.map(Into::into),
             fetch_new_blocks_delay: value.0.fetch_new_blocks_delay,
+            verify_block_exe: value.0.verify_block_exe.map(Into::into),
             missing_block_recovery_exe: value.0.missing_block_recovery_exe.map(Into::into),
             missing_block_recovery_delay: value.0.missing_block_recovery_delay,
             missing_block_recovery_batch: value.0.missing_block_recovery_batch.unwrap_or_default(),
