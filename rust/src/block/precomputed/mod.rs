@@ -70,13 +70,21 @@ impl PrecomputedBlock {
         let state_hash = block_file_contents.state_hash;
         let blockchain_length = block_file_contents.blockchain_length;
 
+        // Precomputed blocks emitted by the OCaml daemon are NOT strictly UTF-8:
+        // the `sok_digest` field (inside staged_ledger_diff, present on any block
+        // carrying SNARK work) contains raw bytes. `serde_json::from_slice`
+        // rejects those, which would wedge ingestion on the first canonical
+        // SNARK-work block. Decode lossily — the replaced bytes only ever land in
+        // `sok_digest`, which the indexer does not read.
+        let contents = String::from_utf8_lossy(&block_file_contents.contents);
+
         match version {
             PcbVersion::V1 => {
                 let BlockFileV1 {
                     scheduled_time,
                     protocol_state,
                     staged_ledger_diff,
-                } = serde_json::from_slice(&block_file_contents.contents)?;
+                } = serde_json::from_str(&contents)?;
                 Ok(Self::V1(Box::new(PrecomputedBlockV1 {
                     state_hash,
                     scheduled_time,
@@ -98,7 +106,7 @@ impl PrecomputedBlock {
                             accounts_accessed,
                             accounts_created,
                         },
-                } = serde_json::from_slice(&block_file_contents.contents)?;
+                } = serde_json::from_str(&contents)?;
                 Ok(Self::V2(Box::new(PrecomputedBlockV2 {
                     state_hash,
                     scheduled_time,
@@ -1459,6 +1467,34 @@ mod tests {
             pcb.last_vrf_output(),
             "rWxD4L_t-VXaoDDVJipD5OR9OU6X4T6WwEWCxvoEAAA=".to_string()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn lossy_decodes_non_utf8_block() -> anyhow::Result<()> {
+        // Real precomputed blocks carry raw (non-UTF-8) bytes — e.g. `sok_digest`
+        // on any block with SNARK work. Strict `from_slice` rejects those, which
+        // would wedge ingestion on the first canonical SNARK-work block, so
+        // `from_file_contents` must decode lossily. (Regression.)
+        let path = PathBuf::from("./tests/data/misc_blocks/mainnet-360930-3NL3mVAEwJuBS8F3fMWBZZRjQC4JBzdGTD7vN5SqizudnkPKsRyi.json");
+        let (network, blockchain_length, state_hash) = extract_network_height_hash(&path);
+
+        // inject a raw 0xD8 byte inside the `body_reference` string value
+        let mut bytes = std::fs::read(&path)?;
+        let needle = b"\"body_reference\":\"";
+        let at = bytes
+            .windows(needle.len())
+            .position(|w| w == needle)
+            .expect("body_reference present")
+            + needle.len();
+        bytes.insert(at, 0xD8);
+
+        // the bytes are now invalid UTF-8 (strict from_slice would fail) ...
+        assert!(std::str::from_utf8(&bytes).is_err());
+        // ... but the block must still parse via lossy decode
+        let block =
+            PrecomputedBlock::new(network, blockchain_length, state_hash, bytes, PcbVersion::V2)?;
+        assert_eq!(block.blockchain_length(), 360930);
         Ok(())
     }
 
