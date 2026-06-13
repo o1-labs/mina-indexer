@@ -146,6 +146,15 @@
             text = builtins.readFile ./ops/mesa-mut/mesa-pull.sh;
           };
 
+          # In-image block-verification shim for the --verify-block-exe hook:
+          # forwards the block to the mina-verify-server sidecar (trustless mode).
+          verify-block = pkgs.writeShellApplication {
+            name = "verify-block";
+            runtimeInputs = with pkgs; [ curl ];
+            bashOptions = [ "nounset" "pipefail" ];
+            text = builtins.readFile ./ops/mesa-mut/verify-block.sh;
+          };
+
           # Production OCI image. Uses streamLayeredImage for cache-friendly
           # layers, ships only the runtime closure (no source tree), runs as a
           # non-root user, and is reproducible (pinned `created`).
@@ -156,6 +165,7 @@
             contents = with pkgs; [
               mina-indexer
               mesa-pull # /bin/mesa-pull for the fetch/recovery hooks
+              verify-block # /bin/verify-block for the --verify-block-exe hook
               bash
               cacert # CA roots for any outbound HTTPS (block/ledger fetch)
               dockerTools.fakeNss # /etc/passwd & /etc/group so the non-root user resolves
