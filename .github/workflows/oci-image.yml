@@ -1,7 +1,8 @@
-# Build the mina-indexer OCI image (Nix, reproducible) and push it to the GitHub
-# Container Registry: ghcr.io/<owner>/mina-indexer.
+# Build the per-network configless mina-indexer OCI images (Nix, reproducible)
+# and push them to the GitHub Container Registry: ghcr.io/<owner>/mina-indexer.
 #
-#   tag v*  -> :<tag> and :latest
+# Three images, one per network, single repo with a tag suffix:
+#   tag v*  -> :<tag>-<network> and :latest-<network>   (mainnet | devnet | mesa-mut)
 #   PRs     -> build only (no push)
 #
 # Auth uses the built-in GITHUB_TOKEN (packages: write) — no extra secrets.
@@ -22,6 +23,16 @@ jobs:
   oci-image:
     # x86-64-linux is required to build the image (see README).
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - network: mainnet
+            attr: dockerImage-mainnet
+          - network: devnet
+            attr: dockerImage-devnet
+          - network: mesa-mut
+            attr: dockerImage-mesa
     env:
       REGISTRY: ghcr.io/${{ github.repository_owner }}
       IMAGE: mina-indexer
@@ -39,10 +50,10 @@ jobs:
         id: meta
         run: |
           if [ "${{ github.ref_type }}" = "tag" ]; then
-            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "tag=${GITHUB_REF_NAME}-${{ matrix.network }}" >> "$GITHUB_OUTPUT"
             echo "push=true" >> "$GITHUB_OUTPUT"
           else
-            echo "tag=pr-${{ github.run_id }}" >> "$GITHUB_OUTPUT"
+            echo "tag=pr-${{ github.run_id }}-${{ matrix.network }}" >> "$GITHUB_OUTPUT"
             echo "push=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -50,15 +61,16 @@ jobs:
         if: steps.meta.outputs.push == 'true'
         run: skopeo login ghcr.io -u "${{ github.actor }}" --password-stdin <<<"${{ secrets.GITHUB_TOKEN }}"
 
-      - name: Build (and push) the OCI image
+      - name: Build (and push) the ${{ matrix.network }} OCI image
         env:
           TAG: ${{ steps.meta.outputs.tag }}
+          ATTR: ${{ matrix.attr }}
           DRY_RUN: ${{ steps.meta.outputs.push == 'true' && '0' || '1' }}
         run: ops/build-and-push-oci.sh
 
-      - name: Also tag :latest (on release tag)
+      - name: Also tag :latest-${{ matrix.network }} (on release tag)
         if: github.ref_type == 'tag'
         run: |
           skopeo copy \
             "docker://${REGISTRY}/${IMAGE}:${{ steps.meta.outputs.tag }}" \
-            "docker://${REGISTRY}/${IMAGE}:latest"
+            "docker://${REGISTRY}/${IMAGE}:latest-${{ matrix.network }}"

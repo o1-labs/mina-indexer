@@ -26,6 +26,10 @@ files-to-fetch.list
 # Downloaded mesa-mut precomputed blocks (see ops/mesa-mut/)
 /mesa-mut-blocks/
 
+# Local indexer runtime dir (DB, blocks, sockets) — the images use /data; local
+# runs use ./data. Never commit it.
+/data/
+
 # claude-mem local memory (not part of the repo)
 /memory/
 

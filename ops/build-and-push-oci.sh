@@ -22,14 +22,18 @@ set -euo pipefail
 
 IMAGE="${IMAGE:-mina-indexer}"
 TAG="${TAG:-$(git rev-parse --short=8 HEAD)}"
+# Flake attribute to build. Default is the generic image; the per-network
+# configless images are dockerImage-mainnet / -devnet / -mesa. The TAG passed in
+# already carries any network suffix (e.g. v1.2.3-mainnet).
+ATTR="${ATTR:-dockerImage}"
 # REGISTRY is only required for an actual push; build-only/DRY_RUN works without it.
 if [[ "${DRY_RUN:-0}" != "1" ]]; then
   : "${REGISTRY:?set REGISTRY, e.g. europe-west3-docker.pkg.dev/o1labs-192920/euro-docker-repo}"
 fi
 REF="${REGISTRY:-local}/${IMAGE}:${TAG}"
 
-echo ">> Building OCI image with Nix (.#dockerImage)" >&2
-nix build .#dockerImage --print-build-logs
+echo ">> Building OCI image with Nix (.#${ATTR})" >&2
+nix build ".#${ATTR}" --print-build-logs
 # streamLayeredImage: ./result is an executable that streams a docker-archive
 # tarball to stdout (not a tarball itself).
 tarball="$(mktemp --suffix=.tar)"
