@@ -85,6 +85,12 @@
           url = "https://storage.googleapis.com/o1labs-gitops-infrastructure/mina-mesa-mut-1/mina-mesa-mut-1-state-dump-3NLp6dKNhYtsqUj49QYV5GtDaeocSJBAa2y2ER2QQLqLukE3wuZT-df71a5f2dd5abdae8e2e5d4d0047b383bdfca4d75ec1d2260b8ad621f1a18ffe.json.gz";
           sha256 = "004li2l5c319730czsav8bqqpysb2fs48sri6vqxav3m9zvf68qr";
         };
+        # devnet genesis ledger = the o1labs-gitops state dump matching the embedded
+        # checkpoint block (devnet-527922-3NK4DL35, ledger hash jwX3YJh…).
+        devnetGenesisGz = pkgs.fetchurl {
+          url = "https://storage.googleapis.com/o1labs-gitops-infrastructure/devnet/devnet-state-dump-3NK4DL35iKQ6G8VPqPFLZ122M82dcRRPt8rHrpRW662kXWpH8fRa-8ad77d2bc0adcd51d5837fabe00e6a76c69f00f547e112cdb0534b425d2d9c3b.json.gz";
+          sha256 = "0a7kld30iwmly23bx2x625l6haihlrfv227wxh0qvf9j65mbxxw6";
+        };
         # Factory for a configless per-network indexer image. Everything the
         # indexer needs is baked in; the per-network entrypoint runs it with no
         # args. Mirrors the generic `dockerImage` hardening (non-root, /data
@@ -243,6 +249,12 @@
             bashOptions = [ "errexit" "nounset" "pipefail" ];
             text = builtins.readFile ./ops/entrypoints/mainnet.sh;
           };
+          indexer-entry-devnet = pkgs.writeShellApplication {
+            name = "indexer-entry-devnet";
+            runtimeInputs = with pkgs; [ mina-indexer gzip ];
+            bashOptions = [ "errexit" "nounset" "pipefail" ];
+            text = builtins.readFile ./ops/entrypoints/devnet.sh;
+          };
           indexer-entry-mesa = pkgs.writeShellApplication {
             name = "indexer-entry-mesa";
             runtimeInputs = with pkgs; [ mina-indexer gzip ];
@@ -258,6 +270,14 @@
             verifyBlock = verify-block;
             fetcher = block-pull;
             entry = indexer-entry-mainnet;
+          };
+          "dockerImage-devnet" = mkIndexerImage {
+            net = "devnet";
+            indexer = mina-indexer;
+            verifyBlock = verify-block;
+            fetcher = block-pull;
+            entry = indexer-entry-devnet;
+            genesisGz = devnetGenesisGz;
           };
           "dockerImage-mesa" = mkIndexerImage {
             net = "mesa";

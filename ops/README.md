@@ -8,10 +8,13 @@ GHCR repo with a `-<network>` tag suffix.
 | Network    | Image tag                                   | Genesis ledger            | Block source                         |
 |------------|---------------------------------------------|---------------------------|--------------------------------------|
 | mainnet    | `ghcr.io/o1-labs/mina-indexer:<tag>-mainnet`  | embedded (V1, in binary)  | `gs://mina_network_block_data`       |
+| devnet     | `ghcr.io/o1-labs/mina-indexer:<tag>-devnet`   | baked state-dump (`.gz`)  | `gs://mina_network_block_data`       |
 | mesa-mut   | `ghcr.io/o1-labs/mina-indexer:<tag>-mesa-mut` | baked state-dump (`.gz`)  | `gs://mesa-mut-precomputed-blocks`   |
 
-> **devnet** is a hardfork bring-up (its own genesis ledger + emptied genesis block +
-> `new_devnet` wiring); tracked as a separate issue.
+> **devnet** is a hardfork network; the image roots at a recent published state-dump
+> checkpoint (`devnet-527922-3NK4DL35`, embedded emptied) and follows the tip — it does
+> not index history before that checkpoint. Re-bake (newer state dump + block) to advance
+> the start point.
 
 ## Run
 
@@ -35,22 +38,22 @@ baked genesis ledger to `/data` (mesa is ~900 MB; takes a few seconds).
   - `mesa-pull` (`ops/mesa-mut/mesa-pull.sh`) for mesa — different bucket + prefix rewrite.
 - `verify-block` — the trustless verify shim, baked but **dormant** (the images do not pass
   `--verify-block-exe`; trustless verification remains a separate opt-in + sidecar concern).
-- The mesa genesis ledger ships gzipped at `/genesis/mesa.json.gz`.
+- The mesa/devnet genesis ledgers ship gzipped at `/genesis/<network>.json.gz`.
 
 ## Build locally
 
 ```bash
-nix build .#dockerImage-mainnet      # or -mesa
+nix build .#dockerImage-mainnet      # or -devnet / -mesa
 ./result | docker load               # streamLayeredImage streams a docker-archive
 ```
 
-CI (`.github/workflows/oci-image.yml`) builds the `[mainnet, mesa-mut]` matrix on every PR
+CI (`.github/workflows/oci-image.yml`) builds the `[mainnet, devnet, mesa-mut]` matrix on every PR
 (build-only) and, on a `v*` tag, pushes `:<tag>-<network>` and `:latest-<network>`.
 
 ## Status
 
-- **mainnet** and **mesa-mut**: complete and verified end-to-end.
-- **devnet**: tracked separately — it's a hardfork bring-up needing its own genesis ledger
-  (state dumps exist at `gs://o1labs-gitops-infrastructure/devnet/`), an emptied genesis
-  block, and mesa-style `new_devnet` wiring (`ChainId`/`GenesisVersion`/dispatch +
-  `state/mod.rs` staking arm). `block-pull` already handles the `devnet-*` objects.
+- **mainnet**, **devnet**, and **mesa-mut**: built and runnable configless.
+- **devnet** roots at the published state-dump checkpoint `devnet-527922-3NK4DL35` (genesis
+  ledger from `gs://o1labs-gitops-infrastructure/devnet/`); it indexes from that checkpoint
+  forward, not full history. `DEVNET_CHAIN_ID` is a placeholder (like mesa's) — the real
+  chain id only affects the REST chain-id endpoint, not indexing.
