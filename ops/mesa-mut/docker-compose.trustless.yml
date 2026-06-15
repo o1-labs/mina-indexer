@@ -1,0 +1,78 @@
+# Trustless mina-indexer for mesa-mut — two-container topology.
+#
+# The indexer gates every block's ingestion on the verify sidecar: a block is
+# ingested only if its Pickles/kimchi SNARK proof verifies. A valid proof attests
+# the whole chain to (fork) genesis by recursion, so ingestion needs no trust in
+# whoever produced the block.
+#
+#   docker compose -f ops/mesa-mut/docker-compose.trustless.yml up -d
+#
+# Prereqs (built out-of-band on this host):
+#   - mina-verify:mesa-ab84160  — sidecar built from MinaProtocol/mina-verify@release/mesa
+#                                 (proof-systems ab84160), mesa VK baked at /vk/mesa_vk.json.
+#   - mina-indexer:mesa-prod     — indexer image (feat/trustless-verify); bakes /bin/verify-block.
+#
+# devnet/mainnet variant: drop MINA_VK_JSON, set MINA_NETWORK=devnet|mainnet on the
+# sidecar (embedded VK), and point the indexer at the matching network/genesis.
+services:
+  mina-verifier:
+    image: mina-verify:mesa-ab84160
+    container_name: mina-verifier
+    environment:
+      MINA_VK_JSON: /vk/mesa_vk.json   # fork-297734 VK, md5 26dc191a (baked into the image)
+      BIND: 0.0.0.0:8090
+    networks: [trustless]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8090/health | grep -q ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  mina-indexer:
+    image: mina-indexer:mesa-prod
+    container_name: mina-indexer
+    depends_on:
+      mina-verifier:
+        condition: service_healthy
+    environment:
+      # the in-image /bin/verify-block shim POSTs the block here and gates on {"valid":true}
+      VERIFY_ENDPOINT: http://mina-verifier:8090/verify
+      TMPDIR: /tmp
+      RUST_LOG: info
+      # CA bundle so the in-image mesa-pull can fetch precomputed blocks over HTTPS
+      SSL_CERT_FILE: /nix/store/9zxb5ln0awpc13s0gv1vz7f28wyvn2x1-nss-cacert-3.108/etc/ssl/certs/ca-bundle.crt
+      CURL_CA_BUNDLE: /nix/store/9zxb5ln0awpc13s0gv1vz7f28wyvn2x1-nss-cacert-3.108/etc/ssl/certs/ca-bundle.crt
+    volumes:
+      - /home/darek/work/o1labs/mina-indexer/data:/data
+    command:
+      - mina-indexer
+      - --socket
+      - /data/mi.sock
+      - server
+      - start
+      - --network
+      - mesa
+      - --genesis-hash
+      - 3NKQttwm8QRdvSZL62Lid8YAPCXBuAucZPDT8mJriHmw2qk9cVcr
+      - --genesis-ledger
+      - /data/mesa-genesis.json
+      - --database-dir
+      - /data/db
+      - --blocks-dir
+      - /data/blocks
+      - --fetch-new-blocks-exe
+      - /bin/mesa-pull
+      - --fetch-new-blocks-delay
+      - "60"
+      - --missing-block-recovery-exe
+      - /bin/mesa-pull
+      - --missing-block-recovery-delay
+      - "120"
+      - --verify-block-exe        # <-- the trustless gate
+      - /bin/verify-block
+    restart: unless-stopped
+
+networks:
+  trustless:
+    name: trustless
