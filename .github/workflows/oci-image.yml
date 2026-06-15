@@ -1,9 +1,10 @@
 # Build the per-network configless mina-indexer OCI images (Nix, reproducible)
 # and push them to the GitHub Container Registry: ghcr.io/<owner>/mina-indexer.
 #
-# Three images, one per network, single repo with a tag suffix:
-#   tag v*  -> :<tag>-<network> and :latest-<network>   (mainnet | devnet | mesa-mut)
+# Per-network configless images, single repo with a tag suffix:
+#   tag v*  -> :<tag>-<network> and :latest-<network>   (mainnet | mesa-mut)
 #   PRs     -> build only (no push)
+# (devnet is a hardfork bring-up tracked separately.)
 #
 # Auth uses the built-in GITHUB_TOKEN (packages: write) — no extra secrets.
 name: OCI image
@@ -29,8 +30,6 @@ jobs:
         include:
           - network: mainnet
             attr: dockerImage-mainnet
-          - network: devnet
-            attr: dockerImage-devnet
           - network: mesa-mut
             attr: dockerImage-mesa
     env:
