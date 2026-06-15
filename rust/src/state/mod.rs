@@ -302,6 +302,8 @@ impl IndexerState {
         // PcbVersion::V2) gets its own fork block rather than the mainnet one.
         let genesis_block = if config.version.genesis.state_hash.0 == MESA_GENESIS_HASH {
             GenesisBlock::new_mesa()?
+        } else if config.version.genesis.state_hash.0 == DEVNET_GENESIS_HASH {
+            GenesisBlock::new_devnet()?
         } else {
             match config.version.version {
                 PcbVersion::V1 => GenesisBlock::new_v1()?,
@@ -537,6 +539,7 @@ impl IndexerState {
 
                     if diff.state_hash.0 != HARDFORK_GENESIS_HASH
                         && diff.state_hash.0 != MESA_GENESIS_HASH
+                        && diff.state_hash.0 != DEVNET_GENESIS_HASH
                     {
                         ledger_diffs.push((diff.clone(), accounts_accessed));
                     }
@@ -1318,6 +1321,7 @@ impl IndexerState {
                             split_staking_ledger_epoch_key(&key)?;
                         if genesis_state_hash.0 == MAINNET_GENESIS_HASH
                             || genesis_state_hash.0 == HARDFORK_GENESIS_HASH
+                            || genesis_state_hash.0 == DEVNET_GENESIS_HASH
                         {
                             staking_ledgers.insert((epoch, ledger_hash));
                         } else {

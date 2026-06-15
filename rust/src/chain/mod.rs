@@ -35,6 +35,12 @@ impl std::default::Default for ChainData {
         let mesa_genesis_state_hash: StateHash = MESA_GENESIS_HASH.into();
         let mesa_original_genesis_state_hash: StateHash = MESA_ORIGINAL_GENESIS_HASH.into();
 
+        // devnet chain data (also PcbVersion::V2). Both the checkpoint-root genesis
+        // hash and the devnet chain's genesis hash (which devnet blocks carry in
+        // `genesis_state_hash`) map to the devnet V2 chain.
+        let devnet_genesis_state_hash: StateHash = DEVNET_GENESIS_HASH.into();
+        let devnet_original_genesis_state_hash: StateHash = DEVNET_ORIGINAL_GENESIS_HASH.into();
+
         Self(HashMap::from([
             (v1_genesis_state_hash, (PcbVersion::V1, v1_chain_id)),
             (v2_genesis_state_hash, (PcbVersion::V2, v2_chain_id)),
@@ -42,6 +48,11 @@ impl std::default::Default for ChainData {
             (
                 mesa_original_genesis_state_hash,
                 (PcbVersion::V2, ChainId::mesa()),
+            ),
+            (devnet_genesis_state_hash, (PcbVersion::V2, ChainId::devnet())),
+            (
+                devnet_original_genesis_state_hash,
+                (PcbVersion::V2, ChainId::devnet()),
             ),
         ]))
     }

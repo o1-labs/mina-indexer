@@ -389,6 +389,8 @@ fn process_indexer_configuration(
     let network = args.db.network;
     let (version, chain_id, genesis) = if genesis_hash == MESA_GENESIS_HASH {
         (PcbVersion::V2, ChainId::mesa(), GenesisVersion::mesa())
+    } else if genesis_hash == DEVNET_GENESIS_HASH {
+        (PcbVersion::V2, ChainId::devnet(), GenesisVersion::devnet())
     } else if genesis_hash == HARDFORK_GENESIS_HASH {
         (PcbVersion::V2, ChainId::v2(), GenesisVersion::v2())
     } else {

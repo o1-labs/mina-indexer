@@ -710,6 +710,7 @@ impl PrecomputedBlock {
         if state_hash.0 == MAINNET_GENESIS_HASH
             || state_hash.0 == HARDFORK_GENESIS_HASH
             || state_hash.0 == MESA_GENESIS_HASH
+            || state_hash.0 == DEVNET_GENESIS_HASH
         {
             return state_hash;
         }
@@ -718,6 +719,12 @@ impl PrecomputedBlock {
         // continuity metadata); the whole mesa chain shares the fork genesis.
         if self.network().to_string() == "mesa" {
             return MESA_GENESIS_HASH.into();
+        }
+
+        // devnet blocks carry the devnet chain's genesis_state_hash; the indexer
+        // roots at a recent checkpoint, so remap the whole devnet chain to it.
+        if self.network() == Network::Devnet {
+            return DEVNET_GENESIS_HASH.into();
         }
 
         match self {

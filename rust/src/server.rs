@@ -943,6 +943,20 @@ impl GenesisVersion {
             global_slot: MESA_GENESIS_GLOBAL_SLOT,
         }
     }
+
+    pub fn devnet() -> Self {
+        use std::str::FromStr;
+        let last_vrf_output =
+            VrfOutput::from_str(DEVNET_GENESIS_LAST_VRF_OUTPUT).expect("devnet last vrf output");
+
+        Self {
+            last_vrf_output,
+            state_hash: DEVNET_GENESIS_HASH.into(),
+            prev_hash: DEVNET_GENESIS_PREV_STATE_HASH.into(),
+            blockchain_lenth: DEVNET_GENESIS_BLOCKCHAIN_LENGTH,
+            global_slot: DEVNET_GENESIS_GLOBAL_SLOT,
+        }
+    }
 }
 
 impl IndexerVersion {
@@ -970,6 +984,15 @@ impl IndexerVersion {
             version: PcbVersion::V2,
             chain_id: ChainId::mesa(),
             genesis: GenesisVersion::mesa(),
+        }
+    }
+
+    pub fn devnet() -> Self {
+        Self {
+            network: Network::Devnet,
+            version: PcbVersion::V2,
+            chain_id: ChainId::devnet(),
+            genesis: GenesisVersion::devnet(),
         }
     }
 }
