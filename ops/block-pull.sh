@@ -24,7 +24,13 @@ case "$NET" in
   *) exit 0 ;;
 esac
 
-WINDOW="${BLOCK_FETCH_WINDOW:-200}"
+# Small window on purpose: the indexer calls this synchronously inside its
+# fetch/reconcile timer branch, so a slow fetch BLOCKS the reconcile step that
+# actually ingests the downloaded blocks. The GCS list API costs ~2s per height,
+# so keep the window well under fetch-new-blocks-delay (default 60s) — each call
+# returns fast, reconcile runs every cycle, and the tip advances incrementally
+# (catch-up just takes more cycles). Override with BLOCK_FETCH_WINDOW if needed.
+WINDOW="${BLOCK_FETCH_WINDOW:-15}"
 BUCKET="${BLOCK_BUCKET:-mina_network_block_data}"
 API="https://storage.googleapis.com/storage/v1/b/${BUCKET}/o"
 OBJ="https://storage.googleapis.com/${BUCKET}"
