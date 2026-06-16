@@ -170,6 +170,17 @@ impl ServerCommand {
         let (args, mode) = match self {
             Self::Shutdown => return client::ClientCli::Shutdown.run(domain_socket_path).await,
             Self::Start(args) => {
+                // bring logging up before the (rare, operator-triggered) restore
+                // so its progress is visible; the later init() call is a no-op.
+                mina_indexer::logging::init(args.db.log_level.0);
+                // disaster recovery: optionally seed the database dir from a
+                // periodic checkpoint before we decide how to initialize, so a
+                // restored DB is then opened in Sync mode (CURRENT present).
+                maybe_restore_from_checkpoint(
+                    args.restore_from_checkpoint.as_deref(),
+                    &args.db.database_dir,
+                    args.restore_force,
+                )?;
                 if let Some(config_path) = args.db.config {
                     let contents = std::fs::read(config_path)?;
                     let args: ServerArgsJson = serde_json::from_slice(&contents)?;
@@ -456,6 +467,64 @@ fn write_pid_to_file<P: AsRef<Path>>(pid_path: P) -> anyhow::Result<()> {
     let mut pid_file = File::create(pid_path)?;
     let pid = process::id();
     write!(pid_file, "{pid}")?;
+    Ok(())
+}
+
+/// Restore the database from a periodic checkpoint (the dir written via
+/// `MINA_CHECKPOINT_DIR`, containing `latest/`) before the store is opened.
+///
+/// A speedb checkpoint is itself a complete, openable DB, so "restore" is just
+/// copying `<checkpoint_dir>/latest` into `database_dir`. To avoid silently
+/// reverting to a (possibly hour-stale) checkpoint over a healthy live DB, an
+/// already-populated `database_dir` is left untouched unless `force` is set.
+fn maybe_restore_from_checkpoint(
+    checkpoint_dir: Option<&Path>,
+    database_dir: &Path,
+    force: bool,
+) -> anyhow::Result<()> {
+    let Some(checkpoint_dir) = checkpoint_dir else {
+        return Ok(());
+    };
+    let latest = checkpoint_dir.join("latest");
+    if !latest.join("CURRENT").exists() {
+        anyhow::bail!(
+            "--restore-from-checkpoint {checkpoint_dir:#?}: no usable checkpoint at {latest:#?} \
+             (missing CURRENT)"
+        );
+    }
+
+    if database_dir.join("CURRENT").exists() {
+        if !force {
+            info!(
+                "--restore-from-checkpoint: {database_dir:#?} already holds a database; opening it \
+                 as-is (it is likely newer than the checkpoint). Pass --restore-force to overwrite."
+            );
+            return Ok(());
+        }
+        info!("--restore-force: removing existing database at {database_dir:#?}");
+        fs::remove_dir_all(database_dir)?;
+    }
+
+    info!("Restoring database from checkpoint {latest:#?} -> {database_dir:#?}");
+    copy_dir_recursive(&latest, database_dir)?;
+    info!("Checkpoint restore complete");
+    Ok(())
+}
+
+/// Recursively copy `src` into `dst` (creating `dst`). Used to materialize a
+/// speedb checkpoint as a fresh working database directory.
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else {
+            fs::copy(&from, &to)?;
+        }
+    }
     Ok(())
 }
 

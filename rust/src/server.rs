@@ -317,6 +317,13 @@ impl IndexerConfiguration {
             delay: fetch_new_blocks_delay.unwrap_or(180),
         });
 
+        // optional periodic DB checkpoints (opt-in via MINA_CHECKPOINT_DIR; the
+        // configless images enable it so a crash resumes from a recent consistent
+        // checkpoint instead of a slow WAL replay)
+        if let Ok(dir) = std::env::var("MINA_CHECKPOINT_DIR") {
+            spawn_periodic_checkpoints(store.clone(), PathBuf::from(dir));
+        }
+
         run_indexer(
             &subsys,
             blocks_dir,
@@ -330,6 +337,50 @@ impl IndexerConfiguration {
 
         Ok(())
     }
+}
+
+/// Spawn a background task that writes a rolling speedb checkpoint of the DB to
+/// `<dir>/latest` every `MINA_CHECKPOINT_INTERVAL_SECS` (default 3600 = hourly).
+/// On an ungraceful crash, restart from the checkpoint instead of replaying a
+/// large WAL. The checkpoint is hard-link based (cheap) and consistent.
+fn spawn_periodic_checkpoints(store: Arc<IndexerStore>, dir: PathBuf) {
+    let secs: u64 = std::env::var("MINA_CHECKPOINT_INTERVAL_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(3600);
+    info!("Periodic DB checkpoints enabled -> {dir:#?} (every {secs}s)");
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(secs));
+        tick.tick().await; // consume the immediate first tick
+        loop {
+            tick.tick().await;
+            let store = store.clone();
+            let dir = dir.clone();
+            // create_checkpoint is blocking I/O — keep it off the async workers
+            match tokio::task::spawn_blocking(move || write_db_checkpoint(&store, &dir)).await {
+                Ok(Ok(path)) => info!("DB checkpoint written: {path:#?}"),
+                Ok(Err(e)) => error!("DB checkpoint failed: {e}"),
+                Err(e) => error!("DB checkpoint task panicked: {e}"),
+            }
+        }
+    });
+}
+
+/// Write a consistent speedb checkpoint to `<dir>/latest`, atomically (tmp + rename).
+fn write_db_checkpoint(store: &IndexerStore, dir: &Path) -> anyhow::Result<PathBuf> {
+    fs::create_dir_all(dir)?;
+    let tmp = dir.join(".tmp-checkpoint");
+    let latest = dir.join("latest");
+    if tmp.exists() {
+        fs::remove_dir_all(&tmp)?;
+    }
+    Checkpoint::new(&store.database)?.create_checkpoint(&tmp)?;
+    if latest.exists() {
+        fs::remove_dir_all(&latest)?;
+    }
+    fs::rename(&tmp, &latest)?;
+    Ok(latest)
 }
 
 /// Starts UDS server with read-only state for summary

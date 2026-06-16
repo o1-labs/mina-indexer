@@ -32,12 +32,25 @@ Implementation: `prometheus` crate registry; instrument `block_pipeline`, the fe
 timer branch, and the web layer; additive and low-risk. The internal `blocks_processed` /
 `bytes_processed` / `best_tip_block()` / `dangling_branches` already exist to feed it.
 
-### 2. speedb checkpoints — **MEDIUM, for resilience**
+### 2. speedb checkpoints — **DONE (opt-in)**
 Long-running images accumulate a multi-GB DB. An ungraceful kill (OOM/SIGKILL) means WAL
-replay on restart (slow). Options:
-- Periodic, online, consistent **speedb `Checkpoint`** (hard-link based, cheap) on a timer/flag,
-  so restart resumes from a recent consistent point.
-- At minimum, document/wire the existing `create-snapshot` CLI into a sidecar cron + restore-on-boot.
+replay on restart (slow). Implemented as a periodic, online, consistent **speedb `Checkpoint`**
+(hard-link based, cheap) written atomically to `<dir>/latest`:
+- Opt-in via `MINA_CHECKPOINT_DIR` (the three configless images set it to `/data/checkpoints`).
+- Cadence via `MINA_CHECKPOINT_INTERVAL_SECS` (default `3600` = hourly).
+- Runs on a tokio timer off a `spawn_blocking` worker (`spawn_periodic_checkpoints` in `server.rs`),
+  so restart can resume from a recent consistent point instead of replaying a large WAL.
+
+**Recovery.** A checkpoint dir is itself a complete, openable speedb DB, so recovery is just making
+`<dir>/latest` the active DB — exposed as `server start --restore-from-checkpoint <dir>`:
+- Seeds an **empty/absent** `--database-dir` from `<dir>/latest`, then opens it normally (Sync mode).
+- An **already-populated** `--database-dir` is opened as-is (it is usually newer than the checkpoint);
+  pass `--restore-force` to discard it and restore from the checkpoint instead.
+- The three images bake `--restore-from-checkpoint /data/checkpoints` (no `--force`), so a wiped or
+  fresh-but-checkpointed `/data` self-heals while a healthy DB is never clobbered. For a corrupt-but-present
+  DB, clear `/data/db` (or run once with `--restore-force`) to force the restore.
+- Do **not** point `--database-dir` straight at `<dir>/latest`: the periodic writer replaces `latest`
+  on each tick and would delete the DB out from under the running process.
 
 ### 3. Log improvements — **LOW, targeted only**
 Current logging is workable; just close the blind spots that cost us during debugging:
@@ -46,6 +59,7 @@ Current logging is workable; just close the blind spots that cost us during debu
 - Optional structured (JSON) log output for aggregation (behind a flag).
 - (Parser diagnostics already improved: `UserCommandData` now surfaces the real variant error.)
 
-## Suggested scope for this PR
-Start with **#1 (Prometheus `/metrics`)** — highest signal-to-effort, directly addresses the
-failure modes we hit. #2 and #3 as follow-ups if desired.
+## Delivery (stacked PR train)
+- **#1 Prometheus `/metrics`** — done (PR #12).
+- **#3 structured JSON logging** — done (PR #13): `MINA_LOG_FORMAT=json`, `RUST_LOG`-overridable.
+- **#2 periodic speedb checkpoints** — done (this PR): `MINA_CHECKPOINT_DIR` / `MINA_CHECKPOINT_INTERVAL_SECS`.
