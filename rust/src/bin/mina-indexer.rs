@@ -178,7 +178,15 @@ impl ServerCommand {
                 } else if args.self_check {
                     (*args, InitializationMode::Replay)
                 } else {
-                    (*args, InitializationMode::Sync)
+                    // Self-initialize: if there's no database yet, build it from
+                    // blocks; otherwise just open and sync. Lets `server start`
+                    // run standalone without a separate `database create` first.
+                    let mode = if args.db.database_dir.join("CURRENT").exists() {
+                        InitializationMode::Sync
+                    } else {
+                        InitializationMode::BuildDB
+                    };
+                    (*args, mode)
                 }
             }
         };
@@ -220,6 +228,11 @@ impl ServerCommand {
         subsys.on_shutdown_requested().await;
 
         debug!("Shutting down primary database instance");
+        // Flush memtables to SST + sync the WAL so the next open doesn't replay a
+        // large WAL. Without this, an abrupt stop makes the next `server start`
+        // spend minutes recovering before it can serve.
+        let _ = db.database.flush();
+        let _ = db.database.flush_wal(true);
         db.database.cancel_all_background_work(true);
 
         remove_pid(&database_dir);
@@ -312,6 +325,8 @@ impl DatabaseCommand {
                     // wait for SIGINT
                     _ = tokio::signal::ctrl_c() => {
                         info!("SIGINT received");
+                        let _ = store.database.flush();
+                        let _ = store.database.flush_wal(true);
                         store.database.cancel_all_background_work(true);
                     }
 

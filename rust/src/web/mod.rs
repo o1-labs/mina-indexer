@@ -41,6 +41,7 @@ pub async fn start_web_server<A: net::ToSocketAddrs>(
             .service(blocks::get_block_by_state_hash)
             .service(accounts::get_account)
             .service(blockchain::get_blockchain_summary)
+            .service(blockchain::get_health)
             .service(
                 web::resource(ENDPOINT_GRAPHQL)
                     .guard(guard::Post())

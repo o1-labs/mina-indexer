@@ -131,11 +131,23 @@ pub enum PermissionKind {
 pub struct ZkappAccount {
     pub app_state: ZkappState,
     pub action_state: [ActionState; 5],
+    #[serde(deserialize_with = "verification_key_or_default")]
     pub verification_key: VerificationKey,
     pub proved_state: bool,
     pub zkapp_uri: ZkappUri,
     pub zkapp_version: Numeric<u32>,
     pub last_action_slot: Numeric<u32>,
+}
+
+/// A zkApp account can carry `verification_key: null` (a zkApp account whose VK
+/// is not set). The indexer's type is non-optional, so accept `null` as the
+/// default (empty) key rather than failing the entire block parse — which would
+/// wedge the tip at the first such block on the canonical chain.
+fn verification_key_or_default<'de, D>(deserializer: D) -> Result<VerificationKey, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<VerificationKey>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 #[derive(Default, Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Hash, Serialize, Deserialize)]
