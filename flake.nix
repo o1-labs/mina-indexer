@@ -78,6 +78,80 @@
           ++ buildDependencies;
 
         cargo-toml = builtins.fromTOML (builtins.readFile ./rust/Cargo.toml);
+
+        # Baked genesis ledgers (state dumps) for the configless network images.
+        # Fetched at build time (fixed-output), decompressed to /data on first boot.
+        mesaGenesisGz = pkgs.fetchurl {
+          url = "https://storage.googleapis.com/o1labs-gitops-infrastructure/mina-mesa-mut-1/mina-mesa-mut-1-state-dump-3NLp6dKNhYtsqUj49QYV5GtDaeocSJBAa2y2ER2QQLqLukE3wuZT-df71a5f2dd5abdae8e2e5d4d0047b383bdfca4d75ec1d2260b8ad621f1a18ffe.json.gz";
+          sha256 = "004li2l5c319730czsav8bqqpysb2fs48sri6vqxav3m9zvf68qr";
+        };
+        # devnet genesis ledger = the o1labs-gitops state dump matching the embedded
+        # checkpoint block (devnet-527922-3NK4DL35, ledger hash jwX3YJh…).
+        devnetGenesisGz = pkgs.fetchurl {
+          url = "https://storage.googleapis.com/o1labs-gitops-infrastructure/devnet/devnet-state-dump-3NK4DL35iKQ6G8VPqPFLZ122M82dcRRPt8rHrpRW662kXWpH8fRa-8ad77d2bc0adcd51d5837fabe00e6a76c69f00f547e112cdb0534b425d2d9c3b.json.gz";
+          sha256 = "0a7kld30iwmly23bx2x625l6haihlrfv227wxh0qvf9j65mbxxw6";
+        };
+        # Factory for a configless per-network indexer image. Everything the
+        # indexer needs is baked in; the per-network entrypoint runs it with no
+        # args. Mirrors the generic `dockerImage` hardening (non-root, /data
+        # volume, TLS env, /tmp). `genesisGz`, when set, is placed at
+        # /genesis/<net>.json.gz for the entrypoint to decompress on first boot.
+        mkIndexerImage =
+          {
+            net,
+            indexer,
+            verifyBlock,
+            fetcher,
+            entry,
+            genesisGz ? null,
+          }:
+          let
+            genesisContents = pkgs.lib.optional (genesisGz != null) (
+              pkgs.runCommand "mina-indexer-genesis-${net}" { } ''
+                mkdir -p $out/genesis
+                cp ${genesisGz} $out/genesis/${net}.json.gz
+              ''
+            );
+          in
+          pkgs.dockerTools.streamLayeredImage {
+            name = "mina-indexer";
+            tag = "${builtins.substring 0 8 (self.rev or "dev")}-${net}";
+            created = "1970-01-01T00:00:01Z";
+            contents =
+              [
+                indexer
+                fetcher
+                verifyBlock
+                entry
+              ]
+              ++ (with pkgs; [
+                bash
+                gzip
+                cacert
+                dockerTools.fakeNss
+              ])
+              ++ genesisContents;
+            fakeRootCommands = ''
+              mkdir -p ./data ./tmp
+              chmod 1777 ./data ./tmp
+            '';
+            config = {
+              Cmd = [ "${pkgs.lib.getExe entry}" ];
+              Env = [
+                "TMPDIR=/tmp"
+                "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+                "CURL_CA_BUNDLE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+              ];
+              User = "65534:65534";
+              WorkingDir = "/data";
+              Volumes = {
+                "/data" = { };
+              };
+              ExposedPorts = {
+                "8080/tcp" = { };
+              };
+            };
+          };
       in
       with pkgs;
       {
@@ -153,6 +227,65 @@
             runtimeInputs = with pkgs; [ curl ];
             bashOptions = [ "nounset" "pipefail" ];
             text = builtins.readFile ./ops/mesa-mut/verify-block.sh;
+          };
+
+          # Generic block puller for the PUBLIC networks (mainnet, devnet): pulls
+          # from gs://mina_network_block_data, whose objects are already named
+          # <network>-<height>-<hash>.json. Mesa keeps its own mesa-pull (different
+          # bucket + multi-dash prefix rewrite).
+          block-pull = pkgs.writeShellApplication {
+            name = "block-pull";
+            runtimeInputs = with pkgs; [ curl gnugrep gnused coreutils ];
+            bashOptions = [ "nounset" "pipefail" ];
+            text = builtins.readFile ./ops/block-pull.sh;
+          };
+
+          # Configless per-network entrypoints: each exec's mina-indexer with all
+          # flags baked in (zero args/mounts needed). mesa/devnet decompress their
+          # baked genesis ledger to /data on first boot.
+          indexer-entry-mainnet = pkgs.writeShellApplication {
+            name = "indexer-entry-mainnet";
+            runtimeInputs = [ mina-indexer ];
+            bashOptions = [ "errexit" "nounset" "pipefail" ];
+            text = builtins.readFile ./ops/entrypoints/mainnet.sh;
+          };
+          indexer-entry-devnet = pkgs.writeShellApplication {
+            name = "indexer-entry-devnet";
+            runtimeInputs = with pkgs; [ mina-indexer gzip ];
+            bashOptions = [ "errexit" "nounset" "pipefail" ];
+            text = builtins.readFile ./ops/entrypoints/devnet.sh;
+          };
+          indexer-entry-mesa = pkgs.writeShellApplication {
+            name = "indexer-entry-mesa";
+            runtimeInputs = with pkgs; [ mina-indexer gzip ];
+            bashOptions = [ "errexit" "nounset" "pipefail" ];
+            text = builtins.readFile ./ops/entrypoints/mesa.sh;
+          };
+
+          # Per-network configless images (one repo, tag suffix -<network>):
+          #   ghcr.io/o1-labs/mina-indexer:<tag>-mainnet | -devnet | -mesa-mut
+          "dockerImage-mainnet" = mkIndexerImage {
+            net = "mainnet";
+            indexer = mina-indexer;
+            verifyBlock = verify-block;
+            fetcher = block-pull;
+            entry = indexer-entry-mainnet;
+          };
+          "dockerImage-devnet" = mkIndexerImage {
+            net = "devnet";
+            indexer = mina-indexer;
+            verifyBlock = verify-block;
+            fetcher = block-pull;
+            entry = indexer-entry-devnet;
+            genesisGz = devnetGenesisGz;
+          };
+          "dockerImage-mesa" = mkIndexerImage {
+            net = "mesa";
+            indexer = mina-indexer;
+            verifyBlock = verify-block;
+            fetcher = mesa-pull;
+            entry = indexer-entry-mesa;
+            genesisGz = mesaGenesisGz;
           };
 
           # Production OCI image. Uses streamLayeredImage for cache-friendly

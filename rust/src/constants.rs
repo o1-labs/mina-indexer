@@ -103,6 +103,28 @@ pub const MESA_GENESIS_LAST_VRF_OUTPUT: &str = "8oxYNPIKw0xNLJJrhcXRICHIS34t4z-8
 pub const MESA_CHAIN_ID: &str =
     "6d6573612d6d75740000000000000000000000000000000000000000000000aa";
 
+// devnet hardfork network (PcbVersion::V2, like mainnet hardfork — 8-field zkApp
+// app-state, NOT mesa's 32). Values taken from the checkpoint block
+// `devnet-527922-3NK4DL35…json` (a recent state-dump fork point the indexer roots
+// at). The genesis ledger is supplied at runtime via `--genesis-ledger` (the
+// matching o1labs-gitops devnet state dump). See `block::genesis::new_devnet`.
+pub const DEVNET_GENESIS_BLOCKCHAIN_LENGTH: u32 = 527922;
+pub const DEVNET_GENESIS_GLOBAL_SLOT: u32 = 827979;
+pub const DEVNET_GENESIS_HASH: &str = "3NK4DL35iKQ6G8VPqPFLZ122M82dcRRPt8rHrpRW662kXWpH8fRa";
+// The devnet chain's genesis hash, which its blocks carry in `genesis_state_hash`.
+// The indexer remaps it to DEVNET_GENESIS_HASH (the checkpoint root) so the whole
+// devnet chain shares one genesis for canonicity.
+pub const DEVNET_ORIGINAL_GENESIS_HASH: &str =
+    "3NL93SipJfAMNDBRfQ8Uo8LPovC74mnJZfZYB5SK7mTtkL72dsPx";
+pub const DEVNET_GENESIS_PREV_STATE_HASH: &str =
+    "3NKK5qMPGDSJP8y6wBuio74vWb9GCUqiDPg5YH2HsFy7FhH6c8AX";
+pub const DEVNET_GENESIS_LEDGER_HASH: &str = "jwX3YJhLR5F3eByADvfurX5u7DT7Utiv54uixYts6HLrR6CETug";
+pub const DEVNET_GENESIS_LAST_VRF_OUTPUT: &str = "MrLRY8Ejz-lxTVzRNyehue63Bc4wwxc27-wFStFSAAA=";
+// Placeholder chain id (valid 64-char hex). devnet's real chain id depends on its
+// constraint-system digests, which are not needed for indexing block data.
+pub const DEVNET_CHAIN_ID: &str =
+    "6465766e657400000000000000000000000000000000000000000000000000bb";
+
 pub const HARDFORK_CONSTRAINT_SYSTEM_DIGESTS: &[&str] = &[
     HARDFORK_DIGEST_TXN_MERGE,
     HARDFORK_DIGEST_TXN_BASE,

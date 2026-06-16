@@ -1043,7 +1043,7 @@ mod tests {
             ZkappState(ZkappStateDiff {
                 token: token.clone(),
                 public_key: "B62qnVLedrzTUMZME91WKbNw3qJ3hw7cc5PeK6RR3vH7RTFTsVbiBj4".into(),
-                diffs: [
+                diffs: vec![
                     Some("0x0000000000000000000000000000000000000000000000000000017473726966".into()),
                     Some("0x102580B0AD2B843A16580B526009CD92AD58CDA00675DD8940F2A74E78663DC0".into()),
                     Some("0x30AF2ED4225D4215C49D1AEE9B7094A0605C0F957219EED3C21CC208119AF5CD".into()),
@@ -1332,7 +1332,7 @@ mod tests {
             ZkappState(ZkappStateDiff {
                 token: TokenAddress::default(),
                 public_key: "B62qpr8QD2Q9uzJU2pp7XbWW6NB9CQxv4BS6vVXRwwXhcfPwJM7FdCs".into(),
-                diffs: [
+                diffs: vec![
                     None,
                     None,
                     None,

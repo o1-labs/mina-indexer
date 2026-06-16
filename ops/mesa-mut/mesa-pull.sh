@@ -18,7 +18,12 @@ FROM="${2:?height}"
 DIR="${3:?blocks_dir}"
 [ "$NET" = "mesa" ] || exit 0   # only mesa is sourced from this bucket
 
-WINDOW="${MESA_FETCH_WINDOW:-200}"
+# Small window on purpose: the indexer runs this synchronously in its
+# fetch/reconcile timer branch, so a slow fetch blocks the reconcile step that
+# ingests the blocks. The GCS list API costs ~2s/height, so keep the window well
+# under fetch-new-blocks-delay so each call returns fast, reconcile runs every
+# cycle, and the tip advances (catch-up just takes more cycles).
+WINDOW="${MESA_FETCH_WINDOW:-15}"
 # Never fetch below the mesa hard-fork genesis (297735). The block at 297734 is
 # the RETIRED pre-fork chain (genesis 3NLp6dKN) with the old structure; the
 # post-fork deserializer can't parse it ("missing field protocol_state") and the
