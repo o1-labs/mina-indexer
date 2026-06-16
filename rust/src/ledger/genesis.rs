@@ -67,8 +67,30 @@ pub struct GenesisAccount {
     #[serde(default)]
     pub nonce: Option<Nonce>,
 
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_genesis_token")]
     pub token: Option<TokenAddress>,
+}
+
+/// The genesis `token` field is a numeric token id on mainnet/hardfork ledgers
+/// (`"1"` = MINA) but a base58 token address on mesa-style ledgers. Accept both.
+fn deserialize_genesis_token<'de, D>(deserializer: D) -> Result<Option<TokenAddress>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(match Option::<serde_json::Value>::deserialize(deserializer)? {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::Number(_)) => Some(TokenAddress::default()),
+        Some(serde_json::Value::String(s)) => {
+            if !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()) {
+                Some(TokenAddress::default())
+            } else {
+                Some(s.parse::<TokenAddress>().map_err(serde::de::Error::custom)?)
+            }
+        }
+        Some(other) => {
+            return Err(serde::de::Error::custom(format!("invalid token: {other}")))
+        }
+    })
 }
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
