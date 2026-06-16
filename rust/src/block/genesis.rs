@@ -24,7 +24,7 @@ pub const GENESIS_HARDFORK_BLOCK_CONTENTS: &str = include_str!(
 // onto the post-fork genesis ledger). Embedded as bytes: the original block
 // contains raw bytes in proof fields that the V2 parser skips.
 pub const GENESIS_MESA_BLOCK_CONTENTS: &[u8] = include_bytes!(
-    "../../data/genesis_blocks/mesa-297734-3NLp6dKNhYtsqUj49QYV5GtDaeocSJBAa2y2ER2QQLqLukE3wuZT.json"
+    "../../data/genesis_blocks/mesa-297735-3NKQttwm8QRdvSZL62Lid8YAPCXBuAucZPDT8mJriHmw2qk9cVcr.json"
 );
 
 impl GenesisBlock {
