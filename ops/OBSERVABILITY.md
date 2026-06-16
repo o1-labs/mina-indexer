@@ -41,6 +41,17 @@ replay on restart (slow). Implemented as a periodic, online, consistent **speedb
 - Runs on a tokio timer off a `spawn_blocking` worker (`spawn_periodic_checkpoints` in `server.rs`),
   so restart can resume from a recent consistent point instead of replaying a large WAL.
 
+**Recovery.** A checkpoint dir is itself a complete, openable speedb DB, so recovery is just making
+`<dir>/latest` the active DB — exposed as `server start --restore-from-checkpoint <dir>`:
+- Seeds an **empty/absent** `--database-dir` from `<dir>/latest`, then opens it normally (Sync mode).
+- An **already-populated** `--database-dir` is opened as-is (it is usually newer than the checkpoint);
+  pass `--restore-force` to discard it and restore from the checkpoint instead.
+- The three images bake `--restore-from-checkpoint /data/checkpoints` (no `--force`), so a wiped or
+  fresh-but-checkpointed `/data` self-heals while a healthy DB is never clobbered. For a corrupt-but-present
+  DB, clear `/data/db` (or run once with `--restore-force`) to force the restore.
+- Do **not** point `--database-dir` straight at `<dir>/latest`: the periodic writer replaces `latest`
+  on each tick and would delete the DB out from under the running process.
+
 ### 3. Log improvements — **LOW, targeted only**
 Current logging is workable; just close the blind spots that cost us during debugging:
 - Log fetcher results at INFO (`fetch: N new blocks in Ts`) — fetch exe stdout is currently swallowed.

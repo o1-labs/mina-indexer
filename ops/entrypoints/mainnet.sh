@@ -13,6 +13,7 @@ export MINA_CHECKPOINT_DIR="${MINA_CHECKPOINT_DIR:-/data/checkpoints}"
 exec mina-indexer --socket /data/mi.sock server start \
   --network mainnet \
   --genesis-hash 3NKeMoncuHab5ScarV5ViyF16cJPT4taWNSaTLS64Dp67wuXigPZ \
+  --restore-from-checkpoint "$MINA_CHECKPOINT_DIR" \
   --database-dir /data/db \
   --blocks-dir /data/blocks \
   --fetch-new-blocks-exe /bin/block-pull --fetch-new-blocks-delay 60 \

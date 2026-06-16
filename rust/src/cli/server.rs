@@ -49,6 +49,18 @@ pub struct ServerArgs {
     #[arg(long)]
     pub missing_block_recovery_batch: Option<bool>,
 
+    /// Restore the database from a periodic checkpoint dir (the one written via
+    /// `MINA_CHECKPOINT_DIR`, containing `latest/`) before starting. Only seeds
+    /// an empty/absent `--database-dir`; an already-populated dir is opened
+    /// as-is (likely newer than the checkpoint) unless `--restore-force` is set.
+    #[arg(long)]
+    pub restore_from_checkpoint: Option<PathBuf>,
+
+    /// With `--restore-from-checkpoint`, overwrite a non-empty `--database-dir`
+    /// with the checkpoint. Use only when the live DB is corrupt/unwanted.
+    #[arg(long, default_value_t = false)]
+    pub restore_force: bool,
+
     /// Indexer process ID
     #[arg(last = true)]
     pub pid: Option<u32>,
@@ -180,6 +192,8 @@ impl From<ServerArgsJson> for ServerArgs {
             missing_block_recovery_delay: value.missing_block_recovery_delay,
             missing_block_recovery_exe: value.missing_block_recovery_exe.map(Into::into),
             missing_block_recovery_batch: value.missing_block_recovery_batch,
+            restore_from_checkpoint: None,
+            restore_force: false,
         }
     }
 }

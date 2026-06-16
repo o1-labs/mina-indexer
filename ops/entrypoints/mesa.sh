@@ -20,6 +20,7 @@ exec mina-indexer --socket /data/mi.sock server start \
   --network mesa \
   --genesis-hash 3NKQttwm8QRdvSZL62Lid8YAPCXBuAucZPDT8mJriHmw2qk9cVcr \
   --genesis-ledger "$GEN" \
+  --restore-from-checkpoint "$MINA_CHECKPOINT_DIR" \
   --database-dir /data/db \
   --blocks-dir /data/blocks \
   --fetch-new-blocks-exe /bin/mesa-pull --fetch-new-blocks-delay 60 \
