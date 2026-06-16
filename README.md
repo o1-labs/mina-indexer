@@ -6,9 +6,37 @@ Constructs and serves indices of the Mina blockchain via GraphQL.
 ![LICENCE Badge](https://img.shields.io/badge/license-APACHE-blue.svg)
 
 The Mina Indexer uses precomputed blocks (logged by a Mina node) as the source
-of truth for the blockchain.
+of truth for the blockchain. It ingests them into a [speedb](https://github.com/speedb-io/speedb)
+store, tracks recent chain history in a witness tree, computes canonicity and
+ledgers, and serves **GraphQL** + **REST** (default `:8080`).
 
 See an instance of the Mina Indexer in action at [MinaSearch](https://minasearch.com).
+
+## Documentation
+
+- **[docs/operating.md](docs/operating.md)** — run, configure (full CLI + environment
+  reference), observe, and recover an instance.
+- **[ops/README.md](ops/README.md)** — turnkey per-network configless OCI images
+  (mainnet / devnet / mesa-mut): `docker run` with zero flags.
+- **[ops/OBSERVABILITY.md](ops/OBSERVABILITY.md)** — Prometheus `/metrics`, structured JSON
+  logging, periodic speedb checkpoints + recovery.
+- **[ops/mesa-mut/TRUSTLESS-DEMO.md](ops/mesa-mut/TRUSTLESS-DEMO.md)** — trustless,
+  SNARK-proof-gated block ingestion.
+- **[docs/README.md](docs/README.md)** — full index, including design deep-dives.
+- **[CLAUDE.md](CLAUDE.md)** — architecture & build notes for contributors and coding agents.
+
+## Quick start (container)
+
+```bash
+docker run -d --name indexer -p 8080:8080 \
+  -v indexer-mainnet:/data \
+  ghcr.io/o1-labs/mina-indexer:<tag>-mainnet
+curl -s localhost:8080/summary | jq
+```
+
+No flags or mounts are required — the image knows its network, genesis, and block source,
+and follows the chain tip. See [ops/README.md](ops/README.md) for the devnet and mesa-mut
+images.
 
 ## Development Prerequisites
 
