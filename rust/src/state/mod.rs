@@ -681,10 +681,12 @@ impl IndexerState {
     ///     - best block update
     ///     - new deep canonical blocks
     pub fn block_pipeline(&mut self, block: &PrecomputedBlock, block_bytes: u64) -> Result<bool> {
+        let _ingest_timer = crate::metrics::BLOCK_INGEST_SECONDS.start_timer();
         if let Some(db_event) = self.add_block_to_store(block, block_bytes, false)? {
             self.bytes_processed += block_bytes;
 
             let (best_tip, new_canonical_blocks) = if db_event.is_new_block_event() {
+                crate::metrics::BLOCKS_PROCESSED.inc();
                 if let Some(wt_event) = self.add_block_to_witness_tree(block, true, true)?.1 {
                     match wt_event {
                         WitnessTreeEvent::UpdateBestTip {

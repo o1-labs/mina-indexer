@@ -702,6 +702,8 @@ async fn reconcile_blocks_dir(
             Err(e) => trace!("reconcile: skipping {path:#?}: {e}"),
         }
     }
+    crate::metrics::RECONCILE_INGESTED.inc_by(reconciled as u64);
+    crate::metrics::DANGLING_BRANCHES.set(state.read().await.dangling_branches.len() as i64);
     if reconciled > 0 {
         info!("Reconcile: ingested {reconciled} on-disk block(s) the fs-watcher missed");
     }
@@ -783,6 +785,8 @@ async fn fetch_new_blocks(
     fetch_new_blocks_exe: impl AsRef<Path>,
 ) -> anyhow::Result<()> {
     debug!("Fetching new blocks");
+    crate::metrics::FETCH_INVOCATIONS.inc();
+    let _fetch_timer = crate::metrics::FETCH_SECONDS.start_timer();
 
     let state = state.read().await;
     let network = state.version.network.clone();

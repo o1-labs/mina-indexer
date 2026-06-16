@@ -6,7 +6,7 @@ pub const ENDPOINT_GRAPHQL: &str = "/graphql";
 
 use self::{
     graphql::{build_schema, indexer_graphiql},
-    rest::{accounts, blockchain, blocks, locked_balances::LockedBalances},
+    rest::{accounts, blockchain, blocks, locked_balances::LockedBalances, metrics},
 };
 use crate::store::IndexerStore;
 use actix_cors::Cors;
@@ -32,6 +32,7 @@ pub async fn start_web_server<A: net::ToSocketAddrs>(
     addrs: A,
 ) -> anyhow::Result<()> {
     let locked = Arc::new(load_locked_balances());
+    crate::metrics::init();
 
     let _ = HttpServer::new(move || {
         App::new()
@@ -42,6 +43,7 @@ pub async fn start_web_server<A: net::ToSocketAddrs>(
             .service(accounts::get_account)
             .service(blockchain::get_blockchain_summary)
             .service(blockchain::get_health)
+            .service(metrics::get_metrics)
             .service(
                 web::resource(ENDPOINT_GRAPHQL)
                     .guard(guard::Post())

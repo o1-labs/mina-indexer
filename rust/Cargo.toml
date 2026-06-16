@@ -24,6 +24,7 @@ bincode = "=2.0.0-rc.3"
 derive_more = { version = "~0.99", default-features = false }
 serde = { version = "1.*", default-features = false }
 serde_json = { version = "1.*", default-features = false, features = ["unbounded_depth"] }
+prometheus = { version = "0.13", default-features = false }
 smart-default = { version = "0.*", default-features = false }
 clap = { version = "4.*", default-features = false, features = ["help", "usage", "std", "derive", "string"] }
 thiserror = { version = "1.*", default-features = false }
