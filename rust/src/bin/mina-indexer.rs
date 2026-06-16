@@ -24,7 +24,6 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use stderrlog::{ColorChoice, Timestamp};
 use tempfile::TempDir;
 use tokio_graceful_shutdown::{
     errors::SubsystemError, SubsystemBuilder, SubsystemHandle, Toplevel,
@@ -195,14 +194,8 @@ impl ServerCommand {
         let web_hostname = args.web_hostname.clone();
         let web_port = args.web_port;
 
-        // initialize logging
-        stderrlog::new()
-            .module(module_path!())
-            .color(ColorChoice::Never)
-            .timestamp(Timestamp::Microsecond)
-            .verbosity(args.db.log_level.0)
-            .init()
-            .unwrap();
+        // initialize logging (human-readable by default; MINA_LOG_FORMAT=json for structured)
+        mina_indexer::logging::init(args.db.log_level.0);
 
         check_or_write_pid_file(&database_dir);
 
@@ -245,14 +238,8 @@ impl ServerCommand {
 
 impl DatabaseCommand {
     async fn run(self, domain_socket_path: PathBuf) -> anyhow::Result<()> {
-        // initialize logging
-        stderrlog::new()
-            .module(module_path!())
-            .color(ColorChoice::Never)
-            .timestamp(Timestamp::Microsecond)
-            .verbosity(LevelFilter::from(&self))
-            .init()
-            .unwrap();
+        // initialize logging (human-readable by default; MINA_LOG_FORMAT=json for structured)
+        mina_indexer::logging::init(LevelFilter::from(&self));
 
         match self {
             Self::Version { json } => {
