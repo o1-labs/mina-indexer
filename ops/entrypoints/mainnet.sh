@@ -5,6 +5,11 @@
 # needs nothing mounted: `docker run` and it self-initializes and follows the tip.
 set -euo pipefail
 
+# hourly consistent DB checkpoints to /data/checkpoints/latest (override the
+# cadence with MINA_CHECKPOINT_INTERVAL_SECS); a crash resumes from it instead
+# of replaying a large WAL.
+export MINA_CHECKPOINT_DIR="${MINA_CHECKPOINT_DIR:-/data/checkpoints}"
+
 exec mina-indexer --socket /data/mi.sock server start \
   --network mainnet \
   --genesis-hash 3NKeMoncuHab5ScarV5ViyF16cJPT4taWNSaTLS64Dp67wuXigPZ \

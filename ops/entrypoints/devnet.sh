@@ -13,6 +13,11 @@ if [ ! -s "$GEN" ]; then
   gunzip -c /genesis/devnet.json.gz > "$GEN"
 fi
 
+# hourly consistent DB checkpoints to /data/checkpoints/latest (override the
+# cadence with MINA_CHECKPOINT_INTERVAL_SECS); a crash resumes from it instead
+# of replaying a large WAL.
+export MINA_CHECKPOINT_DIR="${MINA_CHECKPOINT_DIR:-/data/checkpoints}"
+
 exec mina-indexer --socket /data/mi.sock server start \
   --network devnet \
   --genesis-hash 3NK4DL35iKQ6G8VPqPFLZ122M82dcRRPt8rHrpRW662kXWpH8fRa \
