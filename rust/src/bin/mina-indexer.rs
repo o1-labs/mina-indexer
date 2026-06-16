@@ -361,6 +361,7 @@ fn process_indexer_configuration(
     let do_not_ingest_orphan_blocks = args.db.do_not_ingest_orphan_blocks;
     let fetch_new_blocks_exe = args.fetch_new_blocks_exe;
     let fetch_new_blocks_delay = args.fetch_new_blocks_delay;
+    let verify_block_exe = args.verify_block_exe;
     let missing_block_recovery_exe = args.missing_block_recovery_exe;
     let missing_block_recovery_delay = args.missing_block_recovery_delay;
     let missing_block_recovery_batch = args.missing_block_recovery_batch.unwrap_or(false);
@@ -416,6 +417,7 @@ fn process_indexer_configuration(
         domain_socket_path,
         fetch_new_blocks_exe,
         fetch_new_blocks_delay,
+        verify_block_exe,
         missing_block_recovery_exe,
         missing_block_recovery_delay,
         missing_block_recovery_batch,
