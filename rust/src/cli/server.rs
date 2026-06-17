@@ -49,6 +49,14 @@ pub struct ServerArgs {
     #[arg(long)]
     pub missing_block_recovery_batch: Option<bool>,
 
+    /// Bound `blocks-dir` growth by deleting ingested block files older than the
+    /// retention window. Keeps block files at height >= `best_tip - N`; older
+    /// blocks already live in the speedb store and are never re-read. Disabled
+    /// when unset (every fetched block is kept). Floored at the transition
+    /// frontier depth (k = 290) so reconcile always has recent blocks.
+    #[arg(long)]
+    pub blocks_retention_length: Option<u32>,
+
     /// Restore the database from a periodic checkpoint dir (the one written via
     /// `MINA_CHECKPOINT_DIR`, containing `latest/`) before starting. Only seeds
     /// an empty/absent `--database-dir`; an already-populated dir is opened
@@ -93,6 +101,7 @@ pub struct ServerArgsJson {
     pub missing_block_recovery_exe: Option<String>,
     pub missing_block_recovery_delay: Option<u64>,
     pub missing_block_recovery_batch: Option<bool>,
+    pub blocks_retention_length: Option<u32>,
     pub network: String,
     pub check_mode: bool,
 }
@@ -149,6 +158,7 @@ impl From<ServerArgs> for ServerArgsJson {
                 .missing_block_recovery_exe
                 .map(|p| p.display().to_string()),
             missing_block_recovery_batch: value.missing_block_recovery_batch,
+            blocks_retention_length: value.blocks_retention_length,
             network: value.db.network.to_string(),
             do_not_ingest_orphan_blocks: value.db.do_not_ingest_orphan_blocks,
             check_mode: value.db.check_mode,
@@ -192,6 +202,7 @@ impl From<ServerArgsJson> for ServerArgs {
             missing_block_recovery_delay: value.missing_block_recovery_delay,
             missing_block_recovery_exe: value.missing_block_recovery_exe.map(Into::into),
             missing_block_recovery_batch: value.missing_block_recovery_batch,
+            blocks_retention_length: value.blocks_retention_length,
             restore_from_checkpoint: None,
             restore_force: false,
         }

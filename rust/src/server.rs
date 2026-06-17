@@ -75,6 +75,7 @@ pub struct IndexerConfiguration {
     pub missing_block_recovery_exe: Option<PathBuf>,
     pub missing_block_recovery_delay: Option<u64>,
     pub missing_block_recovery_batch: bool,
+    pub blocks_retention_length: Option<u32>,
     pub check_mode: bool,
 }
 
@@ -293,6 +294,7 @@ impl IndexerConfiguration {
         let missing_block_recovery_delay = self.missing_block_recovery_delay;
         let missing_block_recovery_exe = self.missing_block_recovery_exe.clone();
         let missing_block_recovery_batch = self.missing_block_recovery_batch;
+        let blocks_retention_length = self.blocks_retention_length;
 
         // initialize witness tree & connect database
         let state = Arc::new(RwLock::new(self.initialize(&store).await.unwrap_or_else(
@@ -331,6 +333,7 @@ impl IndexerConfiguration {
             missing_block_recovery,
             fetch_new_blocks,
             verify_block_exe,
+            blocks_retention_length,
             state.clone(),
         )
         .await?;
@@ -421,6 +424,7 @@ struct FetchNewBlocksOptions {
 }
 
 /// Starts filesystem watchers & runs the mina indexer
+#[allow(clippy::too_many_arguments)]
 async fn run_indexer<P: AsRef<Path>>(
     subsys: &SubsystemHandle,
     blocks_dir: Option<P>,
@@ -428,6 +432,7 @@ async fn run_indexer<P: AsRef<Path>>(
     missing_block_recovery: Option<MissingBlockRecoveryOptions>,
     fetch_new_blocks_opts: Option<FetchNewBlocksOptions>,
     verify_block_exe: Option<PathBuf>,
+    blocks_retention_length: Option<u32>,
     state: Arc<RwLock<IndexerState>>,
 ) -> anyhow::Result<()> {
     // setup fs-based precomputed block & staking ledger watchers
@@ -471,6 +476,14 @@ async fn run_indexer<P: AsRef<Path>>(
     let missing_block_recovery_delay = missing_block_recovery.as_ref().map(|m| m.delay);
     let missing_block_recovery_exe = missing_block_recovery.map(|m| m.exe);
 
+    if let Some(retention) = blocks_retention_length {
+        let effective = retention.max(MAINNET_TRANSITION_FRONTIER_K);
+        info!(
+            "Block-file retention enabled: keeping blocks within {effective} of the tip \
+             (requested {retention}, floored at k={MAINNET_TRANSITION_FRONTIER_K})"
+        );
+    }
+
     loop {
         tokio::select! {
             // watch for shutdown signals
@@ -508,6 +521,12 @@ async fn run_indexer<P: AsRef<Path>>(
                     // leaving connectable blocks orphaned on disk that the fetch
                     // hook then skips (already downloaded) — wedging the tip.
                     reconcile_blocks_dir(&state, blocks_dir.as_ref(), verify_block_exe.as_deref()).await?;
+
+                    // Retention: drop ingested block files below the window so
+                    // blocks_dir doesn't grow unbounded as the tip advances.
+                    if let Some(retention) = blocks_retention_length {
+                        prune_blocks_dir(&state, blocks_dir.as_ref(), retention).await?;
+                    }
                 }
             }
         }
@@ -759,6 +778,72 @@ async fn reconcile_blocks_dir(
         info!("Reconcile: ingested {reconciled} on-disk block(s) the fs-watcher missed");
     }
     Ok(())
+}
+
+/// Bound `blocks_dir` growth by deleting ingested precomputed-block files older
+/// than the retention window. Block files at height >= `best_tip - retention`
+/// are kept; everything below already lives in the speedb store and is never
+/// re-read — queries serve from the store, and `reconcile_blocks_dir` only
+/// re-scans heights >= `tip - k`. The window is floored at `k`
+/// ([`MAINNET_TRANSITION_FRONTIER_K`]) so reconcile always retains the recent
+/// blocks it depends on, regardless of the requested value.
+///
+/// Best-effort and idempotent: read/remove errors are logged and skipped, and a
+/// tip shallower than the window simply prunes nothing.
+async fn prune_blocks_dir(
+    state: &Arc<RwLock<IndexerState>>,
+    blocks_dir: &Path,
+    retention: u32,
+) -> anyhow::Result<()> {
+    let retention = retention.max(MAINNET_TRANSITION_FRONTIER_K);
+    let floor = {
+        let st = state.read().await;
+        st.best_tip_block().blockchain_length.saturating_sub(retention)
+    };
+    if floor == 0 {
+        return Ok(()); // tip not yet deep enough for anything to fall out of the window
+    }
+
+    let mut pruned = 0u64;
+    let mut bytes_freed = 0u64;
+    for path in prunable_block_files(blocks_dir, floor) {
+        let len = path.metadata().map(|m| m.len()).unwrap_or(0);
+        match std::fs::remove_file(&path) {
+            Ok(()) => {
+                pruned += 1;
+                bytes_freed += len;
+            }
+            Err(e) => warn!("prune: failed to remove {path:#?}: {e}"),
+        }
+    }
+
+    if pruned > 0 {
+        crate::metrics::BLOCKS_PRUNED.inc_by(pruned);
+        info!(
+            "Pruned {pruned} ingested block file(s) below height {floor} ({:.1} MiB freed)",
+            bytes_freed as f64 / (1024.0 * 1024.0)
+        );
+    }
+    Ok(())
+}
+
+/// Block files in `blocks_dir` strictly below `floor` (height < floor) — the set
+/// safe to delete once their height has fallen out of the retention window.
+/// Non-block files and unreadable dirs yield nothing. Pure I/O selection, split
+/// out from [`prune_blocks_dir`] so the height gating is unit-testable.
+fn prunable_block_files(blocks_dir: &Path, floor: u32) -> Vec<PathBuf> {
+    let entries = match std::fs::read_dir(blocks_dir) {
+        Ok(rd) => rd,
+        Err(e) => {
+            error!("prune: cannot read {blocks_dir:#?}: {e}");
+            return Vec::new();
+        }
+    };
+    entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| block::is_valid_block_file(p))
+        .filter(|p| extract_network_height_hash(p).1 < floor)
+        .collect()
 }
 
 /// Trustless gate: run the external verifier on a block file. The contract
@@ -1084,6 +1169,7 @@ impl From<(ServerArgsJson, PathBuf)> for IndexerConfiguration {
             missing_block_recovery_exe: value.0.missing_block_recovery_exe.map(Into::into),
             missing_block_recovery_delay: value.0.missing_block_recovery_delay,
             missing_block_recovery_batch: value.0.missing_block_recovery_batch.unwrap_or_default(),
+            blocks_retention_length: value.0.blocks_retention_length,
             check_mode: value.0.check_mode,
         }
     }
@@ -1107,5 +1193,57 @@ fn log_dirs_msg(blocks_dir: Option<&PathBuf>, staking_ledgers_dir: Option<&PathB
             "Initializing database from staking ledgers in {staking_ledgers_dir:#?}"
         ),
         (None, None) => info!("Initializing database without blocks and staking ledgers"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prunable_block_files;
+    use std::{collections::HashSet, fs, path::PathBuf};
+
+    // any 52-char "3N…" string is a structurally valid state hash
+    fn hash(seed: char) -> String {
+        format!("3N{}", std::iter::repeat(seed).take(50).collect::<String>())
+    }
+
+    fn write_block(dir: &std::path::Path, height: u32, seed: char) -> PathBuf {
+        let p = dir.join(format!("mainnet-{height}-{}.json", hash(seed)));
+        fs::write(&p, b"{}").unwrap();
+        p
+    }
+
+    #[test]
+    fn prunes_only_blocks_strictly_below_floor() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+
+        let below_a = write_block(d, 100, 'a');
+        let below_b = write_block(d, 289, 'b');
+        let at_floor = write_block(d, 500, 'c'); // == floor: kept
+        let above = write_block(d, 900, 'd'); // > floor: kept
+
+        // non-block files and subdirs must be ignored
+        fs::write(d.join("notes.txt"), b"x").unwrap();
+        fs::create_dir(d.join("checkpoints")).unwrap();
+
+        let got: HashSet<PathBuf> = prunable_block_files(d, 500).into_iter().collect();
+        let want: HashSet<PathBuf> = [below_a, below_b].into_iter().collect();
+        assert_eq!(got, want);
+
+        // the kept files are untouched on disk
+        assert!(at_floor.exists() && above.exists());
+    }
+
+    #[test]
+    fn floor_zero_prunes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        write_block(dir.path(), 0, 'a');
+        write_block(dir.path(), 10, 'b');
+        assert!(prunable_block_files(dir.path(), 0).is_empty());
+    }
+
+    #[test]
+    fn missing_dir_yields_empty() {
+        assert!(prunable_block_files(std::path::Path::new("/no/such/dir"), 100).is_empty());
     }
 }

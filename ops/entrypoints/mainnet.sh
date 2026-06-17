@@ -10,6 +10,15 @@ set -euo pipefail
 # of replaying a large WAL.
 export MINA_CHECKPOINT_DIR="${MINA_CHECKPOINT_DIR:-/data/checkpoints}"
 
+# Bound /data/blocks growth: keep only recent block files on disk (older blocks
+# already live in the speedb DB and are never re-read). Tune with
+# MINA_BLOCKS_RETENTION_LENGTH; set it to 0 to disable and keep every block.
+RETENTION="${MINA_BLOCKS_RETENTION_LENGTH:-1000}"
+retention_args=()
+if [ "$RETENTION" -gt 0 ] 2>/dev/null; then
+  retention_args=(--blocks-retention-length "$RETENTION")
+fi
+
 exec mina-indexer --socket /data/mi.sock server start \
   --network mainnet \
   --genesis-hash 3NKeMoncuHab5ScarV5ViyF16cJPT4taWNSaTLS64Dp67wuXigPZ \
@@ -17,4 +26,5 @@ exec mina-indexer --socket /data/mi.sock server start \
   --database-dir /data/db \
   --blocks-dir /data/blocks \
   --fetch-new-blocks-exe /bin/block-pull --fetch-new-blocks-delay 60 \
-  --missing-block-recovery-exe /bin/block-pull --missing-block-recovery-delay 120
+  --missing-block-recovery-exe /bin/block-pull --missing-block-recovery-delay 120 \
+  ${retention_args[@]+"${retention_args[@]}"}

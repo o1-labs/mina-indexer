@@ -63,3 +63,4 @@ Current logging is workable; just close the blind spots that cost us during debu
 - **#1 Prometheus `/metrics`** — done (PR #12).
 - **#3 structured JSON logging** — done (PR #13): `MINA_LOG_FORMAT=json`, `RUST_LOG`-overridable.
 - **#2 periodic speedb checkpoints** — done (this PR): `MINA_CHECKPOINT_DIR` / `MINA_CHECKPOINT_INTERVAL_SECS`.
+- **#4 block-dir retention** — done: `--blocks-retention-length` / `MINA_BLOCKS_RETENTION_LENGTH` bounds `blocks-dir` growth; deletions counted by `mina_indexer_blocks_pruned_total`. See [`docs/operating.md`](../docs/operating.md#bounding-block-dir-growth).
