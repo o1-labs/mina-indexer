@@ -212,11 +212,33 @@ pub enum UserCommandKind {
     ZkappCommand,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum UserCommandData {
     SignedCommandData(Box<SignedCommandData>),
     ZkappCommandData(ZkappCommandData),
+}
+
+// Manual Deserialize (instead of `#[serde(untagged)]`) so a malformed command
+// surfaces the *real* inner error from each variant rather than serde's opaque
+// "data did not match any variant of untagged enum UserCommandData".
+impl<'de> Deserialize<'de> for UserCommandData {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        match SignedCommandData::deserialize(&value) {
+            Ok(signed) => Ok(UserCommandData::SignedCommandData(Box::new(signed))),
+            Err(signed_err) => match ZkappCommandData::deserialize(&value) {
+                Ok(zkapp) => Ok(UserCommandData::ZkappCommandData(zkapp)),
+                Err(zkapp_err) => Err(serde::de::Error::custom(format!(
+                    "UserCommandData: signed-command parse failed ({signed_err}); \
+                     zkapp-command parse failed ({zkapp_err})"
+                ))),
+            },
+        }
+    }
 }
 
 impl std::cmp::Eq for UserCommandData {}
@@ -413,7 +435,11 @@ pub enum UpdateTiming {
 pub struct Preconditions {
     pub network: NetworkPreconditions,
     pub account: AccountPreconditions,
-    pub valid_while: Precondition<String>,
+    // `valid_while` is a global-slot bounds precondition (`{lower, upper}`), same
+    // shape as `network.global_slot_since_genesis` — not a plain string. mesa/mainnet
+    // zkApps only ever used `["Ignore"]` here, so the wrong type went unnoticed until
+    // devnet zkApps used `["Check", {lower, upper}]`.
+    pub valid_while: Precondition<NumericBoundsU32>,
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]

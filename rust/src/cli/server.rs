@@ -30,6 +30,13 @@ pub struct ServerArgs {
     #[arg(long)]
     pub fetch_new_blocks_delay: Option<u64>,
 
+    /// Path to a block-verification executable. When set, every live-ingested
+    /// block is gated on it: the indexer runs `EXE <network> <block-file>` and
+    /// only ingests the block if it exits 0. Enables a trustless setup where a
+    /// SNARK-proof verifier (e.g. mina-verify-server) vouches for each block.
+    #[arg(long)]
+    pub verify_block_exe: Option<PathBuf>,
+
     /// Path to the missing block recovery executable
     #[arg(long)]
     pub missing_block_recovery_exe: Option<PathBuf>,
@@ -41,6 +48,18 @@ pub struct ServerArgs {
     /// Recover all blocks at all missing heights
     #[arg(long)]
     pub missing_block_recovery_batch: Option<bool>,
+
+    /// Restore the database from a periodic checkpoint dir (the one written via
+    /// `MINA_CHECKPOINT_DIR`, containing `latest/`) before starting. Only seeds
+    /// an empty/absent `--database-dir`; an already-populated dir is opened
+    /// as-is (likely newer than the checkpoint) unless `--restore-force` is set.
+    #[arg(long)]
+    pub restore_from_checkpoint: Option<PathBuf>,
+
+    /// With `--restore-from-checkpoint`, overwrite a non-empty `--database-dir`
+    /// with the checkpoint. Use only when the live DB is corrupt/unwanted.
+    #[arg(long, default_value_t = false)]
+    pub restore_force: bool,
 
     /// Indexer process ID
     #[arg(last = true)]
@@ -70,6 +89,7 @@ pub struct ServerArgsJson {
     pub do_not_ingest_orphan_blocks: bool,
     pub fetch_new_blocks_exe: Option<String>,
     pub fetch_new_blocks_delay: Option<u64>,
+    pub verify_block_exe: Option<String>,
     pub missing_block_recovery_exe: Option<String>,
     pub missing_block_recovery_delay: Option<u64>,
     pub missing_block_recovery_batch: Option<bool>,
@@ -123,6 +143,7 @@ impl From<ServerArgs> for ServerArgsJson {
             pid: value.pid,
             fetch_new_blocks_delay: value.fetch_new_blocks_delay,
             fetch_new_blocks_exe: value.fetch_new_blocks_exe.map(|p| p.display().to_string()),
+            verify_block_exe: value.verify_block_exe.map(|p| p.display().to_string()),
             missing_block_recovery_delay: value.missing_block_recovery_delay,
             missing_block_recovery_exe: value
                 .missing_block_recovery_exe
@@ -167,9 +188,12 @@ impl From<ServerArgsJson> for ServerArgs {
             pid: value.pid,
             fetch_new_blocks_delay: value.fetch_new_blocks_delay,
             fetch_new_blocks_exe: value.fetch_new_blocks_exe.map(Into::into),
+            verify_block_exe: value.verify_block_exe.map(Into::into),
             missing_block_recovery_delay: value.missing_block_recovery_delay,
             missing_block_recovery_exe: value.missing_block_recovery_exe.map(Into::into),
             missing_block_recovery_batch: value.missing_block_recovery_batch,
+            restore_from_checkpoint: None,
+            restore_force: false,
         }
     }
 }

@@ -302,6 +302,8 @@ impl IndexerState {
         // PcbVersion::V2) gets its own fork block rather than the mainnet one.
         let genesis_block = if config.version.genesis.state_hash.0 == MESA_GENESIS_HASH {
             GenesisBlock::new_mesa()?
+        } else if config.version.genesis.state_hash.0 == DEVNET_GENESIS_HASH {
+            GenesisBlock::new_devnet()?
         } else {
             match config.version.version {
                 PcbVersion::V1 => GenesisBlock::new_v1()?,
@@ -537,6 +539,7 @@ impl IndexerState {
 
                     if diff.state_hash.0 != HARDFORK_GENESIS_HASH
                         && diff.state_hash.0 != MESA_GENESIS_HASH
+                        && diff.state_hash.0 != DEVNET_GENESIS_HASH
                     {
                         ledger_diffs.push((diff.clone(), accounts_accessed));
                     }
@@ -678,10 +681,12 @@ impl IndexerState {
     ///     - best block update
     ///     - new deep canonical blocks
     pub fn block_pipeline(&mut self, block: &PrecomputedBlock, block_bytes: u64) -> Result<bool> {
+        let _ingest_timer = crate::metrics::BLOCK_INGEST_SECONDS.start_timer();
         if let Some(db_event) = self.add_block_to_store(block, block_bytes, false)? {
             self.bytes_processed += block_bytes;
 
             let (best_tip, new_canonical_blocks) = if db_event.is_new_block_event() {
+                crate::metrics::BLOCKS_PROCESSED.inc();
                 if let Some(wt_event) = self.add_block_to_witness_tree(block, true, true)?.1 {
                     match wt_event {
                         WitnessTreeEvent::UpdateBestTip {
@@ -1318,6 +1323,7 @@ impl IndexerState {
                             split_staking_ledger_epoch_key(&key)?;
                         if genesis_state_hash.0 == MAINNET_GENESIS_HASH
                             || genesis_state_hash.0 == HARDFORK_GENESIS_HASH
+                            || genesis_state_hash.0 == DEVNET_GENESIS_HASH
                         {
                             staking_ledgers.insert((epoch, ledger_hash));
                         } else {

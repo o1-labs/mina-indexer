@@ -1,0 +1,28 @@
+# Mina Indexer documentation
+
+## Operating & deploying
+
+- [operating.md](operating.md) — run, configure (CLI + env reference), observe, and
+  recover an instance.
+- [../ops/README.md](../ops/README.md) — the turnkey per-network configless OCI images
+  (mainnet / devnet / mesa-mut).
+- [../ops/OBSERVABILITY.md](../ops/OBSERVABILITY.md) — Prometheus metrics, structured
+  logging, and periodic checkpoints.
+- [../ops/mesa-mut/TRUSTLESS-DEMO.md](../ops/mesa-mut/TRUSTLESS-DEMO.md) — the trustless
+  (SNARK-proof-gated) ingestion demo and architecture.
+- [../ops/mesa-mut/README.md](../ops/mesa-mut/README.md) — running a local mesa-mut indexer.
+
+## Design & internals
+
+- [development-principles-and-practices.md](development-principles-and-practices.md)
+- [indexer_store.md](indexer_store.md) — the speedb store layout.
+- [canonical-chain-discovery.md](canonical-chain-discovery.md)
+- [ledger-calculations.md](ledger-calculations.md)
+- [understanding-mainnet-transaction-fees.md](understanding-mainnet-transaction-fees.md)
+- [user-commands.md](user-commands.md)
+- [state/](state/) — the witness tree and how blocks are added to it.
+- [features/](features/) — feature-specific notes.
+
+## For coding agents
+
+- [../CLAUDE.md](../CLAUDE.md) — architecture, build/test loop, and gotchas.

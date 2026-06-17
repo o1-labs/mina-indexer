@@ -4,8 +4,9 @@ use crate::{
     block::precomputed::PrecomputedBlock,
     chain::Network,
     constants::{
-        HARDFORK_GENESIS_BLOCKCHAIN_LENGTH, HARDFORK_GENESIS_HASH, MAINNET_GENESIS_HASH,
-        MESA_GENESIS_BLOCKCHAIN_LENGTH, MESA_GENESIS_HASH,
+        DEVNET_GENESIS_BLOCKCHAIN_LENGTH, DEVNET_GENESIS_HASH, HARDFORK_GENESIS_BLOCKCHAIN_LENGTH,
+        HARDFORK_GENESIS_HASH, MAINNET_GENESIS_HASH, MESA_GENESIS_BLOCKCHAIN_LENGTH,
+        MESA_GENESIS_HASH,
     },
 };
 
@@ -25,6 +26,12 @@ pub const GENESIS_HARDFORK_BLOCK_CONTENTS: &str = include_str!(
 // contains raw bytes in proof fields that the V2 parser skips.
 pub const GENESIS_MESA_BLOCK_CONTENTS: &[u8] = include_bytes!(
     "../../data/genesis_blocks/mesa-297735-3NKQttwm8QRdvSZL62Lid8YAPCXBuAucZPDT8mJriHmw2qk9cVcr.json"
+);
+
+// devnet checkpoint/genesis block (transactions emptied so it applies as a no-op
+// onto the genesis ledger supplied at runtime).
+pub const GENESIS_DEVNET_BLOCK_CONTENTS: &[u8] = include_bytes!(
+    "../../data/genesis_blocks/devnet-527922-3NK4DL35iKQ6G8VPqPFLZ122M82dcRRPt8rHrpRW662kXWpH8fRa.json"
 );
 
 impl GenesisBlock {
@@ -75,6 +82,26 @@ impl GenesisBlock {
         let network = Network::from("mesa");
         let blockchain_length: BlockchainLength = MESA_GENESIS_BLOCKCHAIN_LENGTH.into();
         let state_hash: StateHash = MESA_GENESIS_HASH.into();
+
+        Ok(Self(
+            PrecomputedBlock::new(
+                network,
+                blockchain_length,
+                state_hash,
+                contents,
+                PcbVersion::V2,
+            )?,
+            size,
+        ))
+    }
+
+    /// Creates the devnet checkpoint/genesis block as a PCB
+    pub fn new_devnet() -> anyhow::Result<Self> {
+        let contents = GENESIS_DEVNET_BLOCK_CONTENTS.to_vec();
+        let size = contents.len() as u64;
+        let network = Network::Devnet;
+        let blockchain_length: BlockchainLength = DEVNET_GENESIS_BLOCKCHAIN_LENGTH.into();
+        let state_hash: StateHash = DEVNET_GENESIS_HASH.into();
 
         Ok(Self(
             PrecomputedBlock::new(

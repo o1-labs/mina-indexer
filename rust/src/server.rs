@@ -71,6 +71,7 @@ pub struct IndexerConfiguration {
     pub do_not_ingest_orphan_blocks: bool,
     pub fetch_new_blocks_exe: Option<PathBuf>,
     pub fetch_new_blocks_delay: Option<u64>,
+    pub verify_block_exe: Option<PathBuf>,
     pub missing_block_recovery_exe: Option<PathBuf>,
     pub missing_block_recovery_delay: Option<u64>,
     pub missing_block_recovery_batch: bool,
@@ -104,6 +105,10 @@ impl IndexerConfiguration {
         });
 
         if let Some(indexer_store) = state.indexer_store.as_ref() {
+            // Persist memtables + WAL so a subsequent open is fast (see the
+            // server-loop shutdown for rationale).
+            let _ = indexer_store.database.flush();
+            let _ = indexer_store.database.flush_wal(true);
             indexer_store.database.cancel_all_background_work(true);
         }
 
@@ -283,6 +288,7 @@ impl IndexerConfiguration {
 
         let fetch_new_blocks_delay = self.fetch_new_blocks_delay;
         let fetch_new_blocks_exe = self.fetch_new_blocks_exe.clone();
+        let verify_block_exe = self.verify_block_exe.clone();
 
         let missing_block_recovery_delay = self.missing_block_recovery_delay;
         let missing_block_recovery_exe = self.missing_block_recovery_exe.clone();
@@ -311,18 +317,70 @@ impl IndexerConfiguration {
             delay: fetch_new_blocks_delay.unwrap_or(180),
         });
 
+        // optional periodic DB checkpoints (opt-in via MINA_CHECKPOINT_DIR; the
+        // configless images enable it so a crash resumes from a recent consistent
+        // checkpoint instead of a slow WAL replay)
+        if let Ok(dir) = std::env::var("MINA_CHECKPOINT_DIR") {
+            spawn_periodic_checkpoints(store.clone(), PathBuf::from(dir));
+        }
+
         run_indexer(
             &subsys,
             blocks_dir,
             staking_ledgers_dir,
             missing_block_recovery,
             fetch_new_blocks,
+            verify_block_exe,
             state.clone(),
         )
         .await?;
 
         Ok(())
     }
+}
+
+/// Spawn a background task that writes a rolling speedb checkpoint of the DB to
+/// `<dir>/latest` every `MINA_CHECKPOINT_INTERVAL_SECS` (default 3600 = hourly).
+/// On an ungraceful crash, restart from the checkpoint instead of replaying a
+/// large WAL. The checkpoint is hard-link based (cheap) and consistent.
+fn spawn_periodic_checkpoints(store: Arc<IndexerStore>, dir: PathBuf) {
+    let secs: u64 = std::env::var("MINA_CHECKPOINT_INTERVAL_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(3600);
+    info!("Periodic DB checkpoints enabled -> {dir:#?} (every {secs}s)");
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(secs));
+        tick.tick().await; // consume the immediate first tick
+        loop {
+            tick.tick().await;
+            let store = store.clone();
+            let dir = dir.clone();
+            // create_checkpoint is blocking I/O — keep it off the async workers
+            match tokio::task::spawn_blocking(move || write_db_checkpoint(&store, &dir)).await {
+                Ok(Ok(path)) => info!("DB checkpoint written: {path:#?}"),
+                Ok(Err(e)) => error!("DB checkpoint failed: {e}"),
+                Err(e) => error!("DB checkpoint task panicked: {e}"),
+            }
+        }
+    });
+}
+
+/// Write a consistent speedb checkpoint to `<dir>/latest`, atomically (tmp + rename).
+fn write_db_checkpoint(store: &IndexerStore, dir: &Path) -> anyhow::Result<PathBuf> {
+    fs::create_dir_all(dir)?;
+    let tmp = dir.join(".tmp-checkpoint");
+    let latest = dir.join("latest");
+    if tmp.exists() {
+        fs::remove_dir_all(&tmp)?;
+    }
+    Checkpoint::new(&store.database)?.create_checkpoint(&tmp)?;
+    if latest.exists() {
+        fs::remove_dir_all(&latest)?;
+    }
+    fs::rename(&tmp, &latest)?;
+    Ok(latest)
 }
 
 /// Starts UDS server with read-only state for summary
@@ -369,6 +427,7 @@ async fn run_indexer<P: AsRef<Path>>(
     staking_ledgers_dir: Option<P>,
     missing_block_recovery: Option<MissingBlockRecoveryOptions>,
     fetch_new_blocks_opts: Option<FetchNewBlocksOptions>,
+    verify_block_exe: Option<PathBuf>,
     state: Arc<RwLock<IndexerState>>,
 ) -> anyhow::Result<()> {
     // setup fs-based precomputed block & staking ledger watchers
@@ -422,7 +481,7 @@ async fn run_indexer<P: AsRef<Path>>(
             // watch for precomputed blocks & staking ledgers
             Some(res) = rx.recv() => {
                 match res {
-                    Ok(event) => process_event(event, &state).await?,
+                    Ok(event) => process_event(event, &state, verify_block_exe.as_deref()).await?,
                     Err(e) => {
                         error!("Filesystem watcher error: {e}");
                         break;
@@ -442,6 +501,13 @@ async fn run_indexer<P: AsRef<Path>>(
                     if let Some(ref missing_block_recovery_exe) = missing_block_recovery_exe {
                         recover_missing_blocks(&state, &blocks_dir, missing_block_recovery_exe, missing_block_recovery_batch).await?
                     }
+
+                    // Safety net: ingest any on-disk block the fs-watcher missed.
+                    // inotify has a bounded event queue; a bulk fetch (hundreds
+                    // of files at once) overflows it and silently drops events,
+                    // leaving connectable blocks orphaned on disk that the fetch
+                    // hook then skips (already downloaded) — wedging the tip.
+                    reconcile_blocks_dir(&state, blocks_dir.as_ref(), verify_block_exe.as_deref()).await?;
                 }
             }
         }
@@ -450,6 +516,12 @@ async fn run_indexer<P: AsRef<Path>>(
     // shutdown
     let state = state.write().await;
     if let Some(store) = state.indexer_store.as_ref() {
+        debug!("Flushing db memtables + WAL before shutdown");
+        // Drain memtables to SST and sync the WAL so the next `server start`
+        // opens cleanly instead of replaying a multi-GB WAL (minutes of
+        // recovery). Atomic-flush makes the single flush() cover every CF.
+        let _ = store.database.flush();
+        let _ = store.database.flush_wal(true);
         debug!("Canceling db background work");
         store.database.cancel_all_background_work(true)
     }
@@ -458,44 +530,73 @@ async fn run_indexer<P: AsRef<Path>>(
     Ok(())
 }
 
-async fn retry_parse_precomputed_block(path: &Path) -> anyhow::Result<PrecomputedBlock> {
+async fn retry_parse_precomputed_block(
+    path: &Path,
+    version: PcbVersion,
+) -> anyhow::Result<PrecomputedBlock> {
     let num_attempts = 5;
+    let mut last_err = None;
     for attempt in 1..num_attempts {
-        match PrecomputedBlock::from_path(path) {
+        // Parse with the indexer's configured network version, NOT
+        // `from_path` (which guesses the version from blockchain length via the
+        // mainnet hardfork threshold). On a non-mainnet hardfork like mesa-mut
+        // that guess is wrong — every live-fetched block would be parsed as the
+        // pre-fork version and fail with "missing field protocol_state", so the
+        // tip could only ever advance via the BuildDB scan, never live fetch.
+        match PrecomputedBlock::parse_file(path, version.clone()) {
             Ok(block) => return Ok(block),
             Err(e) => {
                 warn!("Attempt {attempt}: {e}. Retrying in 100ms...");
+                last_err = Some(e);
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
         }
     }
 
-    panic!(
-        "All {} attempts to parse the staking ledger failed.",
-        num_attempts
+    // Don't panic on a single bad block — flag it and let the caller skip it so
+    // the indexer stays up. A transiently-bad block (e.g. a partial download) is
+    // re-fetched later by missing-block-recovery and inserted then; a
+    // permanently-incompatible one (e.g. a pre-fork block) stays skipped.
+    anyhow::bail!(
+        "Failed to parse precomputed block {} after {num_attempts} attempts: {}",
+        path.display(),
+        last_err
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "unknown error".to_string()),
     )
 }
 
 async fn retry_parse_staking_ledger(path: &Path) -> anyhow::Result<StakingLedger> {
     let num_attempts = 5;
+    let mut last_err = None;
     for attempt in 1..num_attempts {
         match StakingLedger::parse_file(path).await {
             Ok(ledger) => return Ok(ledger),
             Err(e) => {
                 warn!("Attempt {attempt}: {e}. Retrying in 1s...");
+                last_err = Some(e);
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
         }
     }
 
-    panic!(
-        "All {} attempts to parse the staking ledger failed.",
-        num_attempts
+    // Flag-and-skip instead of crashing the indexer (see
+    // retry_parse_precomputed_block).
+    anyhow::bail!(
+        "Failed to parse staking ledger {} after {num_attempts} attempts: {}",
+        path.display(),
+        last_err
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "unknown error".to_string()),
     )
 }
 
 /// Precomputed block & staking ledger event handler
-async fn process_event(event: Event, state: &Arc<RwLock<IndexerState>>) -> anyhow::Result<()> {
+async fn process_event(
+    event: Event,
+    state: &Arc<RwLock<IndexerState>>,
+    verify_block_exe: Option<&Path>,
+) -> anyhow::Result<()> {
     trace!("{:?}", event);
 
     if matches_event_kind(event.kind) {
@@ -508,8 +609,19 @@ async fn process_event(event: Event, state: &Arc<RwLock<IndexerState>>) -> anyho
                     return Ok(());
                 }
 
+                // trustless gate: only ingest blocks whose proof verifies
+                if let Some(exe) = verify_block_exe {
+                    let network = state.read().await.version.network.clone();
+                    if !verify_block(exe, &network, &path).await {
+                        warn!("Rejected block (proof did not verify): {:#?}", path);
+                        continue;
+                    }
+                }
+
                 // if the block isn't in the witness tree, parse & pipeline it
-                match retry_parse_precomputed_block(&path).await {
+                // using the indexer's configured network version
+                let pcb_version = state.read().await.version.version.clone();
+                match retry_parse_precomputed_block(&path, pcb_version).await {
                     Ok(block) => {
                         let mut state = state.write().await;
                         let block_summary = block.summary();
@@ -565,6 +677,117 @@ async fn process_event(event: Event, state: &Arc<RwLock<IndexerState>>) -> anyho
     Ok(())
 }
 
+/// Re-scan the blocks directory and ingest any valid block the filesystem
+/// watcher missed. inotify has a bounded kernel event queue; a bulk fetch
+/// (hundreds of files mv'd in at once) overflows it and silently drops events,
+/// so connectable blocks sit orphaned on disk while the fetch hook skips them
+/// (already downloaded) — wedging the tip. This periodic reconcile is the
+/// safety net that makes ingestion robust regardless of OS event delivery.
+///
+/// Idempotent: blocks already in the witness tree are skipped. Bounded to the
+/// transition frontier (best tip - k and above) so it doesn't re-stat the whole
+/// chain every cycle. Ascending height so parents are applied before children.
+async fn reconcile_blocks_dir(
+    state: &Arc<RwLock<IndexerState>>,
+    blocks_dir: &Path,
+    verify_block_exe: Option<&Path>,
+) -> anyhow::Result<()> {
+    let floor = {
+        let st = state.read().await;
+        st.best_tip_block()
+            .blockchain_length
+            .saturating_sub(MAINNET_TRANSITION_FRONTIER_K)
+    };
+
+    let mut candidates: Vec<(u32, PathBuf)> = match std::fs::read_dir(blocks_dir) {
+        Ok(rd) => rd
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| block::is_valid_block_file(p))
+            .map(|p| (extract_network_height_hash(&p).1, p))
+            .filter(|(height, _)| *height >= floor)
+            .collect(),
+        Err(e) => {
+            error!("reconcile: cannot read {blocks_dir:#?}: {e}");
+            return Ok(());
+        }
+    };
+    candidates.sort_by_key(|(height, _)| *height);
+
+    let mut reconciled = 0;
+    for (_, path) in candidates {
+        // quiet presence check (unlike check_block, which logs per block)
+        let (_, _, state_hash) = extract_network_height_hash(&path);
+        let state_hash: StateHash = state_hash.into();
+        if state.read().await.diffs_map.contains_key(&state_hash) {
+            continue;
+        }
+
+        // trustless gate: only ingest blocks whose proof verifies
+        if let Some(exe) = verify_block_exe {
+            let network = state.read().await.version.network.clone();
+            if !verify_block(exe, &network, &path).await {
+                warn!("Rejected block (proof did not verify): {:#?}", path);
+                continue;
+            }
+        }
+
+        let version = state.read().await.version.version.clone();
+        match retry_parse_precomputed_block(&path, version).await {
+            Ok(block) => {
+                let len = match path.metadata() {
+                    Ok(m) => m.len(),
+                    Err(_) => continue,
+                };
+                let summary = block.summary();
+                let mut st = state.write().await;
+                match st.block_pipeline(&block, len) {
+                    Ok(true) => {
+                        reconciled += 1;
+                        info!("Reconciled on-disk block {summary}");
+                    }
+                    Ok(false) => {}
+                    Err(e) => error!("Error reconciling block {summary}: {e}"),
+                }
+            }
+            // unparseable blocks are skipped (logged once on the watcher path)
+            Err(e) => trace!("reconcile: skipping {path:#?}: {e}"),
+        }
+    }
+    crate::metrics::RECONCILE_INGESTED.inc_by(reconciled as u64);
+    crate::metrics::DANGLING_BRANCHES.set(state.read().await.dangling_branches.len() as i64);
+    if reconciled > 0 {
+        info!("Reconcile: ingested {reconciled} on-disk block(s) the fs-watcher missed");
+    }
+    Ok(())
+}
+
+/// Trustless gate: run the external verifier on a block file. The contract
+/// mirrors the fetch hook — `EXE <network> <block-file>` — and a zero exit code
+/// means the block's SNARK proof verified. Fails closed: if the verifier can't
+/// be run, the block is rejected (an unverifiable block is never ingested in
+/// trustless mode).
+async fn verify_block(exe: &Path, network: &Network, path: &Path) -> bool {
+    let mut cmd = std::process::Command::new(exe.display().to_string());
+    cmd.args([&network.to_string(), &path.display().to_string()]);
+
+    match cmd.output() {
+        Ok(output) => {
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let stderr = stderr.trim();
+                if !stderr.is_empty() {
+                    warn!("verify-block-exe rejected {path:#?}: {stderr}");
+                }
+            }
+            output.status.success()
+        }
+        Err(e) => {
+            error!("verify-block-exe failed to run ({exe:#?}): {e}");
+            false
+        }
+    }
+}
+
 /// Checks if the PCB is already present in the witness tree
 async fn check_block(state: &Arc<RwLock<IndexerState>>, path: &Path) -> bool {
     let (network, height, state_hash) = extract_network_height_hash(path);
@@ -613,6 +836,8 @@ async fn fetch_new_blocks(
     fetch_new_blocks_exe: impl AsRef<Path>,
 ) -> anyhow::Result<()> {
     debug!("Fetching new blocks");
+    crate::metrics::FETCH_INVOCATIONS.inc();
+    let _fetch_timer = crate::metrics::FETCH_SECONDS.start_timer();
 
     let state = state.read().await;
     let network = state.version.network.clone();
@@ -773,6 +998,20 @@ impl GenesisVersion {
             global_slot: MESA_GENESIS_GLOBAL_SLOT,
         }
     }
+
+    pub fn devnet() -> Self {
+        use std::str::FromStr;
+        let last_vrf_output =
+            VrfOutput::from_str(DEVNET_GENESIS_LAST_VRF_OUTPUT).expect("devnet last vrf output");
+
+        Self {
+            last_vrf_output,
+            state_hash: DEVNET_GENESIS_HASH.into(),
+            prev_hash: DEVNET_GENESIS_PREV_STATE_HASH.into(),
+            blockchain_lenth: DEVNET_GENESIS_BLOCKCHAIN_LENGTH,
+            global_slot: DEVNET_GENESIS_GLOBAL_SLOT,
+        }
+    }
 }
 
 impl IndexerVersion {
@@ -800,6 +1039,15 @@ impl IndexerVersion {
             version: PcbVersion::V2,
             chain_id: ChainId::mesa(),
             genesis: GenesisVersion::mesa(),
+        }
+    }
+
+    pub fn devnet() -> Self {
+        Self {
+            network: Network::Devnet,
+            version: PcbVersion::V2,
+            chain_id: ChainId::devnet(),
+            genesis: GenesisVersion::devnet(),
         }
     }
 }
@@ -832,6 +1080,7 @@ impl From<(ServerArgsJson, PathBuf)> for IndexerConfiguration {
             do_not_ingest_orphan_blocks: value.0.do_not_ingest_orphan_blocks,
             fetch_new_blocks_exe: value.0.fetch_new_blocks_exe.map(Into::into),
             fetch_new_blocks_delay: value.0.fetch_new_blocks_delay,
+            verify_block_exe: value.0.verify_block_exe.map(Into::into),
             missing_block_recovery_exe: value.0.missing_block_recovery_exe.map(Into::into),
             missing_block_recovery_delay: value.0.missing_block_recovery_delay,
             missing_block_recovery_batch: value.0.missing_block_recovery_batch.unwrap_or_default(),

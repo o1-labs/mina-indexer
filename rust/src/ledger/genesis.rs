@@ -311,7 +311,28 @@ impl From<GenesisRoot> for GenesisLedger {
 
 impl From<GenesisLedger> for Ledger {
     fn from(value: GenesisLedger) -> Self {
-        Ledger::from_mina_ledger(value.into())
+        // Partition genesis accounts into per-token ledgers by each account's own
+        // token, rather than dumping them all into the MINA ledger. Genesis
+        // ledgers (e.g. devnet's state dump) contain custom-token accounts; filing
+        // them under MINA mis-routes their zkApp diffs (token mismatch) and can
+        // even collide a pk's MINA and custom-token accounts in one pk-keyed map.
+        let mut ledger = Ledger::new();
+        for (_pk, acct) in value.ledger.accounts.into_iter() {
+            let token = acct.token.clone().unwrap_or_default();
+            let is_custom_token = token.0 != MINA_TOKEN_ADDRESS;
+            let account = Account {
+                // add the account-creation fee back to display balance for MINA
+                // accounts only (custom-token balances are shown as-is)
+                balance: if is_custom_token {
+                    acct.balance
+                } else {
+                    acct.balance + MAINNET_ACCOUNT_CREATION_FEE
+                },
+                ..acct
+            };
+            ledger.insert_account(account, &token);
+        }
+        ledger
     }
 }
 

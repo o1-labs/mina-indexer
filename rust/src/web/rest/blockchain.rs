@@ -336,6 +336,39 @@ impl BlockchainSummary {
     }
 }
 
+/// Liveness/readiness probe. Returns the best-tip height and how far behind
+/// wall-clock it is, plus a `synced` flag (tip within ~2 block slots of now).
+/// 200 once a best tip exists; 503 while still initializing.
+#[get("/health")]
+pub async fn get_health(store: Data<Arc<IndexerStore>>) -> HttpResponse {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    match store.as_ref().get_best_block() {
+        Ok(Some(best_tip)) => {
+            let now_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or_default();
+            let tip_ms = best_tip.timestamp();
+            let tip_age_seconds = now_ms.saturating_sub(tip_ms) / 1000;
+            let block_slot_secs = crate::constants::MAINNET_BLOCK_SLOT_TIME_MILLIS / 1000;
+            let synced = tip_age_seconds < 2 * block_slot_secs;
+
+            HttpResponse::Ok().json(serde_json::json!({
+                "status": "ok",
+                "synced": synced,
+                "tip_height": best_tip.blockchain_length(),
+                "tip_timestamp_ms": tip_ms,
+                "tip_age_seconds": tip_age_seconds,
+            }))
+        }
+        _ => HttpResponse::ServiceUnavailable().json(serde_json::json!({
+            "status": "initializing",
+            "synced": false,
+        })),
+    }
+}
+
 #[get("/summary")]
 pub async fn get_blockchain_summary(
     store: Data<Arc<IndexerStore>>,

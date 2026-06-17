@@ -24,7 +24,6 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use stderrlog::{ColorChoice, Timestamp};
 use tempfile::TempDir;
 use tokio_graceful_shutdown::{
     errors::SubsystemError, SubsystemBuilder, SubsystemHandle, Toplevel,
@@ -171,6 +170,17 @@ impl ServerCommand {
         let (args, mode) = match self {
             Self::Shutdown => return client::ClientCli::Shutdown.run(domain_socket_path).await,
             Self::Start(args) => {
+                // bring logging up before the (rare, operator-triggered) restore
+                // so its progress is visible; the later init() call is a no-op.
+                mina_indexer::logging::init(args.db.log_level.0);
+                // disaster recovery: optionally seed the database dir from a
+                // periodic checkpoint before we decide how to initialize, so a
+                // restored DB is then opened in Sync mode (CURRENT present).
+                maybe_restore_from_checkpoint(
+                    args.restore_from_checkpoint.as_deref(),
+                    &args.db.database_dir,
+                    args.restore_force,
+                )?;
                 if let Some(config_path) = args.db.config {
                     let contents = std::fs::read(config_path)?;
                     let args: ServerArgsJson = serde_json::from_slice(&contents)?;
@@ -178,7 +188,15 @@ impl ServerCommand {
                 } else if args.self_check {
                     (*args, InitializationMode::Replay)
                 } else {
-                    (*args, InitializationMode::Sync)
+                    // Self-initialize: if there's no database yet, build it from
+                    // blocks; otherwise just open and sync. Lets `server start`
+                    // run standalone without a separate `database create` first.
+                    let mode = if args.db.database_dir.join("CURRENT").exists() {
+                        InitializationMode::Sync
+                    } else {
+                        InitializationMode::BuildDB
+                    };
+                    (*args, mode)
                 }
             }
         };
@@ -187,14 +205,8 @@ impl ServerCommand {
         let web_hostname = args.web_hostname.clone();
         let web_port = args.web_port;
 
-        // initialize logging
-        stderrlog::new()
-            .module(module_path!())
-            .color(ColorChoice::Never)
-            .timestamp(Timestamp::Microsecond)
-            .verbosity(args.db.log_level.0)
-            .init()
-            .unwrap();
+        // initialize logging (human-readable by default; MINA_LOG_FORMAT=json for structured)
+        mina_indexer::logging::init(args.db.log_level.0);
 
         check_or_write_pid_file(&database_dir);
 
@@ -220,6 +232,11 @@ impl ServerCommand {
         subsys.on_shutdown_requested().await;
 
         debug!("Shutting down primary database instance");
+        // Flush memtables to SST + sync the WAL so the next open doesn't replay a
+        // large WAL. Without this, an abrupt stop makes the next `server start`
+        // spend minutes recovering before it can serve.
+        let _ = db.database.flush();
+        let _ = db.database.flush_wal(true);
         db.database.cancel_all_background_work(true);
 
         remove_pid(&database_dir);
@@ -232,14 +249,8 @@ impl ServerCommand {
 
 impl DatabaseCommand {
     async fn run(self, domain_socket_path: PathBuf) -> anyhow::Result<()> {
-        // initialize logging
-        stderrlog::new()
-            .module(module_path!())
-            .color(ColorChoice::Never)
-            .timestamp(Timestamp::Microsecond)
-            .verbosity(LevelFilter::from(&self))
-            .init()
-            .unwrap();
+        // initialize logging (human-readable by default; MINA_LOG_FORMAT=json for structured)
+        mina_indexer::logging::init(LevelFilter::from(&self));
 
         match self {
             Self::Version { json } => {
@@ -312,6 +323,8 @@ impl DatabaseCommand {
                     // wait for SIGINT
                     _ = tokio::signal::ctrl_c() => {
                         info!("SIGINT received");
+                        let _ = store.database.flush();
+                        let _ = store.database.flush_wal(true);
                         store.database.cancel_all_background_work(true);
                     }
 
@@ -346,6 +359,7 @@ fn process_indexer_configuration(
     let do_not_ingest_orphan_blocks = args.db.do_not_ingest_orphan_blocks;
     let fetch_new_blocks_exe = args.fetch_new_blocks_exe;
     let fetch_new_blocks_delay = args.fetch_new_blocks_delay;
+    let verify_block_exe = args.verify_block_exe;
     let missing_block_recovery_exe = args.missing_block_recovery_exe;
     let missing_block_recovery_delay = args.missing_block_recovery_delay;
     let missing_block_recovery_batch = args.missing_block_recovery_batch.unwrap_or(false);
@@ -373,6 +387,8 @@ fn process_indexer_configuration(
     let network = args.db.network;
     let (version, chain_id, genesis) = if genesis_hash == MESA_GENESIS_HASH {
         (PcbVersion::V2, ChainId::mesa(), GenesisVersion::mesa())
+    } else if genesis_hash == DEVNET_GENESIS_HASH {
+        (PcbVersion::V2, ChainId::devnet(), GenesisVersion::devnet())
     } else if genesis_hash == HARDFORK_GENESIS_HASH {
         (PcbVersion::V2, ChainId::v2(), GenesisVersion::v2())
     } else {
@@ -401,6 +417,7 @@ fn process_indexer_configuration(
         domain_socket_path,
         fetch_new_blocks_exe,
         fetch_new_blocks_delay,
+        verify_block_exe,
         missing_block_recovery_exe,
         missing_block_recovery_delay,
         missing_block_recovery_batch,
@@ -450,6 +467,64 @@ fn write_pid_to_file<P: AsRef<Path>>(pid_path: P) -> anyhow::Result<()> {
     let mut pid_file = File::create(pid_path)?;
     let pid = process::id();
     write!(pid_file, "{pid}")?;
+    Ok(())
+}
+
+/// Restore the database from a periodic checkpoint (the dir written via
+/// `MINA_CHECKPOINT_DIR`, containing `latest/`) before the store is opened.
+///
+/// A speedb checkpoint is itself a complete, openable DB, so "restore" is just
+/// copying `<checkpoint_dir>/latest` into `database_dir`. To avoid silently
+/// reverting to a (possibly hour-stale) checkpoint over a healthy live DB, an
+/// already-populated `database_dir` is left untouched unless `force` is set.
+fn maybe_restore_from_checkpoint(
+    checkpoint_dir: Option<&Path>,
+    database_dir: &Path,
+    force: bool,
+) -> anyhow::Result<()> {
+    let Some(checkpoint_dir) = checkpoint_dir else {
+        return Ok(());
+    };
+    let latest = checkpoint_dir.join("latest");
+    if !latest.join("CURRENT").exists() {
+        anyhow::bail!(
+            "--restore-from-checkpoint {checkpoint_dir:#?}: no usable checkpoint at {latest:#?} \
+             (missing CURRENT)"
+        );
+    }
+
+    if database_dir.join("CURRENT").exists() {
+        if !force {
+            info!(
+                "--restore-from-checkpoint: {database_dir:#?} already holds a database; opening it \
+                 as-is (it is likely newer than the checkpoint). Pass --restore-force to overwrite."
+            );
+            return Ok(());
+        }
+        info!("--restore-force: removing existing database at {database_dir:#?}");
+        fs::remove_dir_all(database_dir)?;
+    }
+
+    info!("Restoring database from checkpoint {latest:#?} -> {database_dir:#?}");
+    copy_dir_recursive(&latest, database_dir)?;
+    info!("Checkpoint restore complete");
+    Ok(())
+}
+
+/// Recursively copy `src` into `dst` (creating `dst`). Used to materialize a
+/// speedb checkpoint as a fresh working database directory.
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else {
+            fs::copy(&from, &to)?;
+        }
+    }
     Ok(())
 }
 
