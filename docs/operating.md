@@ -60,6 +60,7 @@ Shared database flags (`cli/database.rs`) plus server flags (`cli/server.rs`):
 | `--missing-block-recovery-exe <EXE>` | — | Same contract; backfills gaps below the tip. |
 | `--missing-block-recovery-delay <SEC>` | — | Seconds between recovery attempts. |
 | `--missing-block-recovery-batch <BOOL>` | — | Recover all missing heights per pass. |
+| `--blocks-retention-length <N>` | — (keep all) | Bound `--blocks-dir` growth: delete ingested block files below `tip − N` each cycle. Floored at `k=290`. See [Bounding block-dir growth](#bounding-block-dir-growth). |
 | `--verify-block-exe <EXE>` | — | Trustless gate: ingest a block only if `EXE <network> <file>` exits 0 (fail-closed). |
 | `--restore-from-checkpoint <DIR>` | — | Seed an empty `--database-dir` from `<DIR>/latest` before opening. |
 | `--restore-force` | false | With the above, overwrite a non-empty `--database-dir`. |
@@ -79,13 +80,14 @@ client query commands (`mina-indexer <query> …` against the running socket), a
 | `RUST_LOG` | unset | Standard `tracing`/`env_logger` filter; overrides `--log-level`. e.g. `warn,mina_indexer=debug`. |
 | `MINA_CHECKPOINT_DIR` | unset | Enables periodic speedb checkpoints to `<dir>/latest`. |
 | `MINA_CHECKPOINT_INTERVAL_SECS` | 3600 | Checkpoint cadence (hourly by default). |
+| `MINA_BLOCKS_RETENTION_LENGTH` | 1000 (images) | Block-file retention window the configless image entrypoints pass to `--blocks-retention-length`. Set `0` to disable and keep every block. |
 | `GIT_COMMIT_HASH` | — | Build-time version stamp (set by Nix). |
 
 ## Observability
 
 - **Metrics:** `GET /metrics` — Prometheus exposition (blocks processed, ingest/fetch
   latency histograms, best-tip height, tip age, synced flag, dangling branches, reconcile
-  counts). Point Prometheus at `:8080/metrics`.
+  counts, blocks pruned). Point Prometheus at `:8080/metrics`.
 - **Health / summary:** `GET /health`, `GET /summary` (chain summary as JSON).
 - **Logs:** human-readable by default; set `MINA_LOG_FORMAT=json` for aggregation. Filter
   with `RUST_LOG`.
@@ -110,6 +112,30 @@ The three configless images set `MINA_CHECKPOINT_DIR=/data/checkpoints` and pass
 `--restore-from-checkpoint /data/checkpoints` (no force): hourly checkpoints by default, and
 a wiped or fresh-but-checkpointed `/data` self-heals on boot while a healthy DB is never
 clobbered. For a corrupt-but-present DB, clear `/data/db` (or run once with `--restore-force`).
+
+## Bounding block-dir growth
+
+`--blocks-dir` is an **ingest staging cache**, not a serving store. Once a block is parsed
+into the speedb DB it is never read from disk again — queries serve from the DB, and the
+only on-disk re-reader (`reconcile_blocks_dir`) looks no deeper than `tip − k` (`k = 290`,
+the transition-frontier depth). So block files older than the frontier are dead weight, and
+on a tip-following node `--blocks-dir` otherwise grows without bound.
+
+`--blocks-retention-length <N>` caps it: on each fetch/reconcile cycle the indexer deletes
+ingested block files below `tip − N`. It is **off by default** (every block is kept). When
+set:
+
+- The window is **floored at `k = 290`** — a smaller `N` is silently raised to `k`, so the
+  blocks reconcile depends on are never deleted.
+- Pruning is **safe and lossless for queries**: the data is already in the DB. The DB
+  (`--database-dir`) is the durable index and is never touched by this.
+- Deletions are counted by the `mina_indexer_blocks_pruned_total` metric and logged
+  (`Pruned N … block file(s) below height H (… MiB freed)`).
+
+The three configless images enable it by default at **1000 blocks**
+(`MINA_BLOCKS_RETENTION_LENGTH=1000`); set `MINA_BLOCKS_RETENTION_LENGTH=0` to disable and
+retain every fetched block. This keeps `/data/blocks` bounded to a small recent window
+instead of the full chain (e.g. mesa-mut's full block set is ~21 GB).
 
 > The older `database snapshot` / `database restore` subcommands are the **tarred** form of
 > the same checkpoint (a single archive file + version stamp), for manual backup/transfer.

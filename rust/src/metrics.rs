@@ -92,6 +92,15 @@ pub static RECONCILE_INGESTED: LazyLock<IntCounter> = LazyLock::new(|| {
     .unwrap()
 });
 
+/// Total ingested block files deleted from `blocks_dir` by retention pruning.
+pub static BLOCKS_PRUNED: LazyLock<IntCounter> = LazyLock::new(|| {
+    register_int_counter!(
+        "mina_indexer_blocks_pruned_total",
+        "Total ingested block files deleted from blocks_dir by retention pruning"
+    )
+    .unwrap()
+});
+
 /// Force every metric to register so it appears in `/metrics` before its first
 /// event.
 pub fn init() {
@@ -104,6 +113,7 @@ pub fn init() {
     LazyLock::force(&FETCH_SECONDS);
     LazyLock::force(&FETCH_INVOCATIONS);
     LazyLock::force(&RECONCILE_INGESTED);
+    LazyLock::force(&BLOCKS_PRUNED);
 }
 
 /// Encode the default registry in Prometheus text exposition format.

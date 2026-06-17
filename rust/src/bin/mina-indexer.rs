@@ -363,6 +363,7 @@ fn process_indexer_configuration(
     let missing_block_recovery_exe = args.missing_block_recovery_exe;
     let missing_block_recovery_delay = args.missing_block_recovery_delay;
     let missing_block_recovery_batch = args.missing_block_recovery_batch.unwrap_or(false);
+    let blocks_retention_length = args.blocks_retention_length;
     let check_mode = args.db.check_mode;
 
     // ensure blocks dir exists
@@ -421,6 +422,7 @@ fn process_indexer_configuration(
         missing_block_recovery_exe,
         missing_block_recovery_delay,
         missing_block_recovery_batch,
+        blocks_retention_length,
         do_not_ingest_orphan_blocks,
         check_mode,
     })
