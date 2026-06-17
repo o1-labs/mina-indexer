@@ -241,25 +241,32 @@
           };
 
           # Configless per-network entrypoints: each exec's mina-indexer with all
-          # flags baked in (zero args/mounts needed). mesa/devnet decompress their
-          # baked genesis ledger to /data on first boot.
-          indexer-entry-mainnet = pkgs.writeShellApplication {
-            name = "indexer-entry-mainnet";
-            runtimeInputs = [ mina-indexer ];
-            bashOptions = [ "errexit" "nounset" "pipefail" ];
-            text = builtins.readFile ./ops/entrypoints/mainnet.sh;
+          # flags baked in (zero args/mounts needed). Each per-network file holds
+          # only its variables (NETWORK / GENESIS_HASH / FETCH_EXE / GENESIS_GZ);
+          # the shared body (checkpoints, genesis decompression, retention, the
+          # server-start invocation) lives once in common.sh and is concatenated
+          # at build time. mesa/devnet decompress their baked genesis on first boot.
+          mkEntry =
+            {
+              net,
+              needsGzip ? false,
+            }:
+            pkgs.writeShellApplication {
+              name = "indexer-entry-${net}";
+              runtimeInputs = [ mina-indexer ] ++ pkgs.lib.optional needsGzip pkgs.gzip;
+              bashOptions = [ "errexit" "nounset" "pipefail" ];
+              text =
+                builtins.readFile (./ops/entrypoints + "/${net}.sh")
+                + builtins.readFile ./ops/entrypoints/common.sh;
+            };
+          indexer-entry-mainnet = mkEntry { net = "mainnet"; };
+          indexer-entry-devnet = mkEntry {
+            net = "devnet";
+            needsGzip = true;
           };
-          indexer-entry-devnet = pkgs.writeShellApplication {
-            name = "indexer-entry-devnet";
-            runtimeInputs = with pkgs; [ mina-indexer gzip ];
-            bashOptions = [ "errexit" "nounset" "pipefail" ];
-            text = builtins.readFile ./ops/entrypoints/devnet.sh;
-          };
-          indexer-entry-mesa = pkgs.writeShellApplication {
-            name = "indexer-entry-mesa";
-            runtimeInputs = with pkgs; [ mina-indexer gzip ];
-            bashOptions = [ "errexit" "nounset" "pipefail" ];
-            text = builtins.readFile ./ops/entrypoints/mesa.sh;
+          indexer-entry-mesa = mkEntry {
+            net = "mesa";
+            needsGzip = true;
           };
 
           # Per-network configless images (one repo, tag suffix -<network>):
