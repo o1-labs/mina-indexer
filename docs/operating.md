@@ -23,6 +23,42 @@ docker run -d --name indexer -p 8080:8080 \
 A volume on `/data` is optional but recommended — the DB, fetched blocks, sockets, and
 checkpoints live there and should survive restarts.
 
+## Host requirements
+
+Sizing is driven mostly by **disk**, not RAM. The figures below are grounded in the
+mesa-mut benchmark ([`ops/mesa-mut/benchmark.md`](../ops/mesa-mut/benchmark.md), full
+chain at tip 300579 on a 16-core / 62.5 GiB host).
+
+| Tier | vCPU | RAM | Disk (mesa-mut) | Disk (mainnet) | Use |
+|------|------|-----|-----------------|----------------|-----|
+| **Minimum viable** | 2 | 4 GB | 80 GB SSD | 250 GB SSD | low query traffic, tolerant of slow sync |
+| **Recommended** | 4 | 8 GB | 100 GB SSD | 400 GB SSD | normal prod, healthy ingest + query headroom |
+| **Heavy read load** | 8 | 8–16 GB | 150 GB SSD | 500 GB+ SSD | aggregations/`/summary`; front with read replicas |
+
+**RAM** stays a steady **~1.9 GiB regardless of on-disk DB size or query load** — speedb
+keeps a bounded block-cache working set and memory-maps the rest. 4 GB is a safe floor;
+extra RAM mainly buys OS page cache, which cuts the cold-SST tail latency on aggregate
+queries. The working set does **not** grow as the DB reaches tens of GB.
+
+**CPU** is bursty, not sustained: near-zero when idle, **~1.5 cores during ingest**, and
+peaks of **~4.4 cores under heavy query load**. A single vCPU is a real bottleneck — the
+fetcher runs *synchronously* in the timer loop, so on one core a fetch window stalls
+reconcile and the tip lags, and any query traffic contends head-on with ingestion. Use
+**≥ 2 vCPU** (4 recommended).
+
+**Disk** is the variable that matters and must be **SSD/NVMe** — throughput is dominated
+by random reads across SST files; spinning disk will not keep up. mesa-mut is ~52 GB
+today (30 GB speedb + 21 GB blocks + ~0.9 GB genesis) and grows with the chain; **mainnet
+is several times larger** — budget generously.
+
+> **`ulimit -n ≥ 4096` is mandatory** on any tier. The indexer opens many SST files; a
+> too-low file-descriptor limit will crash it. Set it before launch (systemd:
+> `LimitNOFILE=`; Docker: `--ulimit nofile=4096`).
+
+For heavy aggregate query traffic, keep a single writer and front it with **read
+replicas** (the store's `read_only(primary, secondary)` mode + snapshot/restore seeding)
+rather than scaling up one box — reads use a separate path and don't disturb ingestion.
+
 ## Running `server start` by hand
 
 The indexer self-initializes: if `--database-dir` has no DB yet it builds one from
