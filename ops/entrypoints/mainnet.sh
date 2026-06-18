@@ -1,30 +1,10 @@
-#!/usr/bin/env bash
-#
 # Configless entrypoint for the mainnet mina-indexer image.
 # The mainnet genesis ledger + genesis block are embedded in the binary, so this
 # needs nothing mounted: `docker run` and it self-initializes and follows the tip.
-set -euo pipefail
-
-# hourly consistent DB checkpoints to /data/checkpoints/latest (override the
-# cadence with MINA_CHECKPOINT_INTERVAL_SECS); a crash resumes from it instead
-# of replaying a large WAL.
-export MINA_CHECKPOINT_DIR="${MINA_CHECKPOINT_DIR:-/data/checkpoints}"
-
-# Bound /data/blocks growth: keep only recent block files on disk (older blocks
-# already live in the speedb DB and are never re-read). Tune with
-# MINA_BLOCKS_RETENTION_LENGTH; set it to 0 to disable and keep every block.
-RETENTION="${MINA_BLOCKS_RETENTION_LENGTH:-1000}"
-retention_args=()
-if [ "$RETENTION" -gt 0 ] 2>/dev/null; then
-  retention_args=(--blocks-retention-length "$RETENTION")
-fi
-
-exec mina-indexer --socket /data/mi.sock server start \
-  --network mainnet \
-  --genesis-hash 3NKeMoncuHab5ScarV5ViyF16cJPT4taWNSaTLS64Dp67wuXigPZ \
-  --restore-from-checkpoint "$MINA_CHECKPOINT_DIR" \
-  --database-dir /data/db \
-  --blocks-dir /data/blocks \
-  --fetch-new-blocks-exe /bin/block-pull --fetch-new-blocks-delay 60 \
-  --missing-block-recovery-exe /bin/block-pull --missing-block-recovery-delay 120 \
-  ${retention_args[@]+"${retention_args[@]}"}
+#
+# Network-specific variables; the shared body follows (concatenated from
+# common.sh at image-build time).
+NETWORK=mainnet
+GENESIS_HASH=3NKeMoncuHab5ScarV5ViyF16cJPT4taWNSaTLS64Dp67wuXigPZ
+FETCH_EXE=/bin/block-pull
+# mainnet: no GENESIS_GZ — the genesis ledger is embedded in the binary.
