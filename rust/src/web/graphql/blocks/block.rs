@@ -178,6 +178,11 @@ pub struct Transactions {
     #[graphql(flatten)]
     pub coinbase_receiver: CoinbaseReceiverPK,
 
+    /// Whether the coinbase credited a brand-new account, meaning the
+    /// account-creation fee (1 MINA) was paid out of the coinbase reward.
+    #[graphql(name = "coinbase_receiver_account_creation_fee_paid")]
+    pub coinbase_receiver_account_creation_fee_paid: bool,
+
     /// Value block fee transfers
     pub fee_transfer: Vec<BlockFeeTransfer>,
 
@@ -528,6 +533,7 @@ impl BlockWithoutCanonicity {
             transactions: Transactions {
                 coinbase: coinbase.amount().to_string(),
                 coinbase_receiver_account: PK::new(db, coinbase.receiver.clone()),
+                coinbase_receiver_account_creation_fee_paid: coinbase.is_new_account,
                 coinbase_receiver: CoinbaseReceiverPK::new(db, coinbase.receiver),
                 fee_transfer: fee_transfers,
                 user_commands,

@@ -92,6 +92,12 @@ pub struct TransactionWithoutBlock {
     memo: String,
     failure_reason: Option<String>,
     is_applied: bool,
+
+    /// Whether the receiver of this command was a brand-new account, meaning
+    /// the account-creation fee (1 MINA) was paid out of this command.
+    #[graphql(name = "receiver_account_creation_fee_paid")]
+    receiver_account_creation_fee_paid: bool,
+
     zkapp: Option<TransactionZkapp>,
     tokens: Vec<String>,
 
@@ -494,6 +500,9 @@ impl TransactionWithoutBlock {
         let receiver = cmd.command.receiver_pk();
         let receiver = receiver.first();
 
+        let receiver_account_creation_fee_paid =
+            cmd.status.receiver_account_creation_fee_paid().is_some();
+
         let failure_reason = match cmd.status {
             CommandStatusData::Applied { .. } => None,
             CommandStatusData::Failed(failed_types, _) => {
@@ -506,6 +515,7 @@ impl TransactionWithoutBlock {
             zkapp,
             canonical,
             is_applied,
+            receiver_account_creation_fee_paid,
             failure_reason,
             amount: cmd.command.amount(),
             block_height: cmd.blockchain_length,
