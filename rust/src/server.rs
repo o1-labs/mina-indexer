@@ -59,6 +59,10 @@ pub struct GenesisVersion {
 pub struct IndexerConfiguration {
     pub genesis_ledger: GenesisLedger,
     pub version: IndexerVersion,
+    /// Custom-network descriptor from `--network-config`. `None` for the
+    /// hardcoded networks (behavior unchanged).
+    #[serde(default)]
+    pub network_config: Option<crate::chain::NetworkConfig>,
     pub blocks_dir: Option<PathBuf>,
     pub staking_ledgers_dir: Option<PathBuf>,
     pub prune_interval: u32,
@@ -133,6 +137,7 @@ impl IndexerConfiguration {
             ledger_cadence,
             reporting_freq,
             version,
+            network_config,
             do_not_ingest_orphan_blocks,
             check_mode,
             ..
@@ -164,6 +169,7 @@ impl IndexerConfiguration {
         let state_config = IndexerStateConfig {
             indexer_store: store.clone(),
             version: version.clone(),
+            network_config: network_config.clone(),
             genesis_ledger: genesis_ledger.clone(),
             transition_frontier_length: MAINNET_TRANSITION_FRONTIER_K,
             do_not_ingest_orphan_blocks,
@@ -223,6 +229,7 @@ impl IndexerConfiguration {
                     IndexerState::new_without_genesis_events(IndexerStateConfig {
                         indexer_store: store.clone(),
                         version,
+                        network_config,
                         genesis_ledger,
                         transition_frontier_length: MAINNET_TRANSITION_FRONTIER_K,
                         prune_interval,
@@ -1097,6 +1104,23 @@ impl GenesisVersion {
             global_slot: DEVNET_GENESIS_GLOBAL_SLOT,
         }
     }
+
+    /// Builds the runtime genesis from a `--network-config` descriptor.
+    pub fn from_config(genesis: &crate::chain::NetworkConfigGenesis) -> anyhow::Result<Self> {
+        use std::str::FromStr;
+        let last_vrf_output = match genesis.last_vrf_output.as_deref() {
+            Some(s) => VrfOutput::from_str(s)?,
+            None => VrfOutput::default(),
+        };
+
+        Ok(Self {
+            last_vrf_output,
+            state_hash: genesis.state_hash.as_str().into(),
+            prev_hash: genesis.prev_state_hash.as_str().into(),
+            blockchain_lenth: genesis.blockchain_length,
+            global_slot: genesis.global_slot,
+        })
+    }
 }
 
 impl IndexerVersion {
@@ -1135,6 +1159,17 @@ impl IndexerVersion {
             genesis: GenesisVersion::devnet(),
         }
     }
+
+    /// Builds the indexer version from a `--network-config` descriptor (custom
+    /// network). Used instead of the hardcoded genesis-hash dispatch.
+    pub fn from_config(config: &crate::chain::NetworkConfig) -> anyhow::Result<Self> {
+        Ok(Self {
+            network: config.network(),
+            version: config.pcb_version.clone(),
+            chain_id: ChainId::from_config(&config.chain_id)?,
+            genesis: GenesisVersion::from_config(&config.genesis)?,
+        })
+    }
 }
 
 impl From<(ServerArgsJson, PathBuf)> for IndexerConfiguration {
@@ -1153,6 +1188,7 @@ impl From<(ServerArgsJson, PathBuf)> for IndexerConfiguration {
         Self {
             version,
             genesis_ledger,
+            network_config: None,
             domain_socket_path: value.1,
             blocks_dir: value.0.blocks_dir.map(Into::into),
             staking_ledgers_dir: value.0.staking_ledgers_dir.map(Into::into),

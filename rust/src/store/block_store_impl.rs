@@ -12,6 +12,7 @@ use crate::{
         BlockComparison,
     },
     canonicity::{store::CanonicityStore, Canonicity},
+    chain::store::ChainStore,
     command::{internal::store::InternalCommandStore, store::UserCommandStore},
     constants::*,
     event::{db::*, store::EventStore, IndexerEvent},
@@ -96,7 +97,7 @@ impl BlockStore for IndexerStore {
         )?;
 
         // add to genesis state hash index
-        if is_genesis_hash(&state_hash) {
+        if is_genesis_hash(self, &state_hash) {
             self.set_block_genesis_state_hash_batch(&state_hash, &state_hash, &mut batch)?;
         } else {
             let genesis_state_hash = block.genesis_state_hash();
@@ -331,7 +332,7 @@ impl BlockStore for IndexerStore {
         let mut a_prev = block_parent(self, &a)?;
         let mut b_prev = block_parent(self, &b)?;
 
-        while a != b && !is_genesis_hash(&b) {
+        while a != b && !is_genesis_hash(self, &b) {
             // add blocks to appropriate collection
             let a_length = block_height(self, &a)?;
             let b_length = block_height(self, &b)?;
@@ -456,6 +457,14 @@ impl BlockStore for IndexerStore {
 
         if state_hash.0 == DEVNET_GENESIS_PREV_STATE_HASH {
             return Ok(Some(DEVNET_GENESIS_BLOCKCHAIN_LENGTH - 1));
+        }
+
+        // custom network (`--network-config`): the genesis prev hash & length come
+        // from the persisted runtime genesis, not a constant
+        if let Some(config_genesis) = self.get_config_genesis()? {
+            if *state_hash == config_genesis.prev_state_hash {
+                return Ok(Some(config_genesis.blockchain_length - 1));
+            }
         }
 
         Ok(self
@@ -1929,11 +1938,17 @@ fn block_parent(db: &IndexerStore, state_hash: &StateHash) -> Result<StateHash> 
         .expect("parent state hash"))
 }
 
-fn is_genesis_hash(hash: &StateHash) -> bool {
+fn is_genesis_hash(db: &IndexerStore, hash: &StateHash) -> bool {
     hash.0 == MAINNET_GENESIS_HASH
         || hash.0 == HARDFORK_GENESIS_HASH
         || hash.0 == MESA_GENESIS_HASH
         || hash.0 == DEVNET_GENESIS_HASH
+        // custom network (`--network-config`): the genesis hash is runtime
+        || db
+            .get_config_genesis()
+            .ok()
+            .flatten()
+            .is_some_and(|g| g.state_hash == *hash)
 }
 
 fn block_cmp(db: &IndexerStore, a: &StateHash, b: &StateHash) -> std::cmp::Ordering {

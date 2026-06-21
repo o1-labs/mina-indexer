@@ -158,6 +158,11 @@ pub enum ExtensionDirection {
 pub struct IndexerStateConfig {
     pub genesis_ledger: GenesisLedger,
     pub version: IndexerVersion,
+    /// Custom-network descriptor from `--network-config`. When `Some`, the
+    /// genesis block is loaded from its `genesis_block` file and the runtime
+    /// genesis is persisted so the store impls read it instead of the hardcoded
+    /// `*_GENESIS_*` constants. `None` => hardcoded-network behavior, unchanged.
+    pub network_config: Option<crate::chain::NetworkConfig>,
     pub indexer_store: Arc<IndexerStore>,
     pub transition_frontier_length: u32,
     pub prune_interval: u32,
@@ -182,6 +187,7 @@ impl IndexerStateConfig {
         Self {
             version,
             genesis_ledger,
+            network_config: None,
             indexer_store,
             canonical_threshold,
             transition_frontier_length,
@@ -298,9 +304,30 @@ impl IndexerState {
             .indexer_store
             .set_chain_id_for_network(&config.version.chain_id, &config.version.network)?;
 
+        // Custom network (`--network-config`): persist the runtime genesis so the
+        // store impls read it instead of the hardcoded `*_GENESIS_*` constants,
+        // and load the genesis block from the descriptor's `genesis_block` file.
+        if let Some(network_config) = config.network_config.as_ref() {
+            use crate::{chain::store::ConfigGenesis, ledger::LedgerHash};
+
+            let config_genesis = ConfigGenesis {
+                state_hash: config.version.genesis.state_hash.clone(),
+                prev_state_hash: config.version.genesis.prev_hash.clone(),
+                ledger_hash: LedgerHash::new_or_panic(
+                    network_config.genesis.ledger_hash.clone(),
+                ),
+                blockchain_length: config.version.genesis.blockchain_lenth,
+            };
+            config
+                .indexer_store
+                .set_config_genesis(&config_genesis)?;
+        }
+
         // Select the genesis block by genesis state hash so mesa-mut (also
         // PcbVersion::V2) gets its own fork block rather than the mainnet one.
-        let genesis_block = if config.version.genesis.state_hash.0 == MESA_GENESIS_HASH {
+        let genesis_block = if let Some(network_config) = config.network_config.as_ref() {
+            GenesisBlock::from_file(&network_config.genesis_block, config.version.version.clone())?
+        } else if config.version.genesis.state_hash.0 == MESA_GENESIS_HASH {
             GenesisBlock::new_mesa()?
         } else if config.version.genesis.state_hash.0 == DEVNET_GENESIS_HASH {
             GenesisBlock::new_devnet()?

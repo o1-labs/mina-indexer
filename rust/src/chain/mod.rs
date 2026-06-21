@@ -1,5 +1,6 @@
 //! Chain data
 
+pub mod network_config;
 pub mod store;
 
 mod id;
@@ -11,6 +12,7 @@ use std::collections::HashMap;
 // re-export types
 pub type ChainId = id::ChainId;
 pub type Network = network::Network;
+pub use network_config::{NetworkConfig, NetworkConfigGenesis};
 
 #[derive(Debug)]
 pub struct ChainData(pub HashMap<StateHash, (PcbVersion, ChainId)>);

@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use log::{debug, error, info, warn, LevelFilter};
 use mina_indexer::{
     block::precomputed::PcbVersion,
-    chain::ChainId,
+    chain::{ChainId, NetworkConfig},
     cli::{
         database::DatabaseArgs,
         server::{ServerArgs, ServerArgsJson},
@@ -386,27 +386,52 @@ fn process_indexer_configuration(
 
     // indexer version
     let network = args.db.network;
-    let (version, chain_id, genesis) = if genesis_hash == MESA_GENESIS_HASH {
-        (PcbVersion::V2, ChainId::mesa(), GenesisVersion::mesa())
-    } else if genesis_hash == DEVNET_GENESIS_HASH {
-        (PcbVersion::V2, ChainId::devnet(), GenesisVersion::devnet())
-    } else if genesis_hash == HARDFORK_GENESIS_HASH {
-        (PcbVersion::V2, ChainId::v2(), GenesisVersion::v2())
-    } else {
-        (PcbVersion::V1, ChainId::v1(), GenesisVersion::v1())
-    };
 
-    let genesis_ledger = parse_genesis_ledger(args.db.genesis_ledger, &version)?;
-    let version = IndexerVersion {
-        network,
-        version,
-        chain_id,
-        genesis,
+    // Custom network: when `--network-config <file.json>` is set, build the
+    // IndexerVersion from the descriptor instead of the hardcoded genesis-hash
+    // dispatch. The genesis ledger path may come from the descriptor's
+    // `genesis_ledger` (falling back to `--genesis-ledger`). The descriptor is
+    // threaded into IndexerConfiguration so the genesis block is loaded from its
+    // `genesis_block` file and the runtime genesis is persisted for the store.
+    let (version, genesis_ledger, network_config) = if let Some(ref path) = args.db.network_config {
+        info!("Loading network config from {path:#?}");
+        let config = NetworkConfig::parse_file(path)?;
+        let version = IndexerVersion::from_config(&config)?;
+
+        let ledger_path = args
+            .db
+            .genesis_ledger
+            .clone()
+            .or_else(|| config.genesis_ledger.clone());
+        let genesis_ledger = parse_genesis_ledger(ledger_path, &version.version)?;
+
+        (version, genesis_ledger, Some(config))
+    } else {
+        let (pcb_version, chain_id, genesis) = if genesis_hash == MESA_GENESIS_HASH {
+            (PcbVersion::V2, ChainId::mesa(), GenesisVersion::mesa())
+        } else if genesis_hash == DEVNET_GENESIS_HASH {
+            (PcbVersion::V2, ChainId::devnet(), GenesisVersion::devnet())
+        } else if genesis_hash == HARDFORK_GENESIS_HASH {
+            (PcbVersion::V2, ChainId::v2(), GenesisVersion::v2())
+        } else {
+            (PcbVersion::V1, ChainId::v1(), GenesisVersion::v1())
+        };
+
+        let genesis_ledger = parse_genesis_ledger(args.db.genesis_ledger, &pcb_version)?;
+        let version = IndexerVersion {
+            network,
+            version: pcb_version,
+            chain_id,
+            genesis,
+        };
+
+        (version, genesis_ledger, None)
     };
 
     Ok(IndexerConfiguration {
         genesis_ledger,
         version,
+        network_config,
         blocks_dir,
         staking_ledgers_dir,
         prune_interval,

@@ -78,6 +78,12 @@ impl ChainId {
         Self(DEVNET_CHAIN_ID.to_string())
     }
 
+    /// Chain id supplied by a `--network-config` descriptor (custom network).
+    /// Validates length & hex.
+    pub fn from_config(chain_id: &str) -> anyhow::Result<Self> {
+        chain_id.parse()
+    }
+
     /// Checks length & hex
     pub fn is_valid<T>(chain_id: T) -> bool
     where

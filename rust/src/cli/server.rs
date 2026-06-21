@@ -83,6 +83,7 @@ pub struct ServerArgsJson {
     pub protocol_txn_version_digest: Option<String>,
     pub protocol_network_version_digest: Option<String>,
     pub blocks_dir: Option<String>,
+    pub network_config: Option<String>,
     pub staking_ledgers_dir: Option<String>,
     pub database_dir: String,
     pub log_level: String,
@@ -136,6 +137,7 @@ impl From<ServerArgs> for ServerArgsJson {
             protocol_txn_version_digest: value.db.protocol_txn_version_digest,
             protocol_network_version_digest: value.db.protocol_network_version_digest,
             blocks_dir: value.db.blocks_dir.map(|d| d.display().to_string()),
+            network_config: value.db.network_config.map(|d| d.display().to_string()),
             staking_ledgers_dir: value
                 .db
                 .staking_ledgers_dir
@@ -176,6 +178,7 @@ impl From<ServerArgsJson> for ServerArgs {
             protocol_network_version_digest: value.protocol_network_version_digest,
             constraint_system_digests: value.constraint_system_digests,
             blocks_dir: value.blocks_dir.map(Into::into),
+            network_config: value.network_config.map(Into::into),
             staking_ledgers_dir: value.staking_ledgers_dir.map(Into::into),
             database_dir: value.database_dir.into(),
             log_level: LogLevelFilter::from_str(&value.log_level).expect("log level"),

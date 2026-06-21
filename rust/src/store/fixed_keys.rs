@@ -10,6 +10,11 @@ pub trait FixedKeys {
         "genesis_prev_state_hashes".as_bytes();
     const NUM_BLOCK_BYTES_PROCESSED: &'static [u8] = "num_block_bytes_processed".as_bytes();
 
+    /// Runtime genesis from `--network-config` (custom network). Absent for the
+    /// hardcoded networks, which resolve via the embedded `*_GENESIS_*`
+    /// constants exactly as before.
+    const CONFIG_GENESIS_KEY: &'static [u8] = "config_genesis".as_bytes();
+
     // version info
     const INDEXER_STORE_VERSION_KEY: &'static [u8] = "indexer_store_version".as_bytes();
 

@@ -37,6 +37,15 @@ pub struct DatabaseArgs {
     #[arg(long)]
     pub blocks_dir: Option<PathBuf>,
 
+    /// Path to a custom-network descriptor (JSON). When set, the indexer's
+    /// network (pcb version, chain id, genesis) is built from this file instead
+    /// of the hardcoded genesis-hash dispatch. Lets the indexer index an
+    /// arbitrary Mina network (e.g. a lightnet with a fresh genesis per boot).
+    /// When absent, behavior is unchanged: a known genesis hash resolves to its
+    /// embedded constants.
+    #[arg(long, value_name = "FILE")]
+    pub network_config: Option<PathBuf>,
+
     /// Directory of staking ledgers
     #[arg(long)]
     pub staking_ledgers_dir: Option<PathBuf>,

@@ -1,7 +1,10 @@
 //! Chain store impl
 
 use super::{column_families::ColumnFamilyHelpers, fixed_keys::FixedKeys, IndexerStore};
-use crate::chain::{store::ChainStore, ChainId, Network};
+use crate::chain::{
+    store::{ChainStore, ConfigGenesis},
+    ChainId, Network,
+};
 use log::trace;
 
 impl ChainStore for IndexerStore {
@@ -52,5 +55,20 @@ impl ChainStore for IndexerStore {
                 .get(Self::CHAIN_ID_KEY)?
                 .expect("chain id should exist in database"),
         ))
+    }
+
+    fn set_config_genesis(&self, genesis: &ConfigGenesis) -> anyhow::Result<()> {
+        trace!("Setting config genesis: {genesis:?}");
+        self.database
+            .put(Self::CONFIG_GENESIS_KEY, serde_json::to_vec(genesis)?)?;
+        Ok(())
+    }
+
+    fn get_config_genesis(&self) -> anyhow::Result<Option<ConfigGenesis>> {
+        trace!("Getting config genesis");
+        Ok(self
+            .database
+            .get_pinned(Self::CONFIG_GENESIS_KEY)?
+            .map(|bytes| serde_json::from_slice(&bytes).expect("config genesis bytes")))
     }
 }

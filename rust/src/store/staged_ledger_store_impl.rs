@@ -5,6 +5,7 @@ use crate::{
     base::{public_key::PublicKey, state_hash::StateHash},
     block::store::BlockStore,
     canonicity::store::CanonicityStore,
+    chain::store::ChainStore,
     constants::*,
     event::{db::*, store::EventStore, IndexerEvent},
     ledger::{
@@ -361,6 +362,32 @@ impl StagedLedgerStore for IndexerStore {
                     ledger_hash: LedgerHash::new_or_panic(DEVNET_GENESIS_LEDGER_HASH.into()),
                 },
             )))?;
+        } else if self
+            .get_config_genesis()?
+            .as_ref()
+            .is_some_and(|g| g.prev_state_hash == *state_hash)
+            && self
+                .add_staged_ledger_hash(
+                    &self
+                        .get_config_genesis()?
+                        .expect("config genesis present")
+                        .ledger_hash,
+                    state_hash,
+                )
+                .unwrap_or(false)
+        {
+            // custom network (`--network-config`): runtime genesis ledger hash &
+            // length instead of the hardcoded constants
+            let config_genesis = self
+                .get_config_genesis()?
+                .expect("config genesis present");
+            self.add_event(&IndexerEvent::Db(DbEvent::Ledger(
+                DbLedgerEvent::NewLedger {
+                    blockchain_length: config_genesis.blockchain_length - 1,
+                    state_hash: state_hash.clone(),
+                    ledger_hash: config_genesis.ledger_hash,
+                },
+            )))?;
         } else {
             match self.get_block_staged_ledger_hash(state_hash)? {
                 Some(ledger_hash) => {
@@ -380,7 +407,7 @@ impl StagedLedgerStore for IndexerStore {
                     }
                 }
                 None => {
-                    if !is_genesis_prev_state_hash(state_hash) {
+                    if !is_genesis_prev_state_hash(self, state_hash) {
                         bail!(
                             "Staged ledger hash block missing from store: {}",
                             state_hash,
@@ -478,7 +505,7 @@ impl StagedLedgerStore for IndexerStore {
                     curr_state_hash = parent_hash;
                 }
             } else {
-                if !is_genesis_prev_state_hash(&curr_state_hash) {
+                if !is_genesis_prev_state_hash(self, &curr_state_hash) {
                     error!("Block missing from store: {}", curr_state_hash);
                 }
 
@@ -666,9 +693,15 @@ impl StagedLedgerStore for IndexerStore {
     }
 }
 
-fn is_genesis_prev_state_hash(state_hash: &StateHash) -> bool {
+fn is_genesis_prev_state_hash(db: &IndexerStore, state_hash: &StateHash) -> bool {
     state_hash.0 == MAINNET_GENESIS_PREV_STATE_HASH
         || state_hash.0 == HARDFORK_GENESIS_PREV_STATE_HASH
         || state_hash.0 == MESA_GENESIS_PREV_STATE_HASH
         || state_hash.0 == DEVNET_GENESIS_PREV_STATE_HASH
+        // custom network (`--network-config`): runtime genesis prev hash
+        || db
+            .get_config_genesis()
+            .ok()
+            .flatten()
+            .is_some_and(|g| g.prev_state_hash == *state_hash)
 }

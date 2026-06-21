@@ -95,6 +95,17 @@ impl GenesisBlock {
         ))
     }
 
+    /// Loads a custom-network genesis block from a precomputed-block JSON file
+    /// (parallel to the embedded `new_v1`/`new_v2`/`new_mesa`/`new_devnet`
+    /// constructors). Used for the `--network-config` case. The block's
+    /// network/height/state_hash are taken from the filename
+    /// (`<network>-<height>-<state_hash>.json`).
+    pub fn from_file(path: &std::path::Path, version: PcbVersion) -> anyhow::Result<Self> {
+        let size = std::fs::metadata(path)?.len();
+        let block = PrecomputedBlock::parse_file(path, version)?;
+        Ok(Self(block, size))
+    }
+
     /// Creates the devnet checkpoint/genesis block as a PCB
     pub fn new_devnet() -> anyhow::Result<Self> {
         let contents = GENESIS_DEVNET_BLOCK_CONTENTS.to_vec();

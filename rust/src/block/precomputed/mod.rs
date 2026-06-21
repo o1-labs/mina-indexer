@@ -727,6 +727,9 @@ impl PrecomputedBlock {
             return DEVNET_GENESIS_HASH.into();
         }
 
+        // Custom network (`--network-config`): blocks carry their own
+        // genesis_state_hash (no checkpoint remap), so the fallthrough below
+        // honors it directly.
         match self {
             Self::V1(v1) => {
                 StateHash::from_hashv1(v1.protocol_state.body.t.t.genesis_state_hash.to_owned())
