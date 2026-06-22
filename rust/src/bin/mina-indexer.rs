@@ -205,7 +205,8 @@ impl ServerCommand {
         let web_hostname = args.web_hostname.clone();
         let web_port = args.web_port;
 
-        // initialize logging (human-readable by default; MINA_LOG_FORMAT=json for structured)
+        // initialize logging (human-readable by default; MINA_LOG_FORMAT=json for
+        // structured)
         mina_indexer::logging::init(args.db.log_level.0);
 
         check_or_write_pid_file(&database_dir);
@@ -249,7 +250,8 @@ impl ServerCommand {
 
 impl DatabaseCommand {
     async fn run(self, domain_socket_path: PathBuf) -> anyhow::Result<()> {
-        // initialize logging (human-readable by default; MINA_LOG_FORMAT=json for structured)
+        // initialize logging (human-readable by default; MINA_LOG_FORMAT=json for
+        // structured)
         mina_indexer::logging::init(LevelFilter::from(&self));
 
         match self {
@@ -588,9 +590,24 @@ fn check_or_write_pid_file<P: AsRef<Path>>(database_dir: P) {
     }
 
     if let Ok(pid) = read_pid_from_file(&pid_path) {
-        if platform::is_process_running(pid) {
-            error!("Will not start due to a running Indexer with PID {pid}");
+        let our_pid = process::id() as i32;
+        // Only refuse if a *different*, live `mina-indexer` actually holds the lock. A
+        // stale PID file from a prior run in the same PID namespace commonly
+        // records our own PID (PID 1 under an `exec` container entrypoint — the
+        // restarted process *is* that PID), and a recycled PID can belong to an
+        // unrelated process; neither is a running indexer. The old check ("is
+        // any process with this PID alive?") false-positived on every container
+        // restart and crash-looped the indexer.
+        if pid != our_pid && platform::is_process_running(pid) && platform::is_indexer_process(pid)
+        {
+            error!(
+                "Refusing to start: another mina-indexer (PID {pid}) is already running on the \
+                 database at {database_dir:?}. Stop it first, or point --database-dir elsewhere."
+            );
             process::exit(130);
+        }
+        if pid == our_pid || !platform::is_process_running(pid) {
+            info!("Reclaiming stale PID lock (PID {pid}) at {pid_path:?}");
         }
     }
 
