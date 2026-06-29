@@ -81,3 +81,105 @@ fn resolve(base: Option<&Path>, p: &Path) -> PathBuf {
         _ => p.to_path_buf(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::TempDir;
+
+    const DESCRIPTOR: &str = r#"{
+        "network": "testnet",
+        "pcb_version": "V2",
+        "chain_id": "6d6573612d6d75740000000000000000000000000000000000000000000000aa",
+        "genesis": {
+            "state_hash": "3NKQttwm8QRdvSZL62Lid8YAPCXBuAucZPDT8mJriHmUZFA8Ybns",
+            "prev_state_hash": "3NLp6dKNhYtsqUj49QYV5GtDaeocSJBAa2y2ER2QQLqLukE3wuZT",
+            "blockchain_length": 100,
+            "global_slot": 200,
+            "ledger_hash": "jxicjVogngTDjJh5EEsTUrvBxa3R4fhepqrAeexiRVMogJGqHdT",
+            "last_vrf_output": "8oxYNPIKw0xNLJJrhcXRICHIS34t4z-8fsvfTfSbIAA="
+        },
+        "genesis_ledger": "ledger.json",
+        "genesis_block": "blocks/genesis.json"
+    }"#;
+
+    fn write_descriptor(dir: &Path, contents: &str) -> anyhow::Result<PathBuf> {
+        let path = dir.join("network.json");
+        let mut file = std::fs::File::create(&path)?;
+        file.write_all(contents.as_bytes())?;
+        Ok(path)
+    }
+
+    #[test]
+    fn parses_all_fields() -> anyhow::Result<()> {
+        let dir = TempDir::new()?;
+        let path = write_descriptor(dir.path(), DESCRIPTOR)?;
+        let config = NetworkConfig::parse_file(&path)?;
+
+        assert_eq!(config.network, "testnet");
+        assert_eq!(config.pcb_version, PcbVersion::V2);
+        assert_eq!(config.network(), Network::from("testnet"));
+        assert_eq!(config.genesis.blockchain_length, 100);
+        assert_eq!(config.genesis.global_slot, 200);
+        assert_eq!(
+            config.genesis.last_vrf_output.as_deref(),
+            Some("8oxYNPIKw0xNLJJrhcXRICHIS34t4z-8fsvfTfSbIAA=")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn resolves_relative_paths_against_descriptor_dir() -> anyhow::Result<()> {
+        let dir = TempDir::new()?;
+        let path = write_descriptor(dir.path(), DESCRIPTOR)?;
+        let config = NetworkConfig::parse_file(&path)?;
+
+        assert_eq!(config.genesis_block, dir.path().join("blocks/genesis.json"));
+        assert_eq!(
+            config.genesis_ledger,
+            Some(dir.path().join("ledger.json"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn leaves_absolute_paths_untouched() -> anyhow::Result<()> {
+        let dir = TempDir::new()?;
+        let descriptor = DESCRIPTOR
+            .replace("\"blocks/genesis.json\"", "\"/abs/genesis.json\"")
+            .replace("\"ledger.json\"", "\"/abs/ledger.json\"");
+        let path = write_descriptor(dir.path(), &descriptor)?;
+        let config = NetworkConfig::parse_file(&path)?;
+
+        assert_eq!(config.genesis_block, PathBuf::from("/abs/genesis.json"));
+        assert_eq!(config.genesis_ledger, Some(PathBuf::from("/abs/ledger.json")));
+        Ok(())
+    }
+
+    #[test]
+    fn optional_fields_default_when_omitted() -> anyhow::Result<()> {
+        let dir = TempDir::new()?;
+        // drop `genesis_ledger` and `last_vrf_output`
+        let descriptor = r#"{
+            "network": "testnet",
+            "pcb_version": "V1",
+            "chain_id": "6d6573612d6d75740000000000000000000000000000000000000000000000aa",
+            "genesis": {
+                "state_hash": "3NKQttwm8QRdvSZL62Lid8YAPCXBuAucZPDT8mJriHmUZFA8Ybns",
+                "prev_state_hash": "3NLp6dKNhYtsqUj49QYV5GtDaeocSJBAa2y2ER2QQLqLukE3wuZT",
+                "blockchain_length": 1,
+                "global_slot": 0,
+                "ledger_hash": "jxicjVogngTDjJh5EEsTUrvBxa3R4fhepqrAeexiRVMogJGqHdT"
+            },
+            "genesis_block": "genesis.json"
+        }"#;
+        let path = write_descriptor(dir.path(), descriptor)?;
+        let config = NetworkConfig::parse_file(&path)?;
+
+        assert_eq!(config.pcb_version, PcbVersion::V1);
+        assert!(config.genesis_ledger.is_none());
+        assert!(config.genesis.last_vrf_output.is_none());
+        Ok(())
+    }
+}

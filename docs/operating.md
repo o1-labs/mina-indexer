@@ -88,6 +88,7 @@ Shared database flags (`cli/database.rs`) plus server flags (`cli/server.rs`):
 |------|---------|---------|
 | `--genesis-hash <HASH>` | mainnet hash | Selects network/parser version. |
 | `--genesis-ledger <FILE>` | embedded | State-dump ledger (required for mesa/devnet). |
+| `--network-config <FILE>` | — | Index an arbitrary custom network from a JSON descriptor instead of the hardcoded genesis-hash dispatch. See [Custom networks](#custom-networks). |
 | `--database-dir <DIR>` | `/var/lib/mina-indexer/database` | speedb data dir. |
 | `--blocks-dir <DIR>` | — | Watched precomputed-block dir (ingest source). |
 | `--staking-ledgers-dir <DIR>` | — | Optional staking-ledger dir. |
@@ -107,6 +108,44 @@ Shared database flags (`cli/database.rs`) plus server flags (`cli/server.rs`):
 
 Other subcommands: `server shutdown`, `database create|snapshot|restore|version`, the
 client query commands (`mina-indexer <query> …` against the running socket), and `version`.
+
+## Custom networks
+
+Normally the indexer selects its network by matching `--genesis-hash` against four
+compiled-in constants (mainnet V1, hardfork V2, devnet, mesa). A network whose genesis
+hash matches none of them — e.g. a **lightnet that regenerates its genesis on every
+boot** — would fall through to mainnet and index incorrectly.
+
+`--network-config <FILE>` supplies, at runtime, the same `(network, pcb_version,
+chain_id, genesis)` quantities the constants would have, so the indexer can index an
+arbitrary network without a recompile. The descriptor is a JSON file:
+
+```jsonc
+{
+  "network": "testnet",            // → Network::Custom("testnet")
+  "pcb_version": "V2",             // block parser version: "V1" | "V2"
+  "chain_id": "<64-hex>",          // 64-char hex chain id
+  "genesis": {
+    "state_hash":        "3N…",    // genesis block state hash
+    "prev_state_hash":   "3N…",    // synthetic pre-genesis hash
+    "blockchain_length": 0,
+    "global_slot":       0,
+    "ledger_hash":       "j…",
+    "last_vrf_output":   "…"       // optional; defaults when omitted
+  },
+  "genesis_ledger": "ledger.json", // optional; falls back to --genesis-ledger
+  "genesis_block":  "genesis.json" // precomputed-block JSON used as the genesis block
+}
+```
+
+- Relative `genesis_ledger` / `genesis_block` paths resolve against the **descriptor
+  file's directory**, so the descriptor and its inputs can travel together.
+- Pass `--network-config` on **every** `server start` for a custom network: the
+  network dispatch is recomputed each start, so without it the indexer falls back to
+  mainnet. (The runtime genesis is also persisted in the store, where the genesis-block
+  lookups read it.)
+- **Invariant:** known genesis hash → embedded constant; otherwise → this descriptor.
+  When `--network-config` is absent, behavior is byte-for-byte unchanged.
 
 ## Environment variables
 
