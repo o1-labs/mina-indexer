@@ -563,10 +563,20 @@ pub struct BlockQueryInput {
     pub coinbase_receiver: Option<BlockCoinbaseReceiverQueryInput>,
     pub protocol_state: Option<BlockProtocolStateQueryInput>,
     pub canonical: Option<bool>,
+
+    /// Archive-node-api compatible alias of `canonical`.
+    pub in_best_chain: Option<bool>,
+
     pub state_hash: Option<String>,
     pub block_height: Option<u32>,
     pub genesis_state_hash: Option<String>,
     pub block_stake_winner: Option<String>,
+
+    #[graphql(name = "dateTime_gte")]
+    pub date_time_gte: Option<crate::web::graphql::date_time::DateTime>,
+
+    #[graphql(name = "dateTime_lt")]
+    pub date_time_lt: Option<crate::web::graphql::date_time::DateTime>,
 
     #[graphql(name = "unique_block_producers_last_n_blocks")]
     pub unique_block_producers_last_n_blocks: Option<u32>,

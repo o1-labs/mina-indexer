@@ -2,7 +2,7 @@
 
 pub mod block;
 
-use super::{db, get_block_canonicity, millis_to_iso_date_string, pk::PK};
+use super::{date_time::DateTime, db, get_block_canonicity, millis_to_iso_date_string, pk::PK};
 use crate::{
     base::{public_key::PublicKey, state_hash::StateHash},
     block::{precomputed::PrecomputedBlock, store::BlockStore},
@@ -248,7 +248,7 @@ impl BlocksQueryRoot {
 
                 // avoid deserializing PCB if possible
                 let state_hash = state_hash_suffix(&key)?;
-                if let Some(query_canonicity) = query.as_ref().and_then(|q| q.canonical) {
+                if let Some(query_canonicity) = query.as_ref().and_then(|q| q.canonical.or(q.in_best_chain)) {
                     if get_block_canonicity(db, &state_hash) != query_canonicity {
                         continue;
                     }
@@ -316,7 +316,7 @@ impl BlocksQueryRoot {
 
                 // avoid deserializing PCB if possible
                 let state_hash = state_hash_suffix(&key)?;
-                if let Some(query_canonicity) = query.as_ref().and_then(|q| q.canonical) {
+                if let Some(query_canonicity) = query.as_ref().and_then(|q| q.canonical.or(q.in_best_chain)) {
                     if get_block_canonicity(db, &state_hash) != query_canonicity {
                         continue;
                     }
@@ -384,7 +384,7 @@ impl BlocksQueryRoot {
 
                 // avoid deserializing PCB if possible
                 let state_hash = state_hash_suffix(&key)?;
-                if let Some(query_canonicity) = query.as_ref().and_then(|q| q.canonical) {
+                if let Some(query_canonicity) = query.as_ref().and_then(|q| q.canonical.or(q.in_best_chain)) {
                     if get_block_canonicity(db, &state_hash) != query_canonicity {
                         continue;
                     }
@@ -461,7 +461,7 @@ impl BlocksQueryRoot {
 
                 // avoid deserializing PCB if possible
                 let state_hash = state_hash_suffix(&key)?;
-                if let Some(query_canonicity) = query.as_ref().and_then(|q| q.canonical) {
+                if let Some(query_canonicity) = query.as_ref().and_then(|q| q.canonical.or(q.in_best_chain)) {
                     if get_block_canonicity(db, &state_hash) != query_canonicity {
                         continue;
                     }
@@ -496,7 +496,7 @@ impl BlocksQueryRoot {
         for (key, _) in iter.flatten() {
             // avoid deserializing PCB if possible
             let state_hash = state_hash_suffix(&key)?;
-            if let Some(query_canonicity) = query.as_ref().and_then(|q| q.canonical) {
+            if let Some(query_canonicity) = query.as_ref().and_then(|q| q.canonical.or(q.in_best_chain)) {
                 if get_block_canonicity(db, &state_hash) != query_canonicity {
                     continue;
                 }
@@ -522,6 +522,7 @@ impl BlockQueryInput {
             creator_account,
             coinbase_receiver,
             canonical,
+            in_best_chain,
             or,
             and,
             state_hash,
@@ -533,12 +534,26 @@ impl BlockQueryInput {
             block_height_gte,
             block_height_lt,
             block_height_lte,
+            date_time_gte,
+            date_time_lt,
             protocol_state,
             unique_block_producers_last_n_blocks: _,
         } = self;
-        // canonical
-        if let Some(canonical) = canonical {
+        // canonical / inBestChain (archive-node-api alias)
+        if let Some(canonical) = canonical.as_ref().or(in_best_chain.as_ref()) {
             if block.canonical != *canonical {
+                return false;
+            }
+        }
+
+        // dateTime range (archive-node-api compatible)
+        if let Some(gte) = date_time_gte {
+            if DateTime(block.block.date_time.clone()).timestamp_millis() < gte.timestamp_millis() {
+                return false;
+            }
+        }
+        if let Some(lt) = date_time_lt {
+            if DateTime(block.block.date_time.clone()).timestamp_millis() >= lt.timestamp_millis() {
                 return false;
             }
         }
