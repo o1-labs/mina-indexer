@@ -558,6 +558,50 @@ impl TransactionWithoutBlock {
     }
 }
 
+/// Archive-node-api compatible zkApp command. The archive serves zkApp commands
+/// under `BlockTransactions.zkappCommands`, separate from `userCommands`.
+#[derive(Default, Clone, Debug, PartialEq, SimpleObject, Serialize)]
+pub struct ZkAppCommand {
+    pub hash: String,
+
+    /// zkApp fee-payer public key.
+    pub fee_payer: String,
+
+    /// Fee (nanomina) as a string.
+    pub fee: String,
+
+    /// Base58check-encoded memo.
+    pub memo: String,
+
+    /// "applied" | "failed".
+    pub status: String,
+
+    pub failure_reason: Option<String>,
+}
+
+impl ZkAppCommand {
+    pub fn new(cmd: &SignedCommandWithData) -> Self {
+        let failure_reason = match &cmd.status {
+            CommandStatusData::Applied { .. } => None,
+            CommandStatusData::Failed(failed_types, _) => {
+                failed_types.first().map(|f| f.to_string())
+            }
+        };
+        Self {
+            hash: cmd.txn_hash.to_string(),
+            fee_payer: cmd.command.fee_payer_pk().to_string(),
+            fee: cmd.command.fee().to_string(),
+            memo: cmd.command.memo_base58(),
+            status: if failure_reason.is_none() {
+                "applied".to_string()
+            } else {
+                "failed".to_string()
+            },
+            failure_reason,
+        }
+    }
+}
+
 impl TransactionQueryInput {
     #[allow(clippy::too_many_lines)]
     fn matches(&self, transaction: &Transaction) -> bool {

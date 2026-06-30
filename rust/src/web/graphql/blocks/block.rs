@@ -15,7 +15,7 @@ use crate::{
     web::graphql::{
         get_block_canonicity,
         pk::{CoinbaseReceiverPK, CreatorPK, ProverPK, RecipientPK, WinnerPK},
-        transactions::TransactionWithoutBlock,
+        transactions::{TransactionWithoutBlock, ZkAppCommand},
     },
 };
 use async_graphql::{self, Enum, SimpleObject};
@@ -186,8 +186,12 @@ pub struct Transactions {
     /// Value block fee transfers
     pub fee_transfer: Vec<BlockFeeTransfer>,
 
-    /// Value block user commands
+    /// Value block user commands (payments & delegations only, matching the
+    /// archive node; zkApp commands are served under `zkapp_commands`).
     pub user_commands: Vec<TransactionWithoutBlock>,
+
+    /// Value block zkApp commands. Archive-node-api compatible.
+    pub zkapp_commands: Vec<ZkAppCommand>,
 }
 
 #[derive(Default, SimpleObject, Serialize)]
@@ -455,11 +459,22 @@ impl BlockWithoutCanonicity {
             .map(|ft| BlockFeeTransfer::new(db, ft))
             .collect();
 
-        // user commands
-        let user_commands: Vec<_> = SignedCommandWithData::from_precomputed(block)
-            .into_iter()
-            .map(|cmd| TransactionWithoutBlock::new(db, cmd, canonical, num_commands))
-            .collect();
+        // user commands — split payments/delegations (userCommands) from zkApp
+        // commands (zkappCommands), matching the archive node's layout.
+        let mut user_commands = Vec::new();
+        let mut zkapp_commands = Vec::new();
+        for cmd in SignedCommandWithData::from_precomputed(block) {
+            if cmd.command.is_zkapp() {
+                zkapp_commands.push(ZkAppCommand::new(&cmd));
+            } else {
+                user_commands.push(TransactionWithoutBlock::new(
+                    db,
+                    cmd,
+                    canonical,
+                    num_commands,
+                ));
+            }
+        }
 
         // SNARKs
         let snark_jobs: Vec<_> = SnarkWorkSummary::from_precomputed(block)
@@ -537,6 +552,7 @@ impl BlockWithoutCanonicity {
                 coinbase_receiver: CoinbaseReceiverPK::new(db, coinbase.receiver),
                 fee_transfer: fee_transfers,
                 user_commands,
+                zkapp_commands,
             },
         }
     }

@@ -123,6 +123,12 @@ impl SignedCommand {
         }
     }
 
+    /// Whether this is a zkApp command (the archive node serves these under a
+    /// separate `zkappCommands` field, not `userCommands`).
+    pub fn is_zkapp(&self) -> bool {
+        matches!(self, Self::V2(UserCommandData::ZkappCommandData(_)))
+    }
+
     /// Base58check-encoded memo, matching the mina archive node's `memo` field.
     /// V2 commands already carry the base58 form; V1 re-encodes the raw bytes
     /// with the user-command-memo version byte.
