@@ -57,11 +57,21 @@ pub enum TransactionSortByInput {
 
 #[derive(Clone, Debug, SimpleObject, Serialize)]
 pub struct TransactionWithoutBlock {
-    /// Value amount (nano)
+    /// Value amount (nano) — internal numeric, used for filtering/sorting.
+    #[graphql(skip)]
     amount: u64,
 
-    /// Value txn fee (nanomina)
+    /// Value amount (nanomina) as a string. Archive-node-api compatible.
+    #[graphql(name = "amount")]
+    amount_str: String,
+
+    /// Value txn fee (nanomina) — internal numeric, used for filtering/sorting.
+    #[graphql(skip)]
     fee: u64,
+
+    /// Value txn fee (nanomina) as a string. Archive-node-api compatible.
+    #[graphql(name = "fee")]
+    fee_str: String,
 
     /// Value txn sender public key
     #[graphql(deprecation = "Use sender instead")]
@@ -89,7 +99,14 @@ pub struct TransactionWithoutBlock {
     canonical: bool,
     hash: String,
     kind: String,
+
+    /// Base58check-encoded memo. Archive-node-api compatible.
     memo: String,
+
+    /// Decoded (human-readable) memo text. Indexer enrichment.
+    #[graphql(name = "memoText")]
+    memo_text: String,
+
     failure_reason: Option<String>,
     is_applied: bool,
 
@@ -517,9 +534,11 @@ impl TransactionWithoutBlock {
             },
             failure_reason,
             amount: cmd.command.amount(),
+            amount_str: cmd.command.amount().to_string(),
             block_height: cmd.blockchain_length,
             global_slot: cmd.global_slot_since_genesis,
             fee: cmd.command.fee(),
+            fee_str: cmd.command.fee().to_string(),
             sender: SenderPK::new(db, sender.clone()),
             from: sender.0,
             receiver_account: receiver.cloned().map(|pk| PK::new(db, pk)),
@@ -527,7 +546,8 @@ impl TransactionWithoutBlock {
             receiver: receiver.map(PublicKey::to_string),
             hash: cmd.txn_hash.to_string(),
             kind: cmd.command.kind().to_string(),
-            memo: cmd.command.memo(),
+            memo: cmd.command.memo_base58(),
+            memo_text: cmd.command.memo(),
             nonce: cmd.command.nonce().0,
             tokens: cmd.command.tokens().into_iter().map(|t| t.0).collect(),
             epoch_num_user_commands: num_commands[0],
