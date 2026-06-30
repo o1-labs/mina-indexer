@@ -4,6 +4,7 @@
 
 mod block;
 mod canonicity;
+mod chain;
 mod command;
 mod event;
 mod ledger;

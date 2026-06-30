@@ -1,0 +1,15 @@
+{
+  "network": "testnet",
+  "pcb_version": "V2",
+  "chain_id": "6d6573612d6d75740000000000000000000000000000000000000000000000aa",
+  "genesis": {
+    "state_hash": "3NK4BpDSekaqsG6tx8Nse2zJchRft2JpnbvMiog55WCr5xJZaKeP",
+    "prev_state_hash": "3NLRTfY4kZyJtvaP4dFenDcxfoMfT3uEpkWS913KkeXLtziyVd15",
+    "blockchain_length": 359605,
+    "global_slot": 564480,
+    "ledger_hash": "jwNw4qb6tnNhpQNxiMLem9WumxZTwmbSx3fYXW4FP3hZRkoQJSE",
+    "last_vrf_output": "FSBXKqZKgSiy1T6SsjbrT0i84oDkBpUVsLH1zRviuIj0DjuGEXs="
+  },
+  "genesis_ledger": "../../../data/genesis_ledgers/mainnet.json",
+  "genesis_block": "../hardfork/mainnet-359605-3NK4BpDSekaqsG6tx8Nse2zJchRft2JpnbvMiog55WCr5xJZaKeP.json"
+}
