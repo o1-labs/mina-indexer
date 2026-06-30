@@ -130,6 +130,11 @@ pub struct BlockWithoutCanonicity {
     #[graphql(flatten)]
     pub coinbase_receiver: CoinbaseReceiverPK,
 
+    /// Value parent (previous) state hash. Archive-node-api compatible alias
+    /// for `protocol_state.previous_state_hash`.
+    #[graphql(name = "parentHash")]
+    pub parent_hash: String,
+
     /// Value protocol state
     pub protocol_state: ProtocolState,
 
@@ -483,6 +488,7 @@ impl BlockWithoutCanonicity {
             creator: CreatorPK::new(db, creator.clone()),
             creator_account: PK::new(db, creator),
             received_time,
+            parent_hash: previous_state_hash.clone(),
             protocol_state: ProtocolState {
                 previous_state_hash,
                 blockchain_state: BlockchainState {

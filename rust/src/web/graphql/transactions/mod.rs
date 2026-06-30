@@ -92,6 +92,10 @@ pub struct TransactionWithoutBlock {
     memo: String,
     failure_reason: Option<String>,
     is_applied: bool,
+
+    /// Transaction status: "applied" | "failed". Archive-node-api compatible.
+    status: String,
+
     zkapp: Option<TransactionZkapp>,
     tokens: Vec<String>,
 
@@ -506,6 +510,11 @@ impl TransactionWithoutBlock {
             zkapp,
             canonical,
             is_applied,
+            status: if is_applied {
+                "applied".to_string()
+            } else {
+                "failed".to_string()
+            },
             failure_reason,
             amount: cmd.command.amount(),
             block_height: cmd.blockchain_length,
