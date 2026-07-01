@@ -11,8 +11,8 @@ use crate::{
     mina_blocks::v2::{
         self,
         staged_ledger_diff::{
-            AccountUpdates, Call, SignedCommandPayloadBody, SignedCommandPayloadKind,
-            StakeDelegationPayload, Status, UserCommandData, ZkappCommandData,
+            AccountUpdates, Call, SignedCommandPayloadBody, StakeDelegationPayload, Status,
+            UserCommandData, ZkappCommandData,
         },
     },
     proof_systems::signer::pubkey::CompressedPubKey,
@@ -29,7 +29,7 @@ use crate::{
     },
     utility::functions::nanomina_to_mina,
 };
-use anyhow::{Context, Result};
+use anyhow::Result;
 use blake2::digest::VariableOutput;
 use log::trace;
 use mina_serialization_versioned::Versioned;
@@ -692,25 +692,24 @@ fn build_v2_hashable(v2: &UserCommandData) -> Result<V2HashSignedCommand> {
     let UserCommandData::SignedCommandData(data) = v2 else {
         anyhow::bail!("not a signed command");
     };
-    let cmd = SignedCommand::V2(v2.clone());
+    let common = &data.payload.common;
 
     // base58check memo -> raw 34-byte memo (strip version byte + 4-byte checksum)
-    let decoded = bs58::decode(&data.payload.common.memo).into_vec()?;
+    let decoded = bs58::decode(&common.memo).into_vec()?;
+    if decoded.len() < 5 {
+        anyhow::bail!("v2 memo base58 decoded to {} bytes (< 5)", decoded.len());
+    }
     let memo = SignedCommandMemo(decoded[1..decoded.len() - 4].to_vec());
 
-    let receivers = cmd.receiver_pk();
-    let receiver = receivers.first().context("v2 signed command receiver")?;
-    let body = if matches!(
-        data.payload.body.0,
-        SignedCommandPayloadKind::StakeDelegation
-    ) {
-        V2HashBody::StakeDelegation(V2HashSetDelegate::SetDelegate {
-            new_delegate: v2_compressed(&receiver.0)?,
-        })
-    } else {
-        V2HashBody::Payment {
-            receiver_pk: v2_compressed(&receiver.0)?,
-            amount: cmd.amount(),
+    let body = match &data.payload.body.1 {
+        SignedCommandPayloadBody::Payment(payment) => V2HashBody::Payment {
+            receiver_pk: v2_compressed(&payment.receiver_pk.0)?,
+            amount: payment.amount.0,
+        },
+        SignedCommandPayloadBody::StakeDelegation((_, delegation)) => {
+            V2HashBody::StakeDelegation(V2HashSetDelegate::SetDelegate {
+                new_delegate: v2_compressed(&delegation.new_delegate.0)?,
+            })
         }
     };
 
@@ -723,10 +722,10 @@ fn build_v2_hashable(v2: &UserCommandData) -> Result<V2HashSignedCommand> {
     Ok(V2HashSignedCommand {
         payload: V2HashPayload {
             common: V2HashCommon {
-                fee: cmd.fee(),
-                fee_payer_pk: v2_compressed(&cmd.fee_payer_pk().0)?,
-                nonce: cmd.nonce().0 as i32,
-                valid_until: V2GlobalSlot::SinceGenesis(cmd.valid_until()),
+                fee: common.fee.0,
+                fee_payer_pk: v2_compressed(&common.fee_payer_pk.0)?,
+                nonce: common.nonce.0 as i32,
+                valid_until: V2GlobalSlot::SinceGenesis(common.valid_until.0 as i32),
                 memo,
             },
             body,
