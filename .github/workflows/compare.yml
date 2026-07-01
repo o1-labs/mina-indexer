@@ -1,0 +1,48 @@
+# Daily consistency check: the deployed mina-indexer GraphQL API vs the
+# canonical mina archive-node API, over the block range both serve.
+#
+# Runs the `#[ignore]`d `devnet_indexer_matches_archive` integration test
+# (rust/tests/compare/), which fails on any block-identity / transaction-count /
+# signed-command-content / signed-command transaction-hash discrepancy. (zkApp-
+# command hashes aren't compared yet — covered by the count check.)
+#
+# Scheduled only (no PR gating) plus manual dispatch. Builds via Nix, same as
+# the OCI image workflow.
+name: Endpoint comparison
+
+on:
+  schedule:
+    - cron: "0 6 * * *" # 06:00 UTC daily
+  workflow_dispatch:
+    inputs:
+      indexer_url:
+        description: Indexer GraphQL endpoint
+        default: https://devnet-indexer.gcp.o1test.net/graphql
+      archive_url:
+        description: Archive-node GraphQL endpoint
+        default: https://devnet-archive-node-api.gcp.o1test.net/
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+      - name: Nix build cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Compare indexer vs archive node
+        env:
+          INDEXER_GQL_URL: ${{ github.event.inputs.indexer_url || 'https://devnet-indexer.gcp.o1test.net/graphql' }}
+          ARCHIVE_GQL_URL: ${{ github.event.inputs.archive_url || 'https://devnet-archive-node-api.gcp.o1test.net/' }}
+          GIT_COMMIT_HASH: ${{ github.sha }}
+        run: |
+          nix develop -c bash -c '
+            cd rust
+            cargo test --test mod devnet_indexer_matches_archive -- --ignored --nocapture
+          '

@@ -5,6 +5,7 @@
 mod block;
 mod canonicity;
 mod command;
+mod compare;
 mod event;
 mod ledger;
 #[cfg(test)]
