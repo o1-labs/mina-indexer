@@ -7,13 +7,13 @@
 //!   - transaction counts  (payments/delegations and zkApp commands)
 //!   - signed-command content, joined by `(sender, nonce)`: kind, amount, fee,
 //!     receiver
-//!   - transaction hashes   (reported; opt-in hard failure — see below)
+//!   - signed-command transaction hashes (hard failure — the v2 hash is fixed)
 //!
-//! Schema differences that are normalized here, not flagged:
-//!   - the indexer folds zkApp commands into `userCommands` (kind `ZKAPP`); the
-//!     archive splits them into `zkappCommands`
-//!   - archive amounts/fees are strings, the indexer's are numbers
-//!   - archive `kind` is lower-case (`payment`), the indexer's upper-case
+//! Targets the archive-compatible indexer schema: `userCommands` are
+//! payments/delegations and zkApp commands live under `zkappCommands` (same as
+//! the archive). The only normalization left is `kind` casing (archive
+//! lower-case `payment`, indexer upper-case); amount/fee are parsed leniently
+//! (both sides now return strings).
 //!
 //! This is network-bound and `#[ignore]`d; the scheduled job runs it with
 //! `--ignored`. Everything is overridable via env so it can target other
@@ -22,12 +22,9 @@
 //! - `INDEXER_GQL_URL` / `ARCHIVE_GQL_URL`: the two endpoints.
 //! - `COMPARE_MIN_HEIGHT`: low end of the range (default: the indexer's min).
 //! - `COMPARE_TIP_LAG`: blocks to trim below the shared tip (default 5).
-//! - `COMPARE_STRICT_TX_HASH=1`: make tx-hash mismatches fail the test.
 //!
-//! Tx-hash mismatches are reported but non-fatal by default: the indexer
-//! currently computes v2 hashes from the JSON encoding rather than bin_prot
-//! (see `hash_command_v2`), so they diverge from mina until that is fixed. Set
-//! COMPARE_STRICT_TX_HASH=1 to enforce them once the fix lands.
+//! zkApp-command hashes are not compared yet (a separate `Zkapp_command` hasher
+//! is still to be ported) — they're covered by the count check instead.
 
 use anyhow::{anyhow, Context};
 use serde_json::{json, Value};
@@ -188,7 +185,7 @@ fn fetch_indexer(
         "{{ blocks(query: {{blockHeight_gte: {lo}, blockHeight_lt: {hi}, canonical: true}}, \
          limit: {PAGE}, sortBy: BLOCKHEIGHT_ASC) {{ blockHeight stateHash creator \
          transactions {{ userCommands {{ hash kind sender amount fee nonce \
-         receiver_account {{ publicKey }} }} }} }} }}"
+         receiver_account {{ publicKey }} }} zkappCommands {{ hash }} }} }} }}"
     );
     let data = gql(agent, url, &query)?;
     let mut out = BTreeMap::new();
@@ -199,14 +196,13 @@ fn fetch_indexer(
             creator: b["creator"].as_str().unwrap_or_default().to_string(),
             ..Default::default()
         };
-        for u in arr(&b["transactions"]["userCommands"]) {
+        let tx = &b["transactions"];
+        // The archive-compatible indexer splits zkApp commands into a separate
+        // `zkappCommands` field (same as the archive), so `userCommands` holds
+        // only payments/delegations.
+        blk.zkapp_count = arr(&tx["zkappCommands"]).len();
+        for u in arr(&tx["userCommands"]) {
             let kind = norm_kind(u["kind"].as_str().unwrap_or_default());
-            // the indexer folds zkApp commands in here; the archive keeps them
-            // in `zkappCommands`, so bucket them the same way to compare counts.
-            if kind == "ZKAPP" {
-                blk.zkapp_count += 1;
-                continue;
-            }
             let sender = u["sender"].as_str().unwrap_or_default().to_string();
             let nonce = as_u64(&u["nonce"]).unwrap_or_default();
             blk.signed.insert(
@@ -231,7 +227,7 @@ fn fetch_indexer(
 }
 
 /// Appends any hard discrepancies for one height; returns the tx-hash mismatch
-/// count (reported separately, non-fatal by default).
+/// count (asserted by the caller — signed-command hashes must match).
 fn compare_block(height: u32, a: &Block, i: &Block, hard: &mut Vec<String>) -> usize {
     if a.state_hash != i.state_hash {
         hard.push(format!(
@@ -282,7 +278,6 @@ fn compare_block(height: u32, a: &Block, i: &Block, hard: &mut Vec<String>) -> u
 fn devnet_indexer_matches_archive() -> anyhow::Result<()> {
     let indexer = env_or("INDEXER_GQL_URL", DEFAULT_INDEXER);
     let archive = env_or("ARCHIVE_GQL_URL", DEFAULT_ARCHIVE);
-    let strict_hash = std::env::var("COMPARE_STRICT_TX_HASH").is_ok();
     let agent = agent();
 
     // Only compare heights both serve, and trim a few below the shared tip to
@@ -341,25 +336,14 @@ fn devnet_indexer_matches_archive() -> anyhow::Result<()> {
     if hard.len() > 50 {
         eprintln!("  .. and {} more", hard.len() - 50);
     }
-    if hash_mismatches > 0 {
-        eprintln!(
-            "NOTE: {hash_mismatches} signed-command tx-hash mismatches \
-             (known v2 hash bug; set COMPARE_STRICT_TX_HASH=1 to fail on these)"
-        );
-    }
-
-    if strict_hash {
-        assert!(
-            hard.is_empty() && hash_mismatches == 0,
-            "{} hard discrepancies, {hash_mismatches} tx-hash mismatches (see log)",
-            hard.len()
-        );
-    } else {
-        assert!(
-            hard.is_empty(),
-            "{} hard discrepancies (see log)",
-            hard.len()
-        );
-    }
+    // Signed-command tx hashes must match (fixed in the v2 hash work). zkApp
+    // command hashes aren't compared yet — mina's Zkapp_command hasher is a
+    // separate algorithm still to be ported — so they're covered by the count
+    // check, not by hash.
+    assert!(
+        hard.is_empty() && hash_mismatches == 0,
+        "{} hard discrepancies, {hash_mismatches} signed-command tx-hash mismatches (see log)",
+        hard.len()
+    );
     Ok(())
 }

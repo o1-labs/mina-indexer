@@ -3,9 +3,8 @@
 #
 # Runs the `#[ignore]`d `devnet_indexer_matches_archive` integration test
 # (rust/tests/compare/), which fails on any block-identity / transaction-count /
-# signed-command-content discrepancy. Transaction-hash mismatches are reported
-# but non-fatal until the v2 hash bug is fixed; flip COMPARE_STRICT_TX_HASH=1
-# here once it is.
+# signed-command-content / signed-command transaction-hash discrepancy. (zkApp-
+# command hashes aren't compared yet — covered by the count check.)
 #
 # Scheduled only (no PR gating) plus manual dispatch. Builds via Nix, same as
 # the OCI image workflow.
@@ -22,10 +21,6 @@ on:
       archive_url:
         description: Archive-node GraphQL endpoint
         default: https://devnet-archive-node-api.gcp.o1test.net/
-      strict_tx_hash:
-        description: Fail on transaction-hash mismatches
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -45,7 +40,6 @@ jobs:
         env:
           INDEXER_GQL_URL: ${{ github.event.inputs.indexer_url || 'https://devnet-indexer.gcp.o1test.net/graphql' }}
           ARCHIVE_GQL_URL: ${{ github.event.inputs.archive_url || 'https://devnet-archive-node-api.gcp.o1test.net/' }}
-          COMPARE_STRICT_TX_HASH: ${{ github.event.inputs.strict_tx_hash == 'true' && '1' || '' }}
           GIT_COMMIT_HASH: ${{ github.sha }}
         run: |
           nix develop -c bash -c '
