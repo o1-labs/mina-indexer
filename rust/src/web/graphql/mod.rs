@@ -55,9 +55,25 @@ pub struct Root(
     version::VersionQueryRoot,
 );
 
+/// Max GraphQL query nesting depth. Guards against nested-recursion DoS — a
+/// self-referential selection (e.g. block → transactions → block → …) can otherwise
+/// blow up execution unbounded. Set comfortably above the deepest legitimate query
+/// (a full GraphiQL introspection nests ~13 deep) so real clients are unaffected.
+/// Tunable.
+const MAX_QUERY_DEPTH: usize = 20;
+
+/// Max GraphQL query *structural* complexity (total selected fields). A backstop
+/// against very large single queries. NOTE: this counts fields once — it does not
+/// multiply by list `limit:` sizes (that needs per-field complexity annotations, a
+/// follow-up); list sizes are bounded today by the per-endpoint pagination caps.
+/// Tunable.
+const MAX_QUERY_COMPLEXITY: usize = 1000;
+
 /// Build schema for all endpoints
 pub fn build_schema(store: Arc<IndexerStore>) -> Schema<Root, EmptyMutation, EmptySubscription> {
     Schema::build(Root::default(), EmptyMutation, EmptySubscription)
+        .limit_depth(MAX_QUERY_DEPTH)
+        .limit_complexity(MAX_QUERY_COMPLEXITY)
         .data(store)
         .finish()
 }
@@ -92,4 +108,51 @@ pub(crate) fn get_block(db: &Arc<IndexerStore>, state_hash: &StateHash) -> Preco
         .unwrap()
         .unwrap()
         .0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    /// A `__type(name:"Query") { ofType { ofType { … name … } } }` introspection query
+    /// nested `levels` deep — a schema-agnostic way to exercise the depth limiter
+    /// (`__Type.ofType` is self-referential, and every field counts toward depth).
+    fn nested_introspection(levels: usize) -> String {
+        let mut q = String::from("{ __type(name: \"Query\") { ");
+        for _ in 0..levels {
+            q.push_str("ofType { ");
+        }
+        q.push_str("name ");
+        for _ in 0..levels {
+            q.push_str("} ");
+        }
+        q.push('}');
+        q.push('}');
+        q
+    }
+
+    #[tokio::test]
+    async fn rejects_queries_deeper_than_the_limit() {
+        let dir = TempDir::new().unwrap();
+        let store = Arc::new(IndexerStore::new(dir.path(), true).unwrap());
+        let schema = build_schema(store);
+
+        // Well past MAX_QUERY_DEPTH: rejected at validation, before any resolver runs.
+        let deep = schema
+            .execute(nested_introspection(MAX_QUERY_DEPTH + 5))
+            .await;
+        assert!(
+            !deep.errors.is_empty(),
+            "a query deeper than MAX_QUERY_DEPTH must be rejected"
+        );
+
+        // A shallow query must still succeed — the guard doesn't affect real traffic.
+        let shallow = schema.execute("{ __typename }").await;
+        assert!(
+            shallow.errors.is_empty(),
+            "shallow query should pass, got: {:?}",
+            shallow.errors
+        );
+    }
 }
