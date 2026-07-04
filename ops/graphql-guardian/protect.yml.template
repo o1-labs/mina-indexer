@@ -1,0 +1,69 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# graphql-protect — OPTIONAL shared GraphQL guardian for the Mina stack.
+#
+# This is a *defense-in-depth / cross-service* layer, NOT a requirement. The
+# indexer already enforces query depth / complexity / execution-timeout /
+# introspection IN-PROCESS (see `mina-indexer server start --graphql-*` flags),
+# so a self-hosted indexer is protected with zero extra components.
+#
+# Use this proxy to put ONE uniform policy at the edge in front of:
+#   • the OCaml **node** GraphQL (default :3085) — which can't be guarded
+#     in-process, so a proxy is the only option there; and/or
+#   • the indexer, as a belt-and-suspenders layer.
+#
+# `target.host` is rendered from MINA_NODE_GRAPHQL_PORT (default 3085) at
+# `docker compose up` — graphql-protect itself has no env-based config override,
+# so docker-compose.yml substitutes it into this template. See .env.example.
+# ─────────────────────────────────────────────────────────────────────────────
+
+web:
+  host: 0.0.0.0:8080              # the guardian listens here — point clients at it
+  path: /graphql
+  request_body_max_bytes: 102400  # ~100 KB — reject oversized request bodies
+  read_timeout: 5s
+  write_timeout: 15s
+
+target:
+  host: "@@TARGET_URL@@"          # upstream GraphQL base, e.g. http://host.docker.internal:3085
+  timeout: 30s
+
+# graphql-protect loads the upstream SDL at startup and exits if it's missing,
+# so schema.graphql is REQUIRED — export it from the upstream once (see README).
+schema:
+  path: /app/schema.graphql
+  auto_reload:
+    enabled: false
+
+obfuscate_upstream_errors: true   # don't leak upstream internals in errors
+enforce_post: # reject GET queries (mutations/queries must be POST)
+  enabled: true
+
+# Schema-aware extras — off by default. Safe to enable once schema.graphql is
+# the real upstream SDL.
+block_field_suggestions:
+  enabled: false
+persisted_operations:
+  enabled: false
+
+# ── DoS guards (operate on the query AST; tune to your clients' real queries) ──
+max_depth:
+  field:
+    enabled: true
+    max: 15
+    reject_on_failure: true
+  list:
+    enabled: true
+    max: 15
+    reject_on_failure: true
+max_aliases:
+  enabled: true
+  max: 15
+  reject_on_failure: true
+max_tokens:
+  enabled: true
+  max: 10000
+  reject_on_failure: true
+max_batch:
+  enabled: true
+  max: 5
+  reject_on_failure: true
