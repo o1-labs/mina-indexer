@@ -28,6 +28,16 @@ pub struct ServerArgs {
     #[arg(long, env = "MINA_GRAPHQL_MAX_COMPLEXITY", default_value_t = DEFAULT_GRAPHQL_MAX_COMPLEXITY)]
     pub graphql_max_complexity: usize,
 
+    /// Max wall-clock seconds a single GraphQL query may run before it's aborted
+    /// (DoS guard against slow-but-valid queries; `0` disables).
+    #[arg(long, env = "MINA_GRAPHQL_TIMEOUT_SECS", default_value_t = DEFAULT_GRAPHQL_TIMEOUT_SECS)]
+    pub graphql_timeout_secs: u64,
+
+    /// Disable GraphQL introspection (recommended in production to hide the schema;
+    /// also disables the GraphiQL explorer's schema view).
+    #[arg(long, env = "MINA_GRAPHQL_DISABLE_INTROSPECTION", default_value_t = false)]
+    pub graphql_disable_introspection: bool,
+
     /// Start with data consistency checks
     #[arg(long, default_value_t = false)]
     pub self_check: bool,
@@ -92,6 +102,10 @@ fn default_graphql_max_complexity() -> usize {
     DEFAULT_GRAPHQL_MAX_COMPLEXITY
 }
 
+fn default_graphql_timeout_secs() -> u64 {
+    DEFAULT_GRAPHQL_TIMEOUT_SECS
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct ServerArgsJson {
     pub genesis_ledger: Option<String>,
@@ -115,6 +129,10 @@ pub struct ServerArgsJson {
     pub graphql_max_depth: usize,
     #[serde(default = "default_graphql_max_complexity")]
     pub graphql_max_complexity: usize,
+    #[serde(default = "default_graphql_timeout_secs")]
+    pub graphql_timeout_secs: u64,
+    #[serde(default)]
+    pub graphql_disable_introspection: bool,
     pub pid: Option<u32>,
     pub do_not_ingest_orphan_blocks: bool,
     pub fetch_new_blocks_exe: Option<String>,
@@ -173,6 +191,8 @@ impl From<ServerArgs> for ServerArgsJson {
             web_port: value.web_port,
             graphql_max_depth: value.graphql_max_depth,
             graphql_max_complexity: value.graphql_max_complexity,
+            graphql_timeout_secs: value.graphql_timeout_secs,
+            graphql_disable_introspection: value.graphql_disable_introspection,
             pid: value.pid,
             fetch_new_blocks_delay: value.fetch_new_blocks_delay,
             fetch_new_blocks_exe: value.fetch_new_blocks_exe.map(|p| p.display().to_string()),
@@ -220,6 +240,8 @@ impl From<ServerArgsJson> for ServerArgs {
             web_port: value.web_port,
             graphql_max_depth: value.graphql_max_depth,
             graphql_max_complexity: value.graphql_max_complexity,
+            graphql_timeout_secs: value.graphql_timeout_secs,
+            graphql_disable_introspection: value.graphql_disable_introspection,
             self_check: false,
             pid: value.pid,
             fetch_new_blocks_delay: value.fetch_new_blocks_delay,

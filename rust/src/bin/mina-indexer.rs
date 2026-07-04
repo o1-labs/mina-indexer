@@ -206,6 +206,8 @@ impl ServerCommand {
         let web_port = args.web_port;
         let graphql_max_depth = args.graphql_max_depth;
         let graphql_max_complexity = args.graphql_max_complexity;
+        let graphql_timeout_secs = args.graphql_timeout_secs;
+        let graphql_disable_introspection = args.graphql_disable_introspection;
 
         // initialize logging (human-readable by default; MINA_LOG_FORMAT=json for structured)
         mina_indexer::logging::init(args.db.log_level.0);
@@ -233,6 +235,8 @@ impl ServerCommand {
                 (host, web_port),
                 graphql_max_depth,
                 graphql_max_complexity,
+                graphql_timeout_secs,
+                graphql_disable_introspection,
             )
         }));
 

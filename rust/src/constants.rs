@@ -190,3 +190,7 @@ pub const DEFAULT_GRAPHQL_MAX_DEPTH: usize = 20;
 /// Default max GraphQL query structural complexity — total selected fields (guards
 /// against very large single queries). `0` disables the limit.
 pub const DEFAULT_GRAPHQL_MAX_COMPLEXITY: usize = 1000;
+
+/// Default max wall-clock seconds a single GraphQL query may execute before it is
+/// aborted (guards against slow-but-valid queries). `0` disables the timeout.
+pub const DEFAULT_GRAPHQL_TIMEOUT_SECS: u64 = 30;

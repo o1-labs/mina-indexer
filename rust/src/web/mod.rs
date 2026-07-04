@@ -32,6 +32,8 @@ pub async fn start_web_server<A: net::ToSocketAddrs>(
     addrs: A,
     graphql_max_depth: usize,
     graphql_max_complexity: usize,
+    graphql_timeout_secs: u64,
+    graphql_disable_introspection: bool,
 ) -> anyhow::Result<()> {
     let locked = Arc::new(load_locked_balances());
     crate::metrics::init();
@@ -53,6 +55,8 @@ pub async fn start_web_server<A: net::ToSocketAddrs>(
                         state.clone(),
                         graphql_max_depth,
                         graphql_max_complexity,
+                        graphql_timeout_secs,
+                        graphql_disable_introspection,
                     ))),
             )
             .service(

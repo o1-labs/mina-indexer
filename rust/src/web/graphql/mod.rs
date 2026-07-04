@@ -32,11 +32,13 @@ use crate::{
 use actix_web::HttpResponse;
 use anyhow::Context as aContext;
 use async_graphql::{
-    http::GraphiQLSource, Context, EmptyMutation, EmptySubscription, MergedObject, Schema,
+    extensions::{Extension, ExtensionContext, ExtensionFactory, NextRequest},
+    http::GraphiQLSource,
+    Context, EmptyMutation, EmptySubscription, MergedObject, Response, Schema, ServerError,
 };
 use date_time::DateTime;
 use long::Long;
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 #[derive(MergedObject, Default)]
 pub struct Root(
@@ -55,15 +57,46 @@ pub struct Root(
     version::VersionQueryRoot,
 );
 
-/// Build the GraphQL schema for all endpoints, bounding query **depth** and
-/// **complexity** as a DoS guard: a deeply-nested selection (the types are
-/// self-referential, e.g. block → transactions → block → …) or a very large single
-/// query is rejected at *validation*, before any resolver runs. A limit of `0`
-/// disables that guard.
-///
-/// The limits are operator-configurable — see `ServerArgs::graphql_max_depth` /
-/// `graphql_max_complexity` (`--graphql-max-depth` / `MINA_GRAPHQL_MAX_DEPTH`, etc.),
-/// defaulting to [`DEFAULT_GRAPHQL_MAX_DEPTH`] / [`DEFAULT_GRAPHQL_MAX_COMPLEXITY`].
+/// Extension that aborts a GraphQL request exceeding a wall-clock budget — a guard
+/// against slow-but-valid queries that pass depth/complexity validation yet still tie
+/// up a worker. Registered only when the configured timeout is non-zero.
+struct Timeout {
+    duration: Duration,
+}
+
+impl ExtensionFactory for Timeout {
+    fn create(&self) -> Arc<dyn Extension> {
+        Arc::new(TimeoutExtension {
+            duration: self.duration,
+        })
+    }
+}
+
+struct TimeoutExtension {
+    duration: Duration,
+}
+
+#[async_graphql::async_trait::async_trait]
+impl Extension for TimeoutExtension {
+    async fn request(&self, ctx: &ExtensionContext<'_>, next: NextRequest<'_>) -> Response {
+        match tokio::time::timeout(self.duration, next.run(ctx)).await {
+            Ok(resp) => resp,
+            Err(_) => Response::from_errors(vec![ServerError::new(
+                format!(
+                    "query exceeded the {}s execution timeout",
+                    self.duration.as_secs()
+                ),
+                None,
+            )]),
+        }
+    }
+}
+
+/// Build the GraphQL schema for all endpoints, applying the configured DoS guards:
+/// query **depth** and **complexity** limits (rejected at *validation*, before any
+/// resolver runs), an optional per-request execution **timeout**, and an optional
+/// **introspection** switch. Each limit is operator-configurable via `ServerArgs`
+/// (`--graphql-*` / `MINA_GRAPHQL_*`); a `0`/`false` value disables that guard.
 ///
 /// NOTE: complexity here is *structural* (counts each field once) — it does not yet
 /// multiply by list `limit:` sizes (that needs per-field complexity annotations, a
@@ -72,6 +105,8 @@ pub fn build_schema(
     store: Arc<IndexerStore>,
     max_depth: usize,
     max_complexity: usize,
+    timeout_secs: u64,
+    disable_introspection: bool,
 ) -> Schema<Root, EmptyMutation, EmptySubscription> {
     let mut builder = Schema::build(Root::default(), EmptyMutation, EmptySubscription).data(store);
     if max_depth > 0 {
@@ -79,6 +114,14 @@ pub fn build_schema(
     }
     if max_complexity > 0 {
         builder = builder.limit_complexity(max_complexity);
+    }
+    if timeout_secs > 0 {
+        builder = builder.extension(Timeout {
+            duration: Duration::from_secs(timeout_secs),
+        });
+    }
+    if disable_introspection {
+        builder = builder.disable_introspection();
     }
     builder.finish()
 }
@@ -145,6 +188,8 @@ mod tests {
             store,
             DEFAULT_GRAPHQL_MAX_DEPTH,
             DEFAULT_GRAPHQL_MAX_COMPLEXITY,
+            DEFAULT_GRAPHQL_TIMEOUT_SECS,
+            false,
         );
 
         // Well past the depth limit: rejected at validation, before any resolver runs.
@@ -162,6 +207,31 @@ mod tests {
             shallow.errors.is_empty(),
             "shallow query should pass, got: {:?}",
             shallow.errors
+        );
+    }
+
+    #[tokio::test]
+    async fn introspection_toggle_hides_the_schema() {
+        let dir = TempDir::new().unwrap();
+        let store = Arc::new(IndexerStore::new(dir.path(), true).unwrap());
+        let query = "{ __schema { queryType { name } } }";
+
+        // Enabled (default): introspection resolves the schema.
+        let on = build_schema(store.clone(), 0, 0, 0, false).execute(query).await;
+        let on_data = serde_json::to_value(&on.data).unwrap();
+        assert_ne!(
+            on_data["__schema"],
+            serde_json::Value::Null,
+            "introspection enabled should resolve __schema, got: {on_data}"
+        );
+
+        // Disabled: the same query yields null — the schema is hidden.
+        let off = build_schema(store, 0, 0, 0, true).execute(query).await;
+        let off_data = serde_json::to_value(&off.data).unwrap();
+        assert_eq!(
+            off_data["__schema"],
+            serde_json::Value::Null,
+            "introspection disabled should hide __schema, got: {off_data}"
         );
     }
 }
