@@ -204,6 +204,8 @@ impl ServerCommand {
         let database_dir = args.db.database_dir.clone();
         let web_hostname = args.web_hostname.clone();
         let web_port = args.web_port;
+        let graphql_max_depth = args.graphql_max_depth;
+        let graphql_max_complexity = args.graphql_max_complexity;
 
         // initialize logging (human-readable by default; MINA_LOG_FORMAT=json for structured)
         mina_indexer::logging::init(args.db.log_level.0);
@@ -225,7 +227,13 @@ impl ServerCommand {
         let host = web_hostname.clone();
 
         subsys.start(SubsystemBuilder::new("Web Server", move |s| {
-            start_web_server(s, store, (host, web_port))
+            start_web_server(
+                s,
+                store,
+                (host, web_port),
+                graphql_max_depth,
+                graphql_max_complexity,
+            )
         }));
 
         info!("GraphQL server started at: http://{web_hostname}:{web_port}/graphql");

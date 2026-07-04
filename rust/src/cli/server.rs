@@ -18,6 +18,16 @@ pub struct ServerArgs {
     #[arg(long, default_value_t = DEFAULT_WEB_PORT)]
     pub web_port: u16,
 
+    /// Max GraphQL query nesting depth (DoS guard; `0` disables). Rejected at
+    /// validation, before any resolver runs.
+    #[arg(long, env = "MINA_GRAPHQL_MAX_DEPTH", default_value_t = DEFAULT_GRAPHQL_MAX_DEPTH)]
+    pub graphql_max_depth: usize,
+
+    /// Max GraphQL query structural complexity — total selected fields (DoS guard;
+    /// `0` disables).
+    #[arg(long, env = "MINA_GRAPHQL_MAX_COMPLEXITY", default_value_t = DEFAULT_GRAPHQL_MAX_COMPLEXITY)]
+    pub graphql_max_complexity: usize,
+
     /// Start with data consistency checks
     #[arg(long, default_value_t = false)]
     pub self_check: bool,
@@ -74,6 +84,14 @@ pub struct ServerArgs {
     pub pid: Option<u32>,
 }
 
+fn default_graphql_max_depth() -> usize {
+    DEFAULT_GRAPHQL_MAX_DEPTH
+}
+
+fn default_graphql_max_complexity() -> usize {
+    DEFAULT_GRAPHQL_MAX_COMPLEXITY
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct ServerArgsJson {
     pub genesis_ledger: Option<String>,
@@ -93,6 +111,10 @@ pub struct ServerArgsJson {
     pub canonical_update_threshold: u32,
     pub web_hostname: String,
     pub web_port: u16,
+    #[serde(default = "default_graphql_max_depth")]
+    pub graphql_max_depth: usize,
+    #[serde(default = "default_graphql_max_complexity")]
+    pub graphql_max_complexity: usize,
     pub pid: Option<u32>,
     pub do_not_ingest_orphan_blocks: bool,
     pub fetch_new_blocks_exe: Option<String>,
@@ -149,6 +171,8 @@ impl From<ServerArgs> for ServerArgsJson {
             canonical_update_threshold: value.db.canonical_update_threshold,
             web_hostname: value.web_hostname,
             web_port: value.web_port,
+            graphql_max_depth: value.graphql_max_depth,
+            graphql_max_complexity: value.graphql_max_complexity,
             pid: value.pid,
             fetch_new_blocks_delay: value.fetch_new_blocks_delay,
             fetch_new_blocks_exe: value.fetch_new_blocks_exe.map(|p| p.display().to_string()),
@@ -194,6 +218,8 @@ impl From<ServerArgsJson> for ServerArgs {
             db,
             web_hostname: value.web_hostname,
             web_port: value.web_port,
+            graphql_max_depth: value.graphql_max_depth,
+            graphql_max_complexity: value.graphql_max_complexity,
             self_check: false,
             pid: value.pid,
             fetch_new_blocks_delay: value.fetch_new_blocks_delay,

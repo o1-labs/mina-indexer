@@ -55,27 +55,32 @@ pub struct Root(
     version::VersionQueryRoot,
 );
 
-/// Max GraphQL query nesting depth. Guards against nested-recursion DoS — a
-/// self-referential selection (e.g. block → transactions → block → …) can otherwise
-/// blow up execution unbounded. Set comfortably above the deepest legitimate query
-/// (a full GraphiQL introspection nests ~13 deep) so real clients are unaffected.
-/// Tunable.
-const MAX_QUERY_DEPTH: usize = 20;
-
-/// Max GraphQL query *structural* complexity (total selected fields). A backstop
-/// against very large single queries. NOTE: this counts fields once — it does not
+/// Build the GraphQL schema for all endpoints, bounding query **depth** and
+/// **complexity** as a DoS guard: a deeply-nested selection (the types are
+/// self-referential, e.g. block → transactions → block → …) or a very large single
+/// query is rejected at *validation*, before any resolver runs. A limit of `0`
+/// disables that guard.
+///
+/// The limits are operator-configurable — see `ServerArgs::graphql_max_depth` /
+/// `graphql_max_complexity` (`--graphql-max-depth` / `MINA_GRAPHQL_MAX_DEPTH`, etc.),
+/// defaulting to [`DEFAULT_GRAPHQL_MAX_DEPTH`] / [`DEFAULT_GRAPHQL_MAX_COMPLEXITY`].
+///
+/// NOTE: complexity here is *structural* (counts each field once) — it does not yet
 /// multiply by list `limit:` sizes (that needs per-field complexity annotations, a
 /// follow-up); list sizes are bounded today by the per-endpoint pagination caps.
-/// Tunable.
-const MAX_QUERY_COMPLEXITY: usize = 1000;
-
-/// Build schema for all endpoints
-pub fn build_schema(store: Arc<IndexerStore>) -> Schema<Root, EmptyMutation, EmptySubscription> {
-    Schema::build(Root::default(), EmptyMutation, EmptySubscription)
-        .limit_depth(MAX_QUERY_DEPTH)
-        .limit_complexity(MAX_QUERY_COMPLEXITY)
-        .data(store)
-        .finish()
+pub fn build_schema(
+    store: Arc<IndexerStore>,
+    max_depth: usize,
+    max_complexity: usize,
+) -> Schema<Root, EmptyMutation, EmptySubscription> {
+    let mut builder = Schema::build(Root::default(), EmptyMutation, EmptySubscription).data(store);
+    if max_depth > 0 {
+        builder = builder.limit_depth(max_depth);
+    }
+    if max_complexity > 0 {
+        builder = builder.limit_complexity(max_complexity);
+    }
+    builder.finish()
 }
 
 pub async fn indexer_graphiql() -> actix_web::Result<HttpResponse> {
@@ -136,15 +141,19 @@ mod tests {
     async fn rejects_queries_deeper_than_the_limit() {
         let dir = TempDir::new().unwrap();
         let store = Arc::new(IndexerStore::new(dir.path(), true).unwrap());
-        let schema = build_schema(store);
+        let schema = build_schema(
+            store,
+            DEFAULT_GRAPHQL_MAX_DEPTH,
+            DEFAULT_GRAPHQL_MAX_COMPLEXITY,
+        );
 
-        // Well past MAX_QUERY_DEPTH: rejected at validation, before any resolver runs.
+        // Well past the depth limit: rejected at validation, before any resolver runs.
         let deep = schema
-            .execute(nested_introspection(MAX_QUERY_DEPTH + 5))
+            .execute(nested_introspection(DEFAULT_GRAPHQL_MAX_DEPTH + 5))
             .await;
         assert!(
             !deep.errors.is_empty(),
-            "a query deeper than MAX_QUERY_DEPTH must be rejected"
+            "a query deeper than the depth limit must be rejected"
         );
 
         // A shallow query must still succeed — the guard doesn't affect real traffic.

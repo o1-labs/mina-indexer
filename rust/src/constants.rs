@@ -182,3 +182,11 @@ pub mod berkeley {
 
 pub const DEFAULT_WEB_HOSTNAME: &str = "0.0.0.0";
 pub const DEFAULT_WEB_PORT: u16 = 8080;
+
+/// Default max GraphQL query nesting depth (guards against nested-recursion DoS).
+/// `0` disables the limit. See `web::graphql::build_schema`.
+pub const DEFAULT_GRAPHQL_MAX_DEPTH: usize = 20;
+
+/// Default max GraphQL query structural complexity — total selected fields (guards
+/// against very large single queries). `0` disables the limit.
+pub const DEFAULT_GRAPHQL_MAX_COMPLEXITY: usize = 1000;
