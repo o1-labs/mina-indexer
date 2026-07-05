@@ -32,11 +32,13 @@ use crate::{
 use actix_web::HttpResponse;
 use anyhow::Context as aContext;
 use async_graphql::{
-    http::GraphiQLSource, Context, EmptyMutation, EmptySubscription, MergedObject, Schema,
+    extensions::{Extension, ExtensionContext, ExtensionFactory, NextRequest},
+    http::GraphiQLSource,
+    Context, EmptyMutation, EmptySubscription, MergedObject, Response, Schema, ServerError,
 };
 use date_time::DateTime;
 use long::Long;
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 #[derive(MergedObject, Default)]
 pub struct Root(
@@ -55,11 +57,73 @@ pub struct Root(
     version::VersionQueryRoot,
 );
 
-/// Build schema for all endpoints
-pub fn build_schema(store: Arc<IndexerStore>) -> Schema<Root, EmptyMutation, EmptySubscription> {
-    Schema::build(Root::default(), EmptyMutation, EmptySubscription)
-        .data(store)
-        .finish()
+/// Extension that aborts a GraphQL request exceeding a wall-clock budget — a guard
+/// against slow-but-valid queries that pass depth/complexity validation yet still tie
+/// up a worker. Registered only when the configured timeout is non-zero.
+struct Timeout {
+    duration: Duration,
+}
+
+impl ExtensionFactory for Timeout {
+    fn create(&self) -> Arc<dyn Extension> {
+        Arc::new(TimeoutExtension {
+            duration: self.duration,
+        })
+    }
+}
+
+struct TimeoutExtension {
+    duration: Duration,
+}
+
+#[async_graphql::async_trait::async_trait]
+impl Extension for TimeoutExtension {
+    async fn request(&self, ctx: &ExtensionContext<'_>, next: NextRequest<'_>) -> Response {
+        match tokio::time::timeout(self.duration, next.run(ctx)).await {
+            Ok(resp) => resp,
+            Err(_) => Response::from_errors(vec![ServerError::new(
+                format!(
+                    "query exceeded the {}s execution timeout",
+                    self.duration.as_secs()
+                ),
+                None,
+            )]),
+        }
+    }
+}
+
+/// Build the GraphQL schema for all endpoints, applying the configured DoS guards:
+/// query **depth** and **complexity** limits (rejected at *validation*, before any
+/// resolver runs), an optional per-request execution **timeout**, and an optional
+/// **introspection** switch. Each limit is operator-configurable via `ServerArgs`
+/// (`--graphql-*` / `MINA_GRAPHQL_*`); a `0`/`false` value disables that guard.
+///
+/// NOTE: complexity here is *structural* (counts each field once) — it does not yet
+/// multiply by list `limit:` sizes (that needs per-field complexity annotations, a
+/// follow-up); list sizes are bounded today by the per-endpoint pagination caps.
+pub fn build_schema(
+    store: Arc<IndexerStore>,
+    max_depth: usize,
+    max_complexity: usize,
+    timeout_secs: u64,
+    disable_introspection: bool,
+) -> Schema<Root, EmptyMutation, EmptySubscription> {
+    let mut builder = Schema::build(Root::default(), EmptyMutation, EmptySubscription).data(store);
+    if max_depth > 0 {
+        builder = builder.limit_depth(max_depth);
+    }
+    if max_complexity > 0 {
+        builder = builder.limit_complexity(max_complexity);
+    }
+    if timeout_secs > 0 {
+        builder = builder.extension(Timeout {
+            duration: Duration::from_secs(timeout_secs),
+        });
+    }
+    if disable_introspection {
+        builder = builder.disable_introspection();
+    }
+    builder.finish()
 }
 
 pub async fn indexer_graphiql() -> actix_web::Result<HttpResponse> {
@@ -92,4 +156,82 @@ pub(crate) fn get_block(db: &Arc<IndexerStore>, state_hash: &StateHash) -> Preco
         .unwrap()
         .unwrap()
         .0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    /// A `__type(name:"Query") { ofType { ofType { … name … } } }` introspection query
+    /// nested `levels` deep — a schema-agnostic way to exercise the depth limiter
+    /// (`__Type.ofType` is self-referential, and every field counts toward depth).
+    fn nested_introspection(levels: usize) -> String {
+        let mut q = String::from("{ __type(name: \"Query\") { ");
+        for _ in 0..levels {
+            q.push_str("ofType { ");
+        }
+        q.push_str("name ");
+        for _ in 0..levels {
+            q.push_str("} ");
+        }
+        q.push('}');
+        q.push('}');
+        q
+    }
+
+    #[tokio::test]
+    async fn rejects_queries_deeper_than_the_limit() {
+        let dir = TempDir::new().unwrap();
+        let store = Arc::new(IndexerStore::new(dir.path(), true).unwrap());
+        let schema = build_schema(
+            store,
+            DEFAULT_GRAPHQL_MAX_DEPTH,
+            DEFAULT_GRAPHQL_MAX_COMPLEXITY,
+            DEFAULT_GRAPHQL_TIMEOUT_SECS,
+            false,
+        );
+
+        // Well past the depth limit: rejected at validation, before any resolver runs.
+        let deep = schema
+            .execute(nested_introspection(DEFAULT_GRAPHQL_MAX_DEPTH + 5))
+            .await;
+        assert!(
+            !deep.errors.is_empty(),
+            "a query deeper than the depth limit must be rejected"
+        );
+
+        // A shallow query must still succeed — the guard doesn't affect real traffic.
+        let shallow = schema.execute("{ __typename }").await;
+        assert!(
+            shallow.errors.is_empty(),
+            "shallow query should pass, got: {:?}",
+            shallow.errors
+        );
+    }
+
+    #[tokio::test]
+    async fn introspection_toggle_hides_the_schema() {
+        let dir = TempDir::new().unwrap();
+        let store = Arc::new(IndexerStore::new(dir.path(), true).unwrap());
+        let query = "{ __schema { queryType { name } } }";
+
+        // Enabled (default): introspection resolves the schema.
+        let on = build_schema(store.clone(), 0, 0, 0, false).execute(query).await;
+        let on_data = serde_json::to_value(&on.data).unwrap();
+        assert_ne!(
+            on_data["__schema"],
+            serde_json::Value::Null,
+            "introspection enabled should resolve __schema, got: {on_data}"
+        );
+
+        // Disabled: the same query yields null — the schema is hidden.
+        let off = build_schema(store, 0, 0, 0, true).execute(query).await;
+        let off_data = serde_json::to_value(&off.data).unwrap();
+        assert_eq!(
+            off_data["__schema"],
+            serde_json::Value::Null,
+            "introspection disabled should hide __schema, got: {off_data}"
+        );
+    }
 }
