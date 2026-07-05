@@ -1,0 +1,3 @@
+# Environment-specific — exported from your upstream / local config.
+schema.graphql
+.env

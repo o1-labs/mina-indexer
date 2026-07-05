@@ -1,0 +1,44 @@
+# Optional GraphQL guardian (graphql-protect) in front of the Mina node / indexer.
+#
+# Quick start:
+#   1. Export the upstream SDL once → ./schema.graphql   (see README, required)
+#   2. Set the upstream port (default 3085) in .env       (cp .env.example .env)
+#   3. docker compose up -d      # guardian listens on :${GUARDIAN_PORT:-8080}
+#   4. Point clients at the guardian instead of the upstream, and (optionally)
+#      firewall the upstream so it's only reachable via the guardian.
+services:
+  # Renders protect.yml from the template, substituting the upstream URL so the
+  # port is configurable — graphql-protect has no env-based config override, so
+  # we template it here. `$$` is escaped so the container's shell expands it.
+  guardian-config:
+    image: alpine:3
+    environment:
+      TARGET_URL: "http://${MINA_NODE_HOST:-host.docker.internal}:${MINA_NODE_GRAPHQL_PORT:-3085}"
+    volumes:
+      - ./protect.yml.template:/tpl.yml:ro
+      - guardian-config:/out
+    command:
+      - sh
+      - -c
+      - 'sed "s|@@TARGET_URL@@|$${TARGET_URL}|g" /tpl.yml > /out/protect.yml && echo "guardian upstream -> $${TARGET_URL}"'
+    restart: "no"
+
+  guardian:
+    image: ghcr.io/ldebruijn/graphql-protect:latest
+    depends_on:
+      guardian-config:
+        condition: service_completed_successfully
+    command: ["serve", "-f", "/config/protect.yml"]
+    volumes:
+      - guardian-config:/config:ro
+      - ./schema.graphql:/app/schema.graphql:ro
+    ports:
+      - "${GUARDIAN_PORT:-8080}:8080"
+    # host.docker.internal resolves to the host on Docker Desktop; the mapping
+    # below makes it work on Linux too, so a node running on the host is reachable.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+volumes:
+  guardian-config:
