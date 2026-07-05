@@ -16,7 +16,17 @@ impl DateTime {
 impl ScalarType for DateTime {
     fn parse(value: Value) -> InputValueResult<Self> {
         match value {
-            Value::String(s) => Ok(DateTime(s)),
+            Value::String(s) => {
+                // Validate RFC3339 at the input boundary so downstream
+                // `timestamp_millis()` (used by the dateTime block filters) can't
+                // panic on malformed input — the client gets a clean error.
+                if chrono::DateTime::parse_from_rfc3339(&s).is_err() {
+                    return Err(InputValueError::custom(
+                        "expected an RFC3339 date-time string",
+                    ));
+                }
+                Ok(DateTime(s))
+            }
             _ => Err(InputValueError::expected_type(value)),
         }
     }

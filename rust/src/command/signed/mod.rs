@@ -123,6 +123,28 @@ impl SignedCommand {
         }
     }
 
+    /// Whether this is a zkApp command (the archive node serves these under a
+    /// separate `zkappCommands` field, not `userCommands`).
+    pub fn is_zkapp(&self) -> bool {
+        matches!(self, Self::V2(UserCommandData::ZkappCommandData(_)))
+    }
+
+    /// Base58check-encoded memo, matching the mina archive node's `memo` field.
+    /// V2 commands already carry the base58 form; V1 re-encodes the raw bytes
+    /// with the user-command-memo version byte.
+    pub fn memo_base58(&self) -> String {
+        use crate::protocol::serialization_types::version_bytes::USER_COMMAND_MEMO;
+        match self {
+            Self::V1(v1) => bs58::encode(v1.t.t.payload.t.t.common.t.t.t.memo.t.0.as_slice())
+                .with_check_version(USER_COMMAND_MEMO)
+                .into_string(),
+            Self::V2(v2) => match v2 {
+                UserCommandData::SignedCommandData(data) => data.payload.common.memo.clone(),
+                UserCommandData::ZkappCommandData(data) => data.memo.clone(),
+            },
+        }
+    }
+
     /// Fee token id
     pub fn fee_token(&self) -> Option<TokenId> {
         match self {
