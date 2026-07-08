@@ -120,6 +120,7 @@ impl BlocksQueryRoot {
     ) -> Result<Vec<Block>> {
         use speedb::{Direction::*, IteratorMode::*};
         use BlockSortByInput::*;
+        let limit = limit.min(crate::constants::GRAPHQL_MAX_PAGE_SIZE);
         let db = db(ctx);
 
         // unique block producer query

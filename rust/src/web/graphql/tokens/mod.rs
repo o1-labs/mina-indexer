@@ -163,7 +163,11 @@ impl TokensQueryRoot {
         query: Option<TokensQueryInput>,
         sort_by: Option<TokensSortByInput>,
         #[graphql(default = 100)] limit: usize,
+        // `offset`: tokens to skip before `limit` — pages the full token set
+        // (this endpoint has no keyset filter).
+        #[graphql(default = 0)] offset: usize,
     ) -> Result<Vec<Token>> {
+        let limit = limit.min(crate::constants::GRAPHQL_MAX_PAGE_SIZE);
         let db = db(ctx);
 
         // specific token query
@@ -190,6 +194,7 @@ impl TokensQueryRoot {
 
         // default query
         let mut tokens = Vec::with_capacity(limit);
+        let mut skipped = 0usize;
         for (_, value) in db.token_iterator().flatten() {
             if tokens.len() >= limit {
                 // gone beyond limit
@@ -198,6 +203,10 @@ impl TokensQueryRoot {
 
             let token = serde_json::from_slice(&value)?;
             if TokensQueryInput::matches(query.as_ref(), &token) {
+                if skipped < offset {
+                    skipped += 1;
+                    continue;
+                }
                 let token = TokenWithMeta::new(db, token);
                 tokens.push(Token::new(db, token));
             }
@@ -224,9 +233,14 @@ impl TokensQueryRoot {
         query: Option<TokenHoldersQueryInput>,
         sort_by: Option<TokenHoldersSortByInput>,
         #[graphql(default = 100)] limit: usize,
+        // `offset`: holders to skip before `limit` — pages the full holder set
+        // (this endpoint has no keyset filter).
+        #[graphql(default = 0)] offset: usize,
     ) -> Result<Vec<TokenHolder>> {
+        let limit = limit.min(crate::constants::GRAPHQL_MAX_PAGE_SIZE);
         let db = db(ctx);
         let mut holders = Vec::with_capacity(limit);
+        let mut skipped = 0usize;
 
         // specific token's holder accounts
         if let Some(token) = query.as_ref().and_then(|q| q.token.as_ref()) {
@@ -255,9 +269,13 @@ impl TokensQueryRoot {
 
                     let account = serde_json::from_slice::<account::Account>(&value)?
                         .deduct_mina_account_creation_fee();
-                    let token = db.get_token(&token)?.unwrap_or_default();
 
                     if TokenHoldersQueryInput::matches(query.as_ref(), &account) {
+                        if skipped < offset {
+                            skipped += 1;
+                            continue;
+                        }
+                        let token = db.get_token(&token)?.unwrap_or_default();
                         let account = TokenAccount {
                             token,
                             account: AccountWithMeta::new(db, account),
@@ -299,6 +317,10 @@ impl TokensQueryRoot {
                 let token = account.token.to_owned().unwrap_or_default();
 
                 if TokenHoldersQueryInput::matches(query.as_ref(), &account) {
+                    if skipped < offset {
+                        skipped += 1;
+                        continue;
+                    }
                     let account = TokenAccount {
                         token: db.get_token(&token)?.expect("token"),
                         account: AccountWithMeta::new(db, account),

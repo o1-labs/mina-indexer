@@ -194,3 +194,10 @@ pub const DEFAULT_GRAPHQL_MAX_COMPLEXITY: usize = 1000;
 /// Default max wall-clock seconds a single GraphQL query may execute before it is
 /// aborted (guards against slow-but-valid queries). `0` disables the timeout.
 pub const DEFAULT_GRAPHQL_TIMEOUT_SECS: u64 = 30;
+
+/// Absolute upper bound on any GraphQL list-query `limit` argument. The nesting
+/// depth / complexity guards don't bound a runtime `limit` (async-graphql scores
+/// query structure, not list sizes), so an unbounded `limit` is a memory-DoS
+/// vector. Every paginated resolver clamps its `limit` to this. Generous (10x the
+/// per-query default of 100) so real paging isn't affected.
+pub const GRAPHQL_MAX_PAGE_SIZE: usize = 1000;

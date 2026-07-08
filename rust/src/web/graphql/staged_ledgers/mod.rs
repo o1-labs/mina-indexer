@@ -92,7 +92,11 @@ impl StagedLedgerQueryRoot {
         query: Option<StagedLedgerQueryInput>,
         sort_by: Option<StagedLedgerSortByInput>,
         #[graphql(default = 100)] limit: usize,
+        // `offset`: accounts to skip before `limit` — pages a large ledger
+        // (this endpoint has no keyset filter).
+        #[graphql(default = 0)] offset: usize,
     ) -> Result<Option<Vec<StagedLedgerAccount>>> {
+        let limit = limit.min(crate::constants::GRAPHQL_MAX_PAGE_SIZE);
         let db = db(ctx);
         let token = query
             .as_ref()
@@ -214,7 +218,7 @@ impl StagedLedgerQueryRoot {
         });
 
         reorder(&mut accounts, sort_by);
-        accounts.truncate(limit);
+        let accounts = accounts.into_iter().skip(offset).take(limit).collect();
 
         Ok(Some(accounts))
     }
