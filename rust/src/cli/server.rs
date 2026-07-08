@@ -38,6 +38,13 @@ pub struct ServerArgs {
     #[arg(long, env = "MINA_GRAPHQL_DISABLE_INTROSPECTION", default_value_t = false)]
     pub graphql_disable_introspection: bool,
 
+    /// Comma-separated list of origins allowed to make cross-origin (browser)
+    /// requests, e.g. `https://minasearch.com,https://app.example.com`. When
+    /// unset the server is wildcard-open (`Access-Control-Allow-Origin: *`) for
+    /// backward compatibility; set this on any public/multi-tenant deployment.
+    #[arg(long, env = "MINA_WEB_CORS_ALLOWED_ORIGINS", value_delimiter = ',')]
+    pub web_cors_allowed_origins: Vec<String>,
+
     /// Start with data consistency checks
     #[arg(long, default_value_t = false)]
     pub self_check: bool,
@@ -133,6 +140,8 @@ pub struct ServerArgsJson {
     pub graphql_timeout_secs: u64,
     #[serde(default)]
     pub graphql_disable_introspection: bool,
+    #[serde(default)]
+    pub web_cors_allowed_origins: Vec<String>,
     pub pid: Option<u32>,
     pub do_not_ingest_orphan_blocks: bool,
     pub fetch_new_blocks_exe: Option<String>,
@@ -193,6 +202,7 @@ impl From<ServerArgs> for ServerArgsJson {
             graphql_max_complexity: value.graphql_max_complexity,
             graphql_timeout_secs: value.graphql_timeout_secs,
             graphql_disable_introspection: value.graphql_disable_introspection,
+            web_cors_allowed_origins: value.web_cors_allowed_origins,
             pid: value.pid,
             fetch_new_blocks_delay: value.fetch_new_blocks_delay,
             fetch_new_blocks_exe: value.fetch_new_blocks_exe.map(|p| p.display().to_string()),
@@ -242,6 +252,7 @@ impl From<ServerArgsJson> for ServerArgs {
             graphql_max_complexity: value.graphql_max_complexity,
             graphql_timeout_secs: value.graphql_timeout_secs,
             graphql_disable_introspection: value.graphql_disable_introspection,
+            web_cors_allowed_origins: value.web_cors_allowed_origins,
             self_check: false,
             pid: value.pid,
             fetch_new_blocks_delay: value.fetch_new_blocks_delay,
