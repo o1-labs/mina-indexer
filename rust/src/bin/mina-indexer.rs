@@ -209,6 +209,8 @@ impl ServerCommand {
         let graphql_timeout_secs = args.graphql_timeout_secs;
         let graphql_disable_introspection = args.graphql_disable_introspection;
         let web_cors_allowed_origins = args.web_cors_allowed_origins.clone();
+        let web_request_timeout_secs = args.web_request_timeout_secs;
+        let web_max_body_bytes = args.web_max_body_bytes;
 
         // initialize logging (human-readable by default; MINA_LOG_FORMAT=json for structured)
         mina_indexer::logging::init(args.db.log_level.0);
@@ -240,6 +242,8 @@ impl ServerCommand {
                     graphql_timeout_secs,
                     graphql_disable_introspection,
                     cors_allowed_origins: web_cors_allowed_origins,
+                    request_timeout_secs: web_request_timeout_secs,
+                    max_body_bytes: web_max_body_bytes,
                 },
             )
         }));

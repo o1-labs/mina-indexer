@@ -183,6 +183,17 @@ pub mod berkeley {
 pub const DEFAULT_WEB_HOSTNAME: &str = "0.0.0.0";
 pub const DEFAULT_WEB_PORT: u16 = 8080;
 
+/// Default seconds the server waits to receive a client's request headers before
+/// dropping the connection (guards against slowloris-style header stalls). `0`
+/// disables the timeout.
+pub const DEFAULT_WEB_REQUEST_TIMEOUT_SECS: u64 = 30;
+
+/// Default maximum accepted request body size, in bytes (guards against
+/// oversized-payload memory exhaustion). Applies to the extractor-read body
+/// (GraphQL POST, JSON). `0` disables the cap. Default 1 MiB — GraphQL queries
+/// are small; the API never receives block data by POST.
+pub const DEFAULT_WEB_MAX_BODY_BYTES: usize = 1024 * 1024;
+
 /// Default max GraphQL query nesting depth (guards against nested-recursion DoS).
 /// `0` disables the limit. See `web::graphql::build_schema`.
 pub const DEFAULT_GRAPHQL_MAX_DEPTH: usize = 20;

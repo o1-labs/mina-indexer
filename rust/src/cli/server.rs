@@ -45,6 +45,16 @@ pub struct ServerArgs {
     #[arg(long, env = "MINA_WEB_CORS_ALLOWED_ORIGINS", value_delimiter = ',')]
     pub web_cors_allowed_origins: Vec<String>,
 
+    /// Seconds to wait for a client's request headers before dropping the
+    /// connection (slowloris guard; `0` disables).
+    #[arg(long, env = "MINA_WEB_REQUEST_TIMEOUT_SECS", default_value_t = DEFAULT_WEB_REQUEST_TIMEOUT_SECS)]
+    pub web_request_timeout_secs: u64,
+
+    /// Max accepted request body size in bytes (oversized-payload guard; `0`
+    /// disables).
+    #[arg(long, env = "MINA_WEB_MAX_BODY_BYTES", default_value_t = DEFAULT_WEB_MAX_BODY_BYTES)]
+    pub web_max_body_bytes: usize,
+
     /// Start with data consistency checks
     #[arg(long, default_value_t = false)]
     pub self_check: bool,
@@ -113,6 +123,14 @@ fn default_graphql_timeout_secs() -> u64 {
     DEFAULT_GRAPHQL_TIMEOUT_SECS
 }
 
+fn default_web_request_timeout_secs() -> u64 {
+    DEFAULT_WEB_REQUEST_TIMEOUT_SECS
+}
+
+fn default_web_max_body_bytes() -> usize {
+    DEFAULT_WEB_MAX_BODY_BYTES
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct ServerArgsJson {
     pub genesis_ledger: Option<String>,
@@ -142,6 +160,10 @@ pub struct ServerArgsJson {
     pub graphql_disable_introspection: bool,
     #[serde(default)]
     pub web_cors_allowed_origins: Vec<String>,
+    #[serde(default = "default_web_request_timeout_secs")]
+    pub web_request_timeout_secs: u64,
+    #[serde(default = "default_web_max_body_bytes")]
+    pub web_max_body_bytes: usize,
     pub pid: Option<u32>,
     pub do_not_ingest_orphan_blocks: bool,
     pub fetch_new_blocks_exe: Option<String>,
@@ -203,6 +225,8 @@ impl From<ServerArgs> for ServerArgsJson {
             graphql_timeout_secs: value.graphql_timeout_secs,
             graphql_disable_introspection: value.graphql_disable_introspection,
             web_cors_allowed_origins: value.web_cors_allowed_origins,
+            web_request_timeout_secs: value.web_request_timeout_secs,
+            web_max_body_bytes: value.web_max_body_bytes,
             pid: value.pid,
             fetch_new_blocks_delay: value.fetch_new_blocks_delay,
             fetch_new_blocks_exe: value.fetch_new_blocks_exe.map(|p| p.display().to_string()),
@@ -253,6 +277,8 @@ impl From<ServerArgsJson> for ServerArgs {
             graphql_timeout_secs: value.graphql_timeout_secs,
             graphql_disable_introspection: value.graphql_disable_introspection,
             web_cors_allowed_origins: value.web_cors_allowed_origins,
+            web_request_timeout_secs: value.web_request_timeout_secs,
+            web_max_body_bytes: value.web_max_body_bytes,
             self_check: false,
             pid: value.pid,
             fetch_new_blocks_delay: value.fetch_new_blocks_delay,
