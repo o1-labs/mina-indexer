@@ -998,14 +998,15 @@ async fn recover_missing_blocks(
 
         match cmd.output() {
             Ok(output) => {
-                let stdout = String::from_utf8(output.stdout).expect("stdout");
+                // non-UTF8 subprocess output must not crash the indexer
+                let stdout = String::from_utf8_lossy(&output.stdout);
                 let stdout = stdout.trim_end();
 
                 if !stdout.is_empty() {
                     info!("Missing block recovery: {}", stdout);
                 }
 
-                let stderr = String::from_utf8(output.stderr).expect("stderr");
+                let stderr = String::from_utf8_lossy(&output.stderr);
                 let stderr = stderr.trim_end();
 
                 if !stderr.is_empty() {

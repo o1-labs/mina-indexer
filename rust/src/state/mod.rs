@@ -714,10 +714,12 @@ impl IndexerState {
                 }
             }
 
-            new_canonical_blocks.iter().for_each(|block| {
-                self.add_canonical_block_to_store(block, &block.genesis_state_hash, None)
-                    .unwrap()
-            });
+            // Propagate store-write errors instead of panicking: a single store
+            // hiccup mid-pipeline must fail this block (the caller logs it), not
+            // crash the whole ingestion loop.
+            for block in new_canonical_blocks.iter() {
+                self.add_canonical_block_to_store(block, &block.genesis_state_hash, None)?;
+            }
         }
 
         Ok(true)
