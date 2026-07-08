@@ -249,6 +249,7 @@ impl StakesQueryRoot {
         sort_by: Option<StakesSortByInput>,
         #[graphql(default = 100)] limit: usize,
     ) -> Result<Vec<StakesLedgerAccountWithMeta>> {
+        let limit = limit.min(crate::constants::GRAPHQL_MAX_PAGE_SIZE);
         let db = db(ctx);
 
         // default to current epoch

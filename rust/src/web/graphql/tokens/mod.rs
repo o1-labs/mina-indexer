@@ -164,6 +164,7 @@ impl TokensQueryRoot {
         sort_by: Option<TokensSortByInput>,
         #[graphql(default = 100)] limit: usize,
     ) -> Result<Vec<Token>> {
+        let limit = limit.min(crate::constants::GRAPHQL_MAX_PAGE_SIZE);
         let db = db(ctx);
 
         // specific token query
@@ -225,6 +226,7 @@ impl TokensQueryRoot {
         sort_by: Option<TokenHoldersSortByInput>,
         #[graphql(default = 100)] limit: usize,
     ) -> Result<Vec<TokenHolder>> {
+        let limit = limit.min(crate::constants::GRAPHQL_MAX_PAGE_SIZE);
         let db = db(ctx);
         let mut holders = Vec::with_capacity(limit);
 

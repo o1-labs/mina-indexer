@@ -86,6 +86,7 @@ impl TopStakersQueryRoot {
         sort_by: Option<TopStakersSortByInput>,
         #[graphql(default = 100)] limit: usize,
     ) -> Result<Vec<TopStakerAccount>> {
+        let limit = limit.min(crate::constants::GRAPHQL_MAX_PAGE_SIZE);
         let db = db(ctx);
         let epoch = query.as_ref().map_or_else(
             || db.get_current_epoch().expect("current epoch"),

@@ -69,6 +69,7 @@ impl EventsQueryRoot {
         sort_by: Option<EventsSortByInput>,
         #[graphql(default = 100)] limit: usize,
     ) -> Result<Option<Vec<Event>>> {
+        let limit = limit.min(crate::constants::GRAPHQL_MAX_PAGE_SIZE);
         let db = db(ctx);
 
         let public_key = match PublicKey::new(&query.public_key) {

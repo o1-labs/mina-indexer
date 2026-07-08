@@ -232,6 +232,7 @@ impl TransactionsQueryRoot {
         #[graphql(default = 100)] limit: usize,
         sort_by: Option<TransactionSortByInput>,
     ) -> Result<Vec<Transaction>> {
+        let limit = limit.min(crate::constants::GRAPHQL_MAX_PAGE_SIZE);
         let db = db(ctx);
         let num_commands = [
             db.get_user_commands_epoch_count(None, None)?,

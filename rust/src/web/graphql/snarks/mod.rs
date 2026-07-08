@@ -122,6 +122,7 @@ impl SnarkQueryRoot {
         sort_by: Option<SnarkSortByInput>,
         #[graphql(default = 100)] limit: usize,
     ) -> Result<Vec<SnarkWithCanonicity>> {
+        let limit = limit.min(crate::constants::GRAPHQL_MAX_PAGE_SIZE);
         let db = db(ctx);
         let mut snarks = <Vec<SnarkWithCanonicity>>::new();
         let sort_by = sort_by.unwrap_or(SnarkSortByInput::BlockHeightDesc);
