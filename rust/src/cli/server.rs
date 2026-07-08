@@ -55,6 +55,15 @@ pub struct ServerArgs {
     #[arg(long, env = "MINA_WEB_MAX_BODY_BYTES", default_value_t = DEFAULT_WEB_MAX_BODY_BYTES)]
     pub web_max_body_bytes: usize,
 
+    /// Sustained per-IP request rate (requests/second) for the app-level rate
+    /// limiter. Off unless this and `--web-rate-limit-burst` are both > 0.
+    #[arg(long, env = "MINA_WEB_RATE_LIMIT_PER_SECOND", default_value_t = DEFAULT_WEB_RATE_LIMIT_PER_SECOND)]
+    pub web_rate_limit_per_second: u64,
+
+    /// Per-IP burst allowance (requests) for the rate limiter.
+    #[arg(long, env = "MINA_WEB_RATE_LIMIT_BURST", default_value_t = DEFAULT_WEB_RATE_LIMIT_BURST)]
+    pub web_rate_limit_burst: u32,
+
     /// Start with data consistency checks
     #[arg(long, default_value_t = false)]
     pub self_check: bool,
@@ -131,6 +140,14 @@ fn default_web_max_body_bytes() -> usize {
     DEFAULT_WEB_MAX_BODY_BYTES
 }
 
+fn default_web_rate_limit_per_second() -> u64 {
+    DEFAULT_WEB_RATE_LIMIT_PER_SECOND
+}
+
+fn default_web_rate_limit_burst() -> u32 {
+    DEFAULT_WEB_RATE_LIMIT_BURST
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct ServerArgsJson {
     pub genesis_ledger: Option<String>,
@@ -164,6 +181,10 @@ pub struct ServerArgsJson {
     pub web_request_timeout_secs: u64,
     #[serde(default = "default_web_max_body_bytes")]
     pub web_max_body_bytes: usize,
+    #[serde(default = "default_web_rate_limit_per_second")]
+    pub web_rate_limit_per_second: u64,
+    #[serde(default = "default_web_rate_limit_burst")]
+    pub web_rate_limit_burst: u32,
     pub pid: Option<u32>,
     pub do_not_ingest_orphan_blocks: bool,
     pub fetch_new_blocks_exe: Option<String>,
@@ -227,6 +248,8 @@ impl From<ServerArgs> for ServerArgsJson {
             web_cors_allowed_origins: value.web_cors_allowed_origins,
             web_request_timeout_secs: value.web_request_timeout_secs,
             web_max_body_bytes: value.web_max_body_bytes,
+            web_rate_limit_per_second: value.web_rate_limit_per_second,
+            web_rate_limit_burst: value.web_rate_limit_burst,
             pid: value.pid,
             fetch_new_blocks_delay: value.fetch_new_blocks_delay,
             fetch_new_blocks_exe: value.fetch_new_blocks_exe.map(|p| p.display().to_string()),
@@ -279,6 +302,8 @@ impl From<ServerArgsJson> for ServerArgs {
             web_cors_allowed_origins: value.web_cors_allowed_origins,
             web_request_timeout_secs: value.web_request_timeout_secs,
             web_max_body_bytes: value.web_max_body_bytes,
+            web_rate_limit_per_second: value.web_rate_limit_per_second,
+            web_rate_limit_burst: value.web_rate_limit_burst,
             self_check: false,
             pid: value.pid,
             fetch_new_blocks_delay: value.fetch_new_blocks_delay,
