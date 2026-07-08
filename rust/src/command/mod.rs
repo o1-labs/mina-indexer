@@ -1,6 +1,7 @@
 pub mod internal;
 pub mod signed;
 pub mod store;
+pub mod v2_hash;
 pub mod zkapp;
 
 use crate::{
@@ -21,7 +22,7 @@ use crate::{
             staged_ledger_diff::{
                 self as mina_rs, TransactionStatus1, TransactionStatusFailedType, UserCommand1,
             },
-            version_bytes::{USER_COMMAND, V1_TXN_HASH, V2_TXN_HASH},
+            version_bytes::{USER_COMMAND, V1_TXN_HASH},
         },
     },
     utility::functions::nanomina_to_mina,
@@ -34,6 +35,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use signed::{SignedCommandWithCreationData, SignedCommandWithKind};
 use std::{collections::BTreeSet, io::Write};
+use v2_hash::hash_command_v2;
 
 // re-export types
 pub type TxnHash = signed::TxnHash;
@@ -622,21 +624,6 @@ fn hash_command_v1(v1: &mina_rs::SignedCommandV1) -> Result<TxnHash> {
     Ok(TxnHash::V1(
         bs58::encode(hash)
             .with_check_version(V1_TXN_HASH)
-            .into_string(),
-    ))
-}
-
-fn hash_command_v2(v2: &UserCommandData) -> Result<TxnHash> {
-    let bytes = serde_json::to_vec(v2)?;
-    let mut hasher = blake2::Blake2bVar::new(32)?;
-    hasher.write_all(&bytes[..])?;
-
-    let mut hash = hasher.finalize_boxed().to_vec();
-    hash.insert(0, hash.len() as u8);
-
-    Ok(TxnHash::V2(
-        bs58::encode(hash)
-            .with_check_version(V2_TXN_HASH)
             .into_string(),
     ))
 }
@@ -1342,6 +1329,52 @@ mod test {
     use serde_json::json;
     use std::{collections::HashSet, path::PathBuf};
     use v2::staged_ledger_diff::Status;
+
+    /// Verifies the v2 transaction-hash computation against the canonical
+    /// hashes embedded in the hardfork precomputed-block fixtures (the
+    /// `txn_hash` field mina writes per command). This is ground truth: the
+    /// indexer must compute the same hash for the live (devnet) case where
+    /// the PCB omits it.
+    #[test]
+    fn v2_txn_hash_matches_canonical() -> Result<()> {
+        let dir = std::fs::read_dir("./tests/data/hardfork")?;
+        let mut checked = 0usize;
+        for entry in dir {
+            let path = entry?.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let pcb: serde_json::Value = serde_json::from_reader(std::fs::File::open(&path)?)?;
+            let Some(diffs) = pcb["data"]["staged_ledger_diff"]["diff"].as_array() else {
+                continue;
+            };
+            for diff in diffs {
+                let Some(cmds) = diff["commands"].as_array() else {
+                    continue;
+                };
+                for cmd in cmds {
+                    if cmd["data"][0] != "Signed_command" {
+                        continue;
+                    }
+                    let Some(expected) = cmd["txn_hash"].as_str() else {
+                        continue;
+                    };
+                    let data: UserCommandData = serde_json::from_value(cmd["data"][1].clone())?;
+                    let got = hash_command_v2(&data)?;
+                    assert_eq!(
+                        got.ref_inner(),
+                        expected,
+                        "v2 hash mismatch in {}",
+                        path.display()
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 0, "no signed commands checked");
+        println!("v2 hash: verified {checked} commands against canonical hashes");
+        Ok(())
+    }
 
     #[test]
     fn decode_memo_v1() {
