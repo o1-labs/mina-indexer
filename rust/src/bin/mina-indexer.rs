@@ -234,11 +234,13 @@ impl ServerCommand {
                 s,
                 store,
                 (host, web_port),
-                graphql_max_depth,
-                graphql_max_complexity,
-                graphql_timeout_secs,
-                graphql_disable_introspection,
-                web_cors_allowed_origins,
+                mina_indexer::web::WebServerConfig {
+                    graphql_max_depth,
+                    graphql_max_complexity,
+                    graphql_timeout_secs,
+                    graphql_disable_introspection,
+                    cors_allowed_origins: web_cors_allowed_origins,
+                },
             )
         }));
 
