@@ -205,6 +205,7 @@ impl InternalCommandQueryRoot {
         sort_by: Option<InternalCommandSortByInput>,
         #[graphql(default = 100)] limit: usize,
     ) -> Result<Vec<InternalCommandWithMeta>> {
+        let limit = limit.min(crate::constants::GRAPHQL_MAX_PAGE_SIZE);
         let db = db(ctx);
         let sort_by = sort_by.unwrap_or_default();
 

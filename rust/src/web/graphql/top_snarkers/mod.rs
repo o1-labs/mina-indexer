@@ -108,6 +108,7 @@ impl TopSnarkersQueryRoot {
         sort_by: Option<TopSnarkersSortByInput>,
         #[graphql(default = 100)] limit: usize,
     ) -> Result<Vec<TopSnarker>> {
+        let limit = limit.min(crate::constants::GRAPHQL_MAX_PAGE_SIZE);
         let db = db(ctx);
         let epoch = query
             .as_ref()

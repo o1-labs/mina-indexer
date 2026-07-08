@@ -93,6 +93,7 @@ impl StagedLedgerQueryRoot {
         sort_by: Option<StagedLedgerSortByInput>,
         #[graphql(default = 100)] limit: usize,
     ) -> Result<Option<Vec<StagedLedgerAccount>>> {
+        let limit = limit.min(crate::constants::GRAPHQL_MAX_PAGE_SIZE);
         let db = db(ctx);
         let token = query
             .as_ref()
