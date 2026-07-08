@@ -44,16 +44,30 @@ fn load_locked_balances() -> LockedBalances {
     }
 }
 
+/// Web-server tunables (GraphQL DoS guards + CORS). Bundled so `start_web_server`
+/// stays under the argument-count lint as more knobs are added.
+pub struct WebServerConfig {
+    pub graphql_max_depth: usize,
+    pub graphql_max_complexity: usize,
+    pub graphql_timeout_secs: u64,
+    pub graphql_disable_introspection: bool,
+    pub cors_allowed_origins: Vec<String>,
+}
+
 pub async fn start_web_server<A: net::ToSocketAddrs>(
     subsys: SubsystemHandle,
     state: Arc<IndexerStore>,
     addrs: A,
-    graphql_max_depth: usize,
-    graphql_max_complexity: usize,
-    graphql_timeout_secs: u64,
-    graphql_disable_introspection: bool,
-    cors_allowed_origins: Vec<String>,
+    config: WebServerConfig,
 ) -> anyhow::Result<()> {
+    let WebServerConfig {
+        graphql_max_depth,
+        graphql_max_complexity,
+        graphql_timeout_secs,
+        graphql_disable_introspection,
+        cors_allowed_origins,
+    } = config;
+
     let locked = Arc::new(load_locked_balances());
     crate::metrics::init();
 
