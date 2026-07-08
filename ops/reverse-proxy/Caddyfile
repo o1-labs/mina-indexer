@@ -1,0 +1,47 @@
+# Reference Caddy config for a PUBLIC mina-indexer deployment.
+#
+# Caddy auto-provisions and renews TLS certs, so this is the lowest-effort
+# option. Review before production. See ops/reverse-proxy/README.md.
+
+indexer.example.com {                      # <-- change (Caddy will get a cert for it)
+	# --- request body cap (mirror --web-max-body-bytes) ---
+	request_body {
+		max_size 1MB
+	}
+
+	# --- edge rate limiting ---
+	# Requires the caddy-ratelimit plugin (github.com/mholt/caddy-ratelimit);
+	# build Caddy with it via xcaddy. Remove this block if you rely solely on
+	# the indexer's --web-rate-limit-* knobs.
+	rate_limit {
+		zone indexer {
+			key    {remote_host}
+			events 20
+			window 1s
+		}
+	}
+
+	# --- auth (pick one) ---
+	# HTTP Basic (generate the hash with `caddy hash-password`):
+	#   basicauth {
+	#       apiuser JDJhJDE0J...   # bcrypt hash
+	#   }
+	#
+	# Static bearer token:
+	#   @unauthorized not header Authorization "Bearer CHANGE_ME_LONG_RANDOM_TOKEN"
+	#   respond @unauthorized 401
+
+	# Never expose Prometheus metrics publicly.
+	respond /metrics 403
+
+	reverse_proxy 127.0.0.1:8080 {
+		header_up X-Real-IP {remote_host}
+	}
+
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+		-Server
+	}
+}

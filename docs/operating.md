@@ -186,6 +186,19 @@ verifier sidecar, the indexer trusts *math* rather than whoever served the block
 configless images bake a `verify-block` shim but do **not** enable it by default. End-to-end
 runbook: [`ops/mesa-mut/TRUSTLESS-DEMO.md`](../ops/mesa-mut/TRUSTLESS-DEMO.md).
 
+## Public deployment (reverse proxy)
+
+The indexer serves plain **HTTP on `:8080`** and has no built-in TLS or auth. For
+any public/multi-tenant deployment, run it behind a reverse proxy that terminates
+TLS and enforces authentication and edge rate limiting. Reference nginx and Caddy
+configs (TLS + auth + rate-limit + body cap, with `/metrics` blocked) are in
+[`ops/reverse-proxy/`](../ops/reverse-proxy/README.md).
+
+Turn on the app-level guards too (they're defense-in-depth alongside the proxy):
+`--web-cors-allowed-origins`, `--web-request-timeout-secs`, `--web-max-body-bytes`,
+`--web-rate-limit-per-second` / `--web-rate-limit-burst`, and the `--graphql-*`
+depth/complexity/timeout limits. See the CLI flag reference above.
+
 ## Querying
 
 ```bash
