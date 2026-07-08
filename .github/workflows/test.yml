@@ -25,3 +25,30 @@ jobs:
         run: |
           export GIT_COMMIT_HASH="$(git rev-parse --short=8 HEAD || echo unknown)"
           nix develop --command bash -c 'cd rust && cargo nextest run --release'
+
+  # Gate lint regressions and newly-disclosed dependency CVEs on PRs. The tooling
+  # (clippy -Dwarnings + custom denies, and `cargo audit`) already lives in the
+  # Rakefile; this just wires it into PR CI. See issue #36.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+      - name: Nix build cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      # Blocking: clippy -Dwarnings + the custom denies from `rake lint_rust`.
+      - name: Clippy (deny warnings)
+        run: |
+          export GIT_COMMIT_HASH="$(git rev-parse --short=8 HEAD || echo unknown)"
+          nix develop --command rake .build/cargo_clippy
+
+      # Non-blocking for now: the pinned cargo-audit (0.21.2) can't parse
+      # CVSS-4.0 advisory strings and aborts the whole DB load on an unrelated
+      # advisory (e.g. RUSTSEC-2026-0182). Runs so advisories are still visible;
+      # flip to blocking once cargo-audit is bumped in flake.nix.
+      - name: cargo audit (advisory scan)
+        continue-on-error: true
+        run: nix develop --command rake audit
