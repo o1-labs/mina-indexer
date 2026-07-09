@@ -322,6 +322,15 @@ task :test_system, [:subtest] => "build:release" do |_, args|
   run("#{REGRESSION_TEST} release #{subtest}")
 end
 
+desc "Run only the DoS/security serving-layer tests"
+task test_security: "build:release" do
+  puts "--- Checking for prereqs"
+  run("jq --version")
+  run("hurl --version")
+  puts "--- Performing security tests"
+  run("#{REGRESSION_TEST} release security")
+end
+
 desc "Run the CI tests"
 task ci: [:test, :test_system]
 
