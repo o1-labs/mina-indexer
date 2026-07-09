@@ -211,6 +211,8 @@ impl ServerCommand {
         let web_cors_allowed_origins = args.web_cors_allowed_origins.clone();
         let web_request_timeout_secs = args.web_request_timeout_secs;
         let web_max_body_bytes = args.web_max_body_bytes;
+        let web_rate_limit_per_second = args.web_rate_limit_per_second;
+        let web_rate_limit_burst = args.web_rate_limit_burst;
 
         // initialize logging (human-readable by default; MINA_LOG_FORMAT=json for structured)
         mina_indexer::logging::init(args.db.log_level.0);
@@ -244,6 +246,8 @@ impl ServerCommand {
                     cors_allowed_origins: web_cors_allowed_origins,
                     request_timeout_secs: web_request_timeout_secs,
                     max_body_bytes: web_max_body_bytes,
+                    rate_limit_per_second: web_rate_limit_per_second,
+                    rate_limit_burst: web_rate_limit_burst,
                 },
             )
         }));

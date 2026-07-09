@@ -10,9 +10,10 @@ use self::{
 };
 use crate::store::IndexerStore;
 use actix_cors::Cors;
-use actix_web::{guard, http, middleware, web, web::Data, App, HttpServer};
+use actix_governor::{Governor, GovernorConfigBuilder};
+use actix_web::{guard, http, middleware, middleware::Condition, web, web::Data, App, HttpServer};
 use async_graphql_actix_web::GraphQL;
-use log::warn;
+use log::{info, warn};
 use std::{net, sync::Arc, time::Duration};
 use tokio_graceful_shutdown::{FutureExt, SubsystemHandle};
 
@@ -57,6 +58,11 @@ pub struct WebServerConfig {
     pub request_timeout_secs: u64,
     /// Max accepted request body size in bytes (`0` disables the cap).
     pub max_body_bytes: usize,
+    /// Sustained per-IP request rate (requests/second). Rate limiting is off
+    /// unless this and `rate_limit_burst` are both > 0.
+    pub rate_limit_per_second: u64,
+    /// Per-IP burst allowance (requests) for the rate limiter.
+    pub rate_limit_burst: u32,
 }
 
 pub async fn start_web_server<A: net::ToSocketAddrs>(
@@ -73,10 +79,30 @@ pub async fn start_web_server<A: net::ToSocketAddrs>(
         cors_allowed_origins,
         request_timeout_secs,
         max_body_bytes,
+        rate_limit_per_second,
+        rate_limit_burst,
     } = config;
 
     let locked = Arc::new(load_locked_balances());
     crate::metrics::init();
+
+    // Per-IP rate limiting (off unless both knobs are > 0). Built regardless so
+    // the middleware type is fixed; `Condition` skips applying it when disabled.
+    let rate_limit_enabled = rate_limit_per_second > 0 && rate_limit_burst > 0;
+    if rate_limit_enabled {
+        info!(
+            "Rate limiting: {rate_limit_per_second} req/s per IP, burst {rate_limit_burst}"
+        );
+    }
+    let governor_conf = GovernorConfigBuilder::default()
+        .requests_per_second(if rate_limit_enabled {
+            rate_limit_per_second
+        } else {
+            1
+        })
+        .burst_size(if rate_limit_enabled { rate_limit_burst } else { 1 })
+        .finish()
+        .expect("valid governor config (non-zero rate + burst)");
 
     if cors_allowed_origins.is_empty() {
         warn!(
@@ -123,6 +149,12 @@ pub async fn start_web_server<A: net::ToSocketAddrs>(
             )
             .wrap(build_cors(&cors_allowed_origins))
             .wrap(middleware::Logger::default())
+            // Registered last ⇒ runs first: rate-limited requests are rejected
+            // (HTTP 429) before any other processing. No-op when disabled.
+            .wrap(Condition::new(
+                rate_limit_enabled,
+                Governor::new(&governor_conf),
+            ))
     })
     // Drop connections that stall before sending their request headers. A zero
     // duration disables the timeout (our `0` = disabled).

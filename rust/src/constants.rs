@@ -194,6 +194,16 @@ pub const DEFAULT_WEB_REQUEST_TIMEOUT_SECS: u64 = 30;
 /// are small; the API never receives block data by POST.
 pub const DEFAULT_WEB_MAX_BODY_BYTES: usize = 1024 * 1024;
 
+/// Default sustained request rate per client IP (requests/second) for the
+/// app-level rate limiter. Rate limiting is **disabled** unless both this and
+/// [`DEFAULT_WEB_RATE_LIMIT_BURST`] are set > 0 (default off — non-breaking for
+/// single-tenant deployments; enable on public surfaces).
+pub const DEFAULT_WEB_RATE_LIMIT_PER_SECOND: u64 = 0;
+
+/// Default burst allowance (requests) for the per-IP rate limiter. `0` (with the
+/// per-second rate) disables rate limiting.
+pub const DEFAULT_WEB_RATE_LIMIT_BURST: u32 = 0;
+
 /// Default max GraphQL query nesting depth (guards against nested-recursion DoS).
 /// `0` disables the limit. See `web::graphql::build_schema`.
 pub const DEFAULT_GRAPHQL_MAX_DEPTH: usize = 20;
