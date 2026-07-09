@@ -1926,6 +1926,7 @@ test_security() {
 		--web-hostname 127.0.0.1 \
 		--database-dir ./database \
 		--web-cors-allowed-origins https://allowed.example \
+		--web-max-body-bytes 1024 \
 		--graphql-max-depth 3 \
 		--graphql-max-complexity 20 \
 		--graphql-disable-introspection
