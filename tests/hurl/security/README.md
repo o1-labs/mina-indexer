@@ -24,6 +24,7 @@ fires at request validation / the CORS layer, before any resolver or data access
 | `graphql_depth.hurl` | Query depth | `--graphql-max-depth` | over-depth query → `errors[0].message == "Query is nested too deep."` |
 | `graphql_complexity.hurl` | Query complexity | `--graphql-max-complexity` | 25 aliased fields (> limit 20) → `"Query is too complex."` |
 | `graphql_introspection.hurl` | Introspection toggle | `--graphql-disable-introspection` | `__schema` resolves to `null` (not exposed) |
+| `body_size.hurl` | Max request body size | `--web-max-body-bytes` | GraphQL POST over the cap → HTTP 413 |
 | rate-limit burst (in `test_security`) | Rate limiting | `--web-rate-limit-per-second` / `--web-rate-limit-burst` | rapid burst → first requests 200, then HTTP 429 |
 
 Timing note: the rate-limit check is mildly timing-dependent. It's written with a
@@ -31,25 +32,11 @@ generous margin (8 rapid requests against a burst of 3), but if it ever proves
 flaky as a per-PR gate, move `security` out of the default `test_names` in
 `tests/regression-test.rb` and run it via `rake test_security` on a schedule.
 
-## Known gap — max request body size (NOT yet enforced on GraphQL)
+## Note on max body size
 
-`--web-max-body-bytes` (#45) is applied via actix `PayloadConfig`, which the
-async-graphql handler **does not honor** — it reads the request body itself. A
-GraphQL POST larger than the configured cap currently returns **200, not 413**:
-
-```bash
-# with --web-max-body-bytes 1024
-curl -s -o /dev/null -w '%{http_code}' -X POST localhost:8080/graphql \
-  -H 'content-type: application/json' --data "$(python3 -c 'print("x"*2000)')"
-# => 200   (expected: 413)
-```
-
-So there is intentionally **no `body_size.hurl` yet** — it would fail against
-current `main`. The fix is a Content-Length-checking middleware (rejects
-oversized bodies with 413 before the handler runs); once that lands, add:
-
-```hurl
-POST {{url}}/graphql
-# body > --web-max-body-bytes
-HTTP 413
-```
+`--web-max-body-bytes` is enforced by a `Content-Length` middleware
+(`enforce_body_limit` in `web/mod.rs`), added because actix's `PayloadConfig`
+alone does **not** bound the GraphQL POST body — async-graphql reads the body
+itself. `body_size.hurl` exercises this (a padded GraphQL POST over the cap →
+413). Requests sent without a `Content-Length` (chunked) bypass the middleware;
+the reverse proxy is the backstop for those (see [`ops/reverse-proxy/`](../../../ops/reverse-proxy/README.md)).
