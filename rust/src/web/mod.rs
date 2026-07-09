@@ -11,7 +11,16 @@ use self::{
 use crate::store::IndexerStore;
 use actix_cors::Cors;
 use actix_governor::{Governor, GovernorConfigBuilder};
-use actix_web::{guard, http, middleware, middleware::Condition, web, web::Data, App, HttpServer};
+use actix_web::{
+    body::MessageBody,
+    dev::{ServiceRequest, ServiceResponse},
+    error::ErrorPayloadTooLarge,
+    guard, http,
+    middleware::{self, from_fn, Condition, Next},
+    web,
+    web::Data,
+    App, Error, HttpServer,
+};
 use async_graphql_actix_web::GraphQL;
 use log::{info, warn};
 use std::{net, sync::Arc, time::Duration};
@@ -33,6 +42,37 @@ fn build_cors(allowed_origins: &[String]) -> Cors {
         cors = cors.allowed_origin(origin);
     }
     cors
+}
+
+/// Max accepted request body size, injected as app data so the generic
+/// [`enforce_body_limit`] middleware can read it. `usize::MAX` = no cap.
+#[derive(Clone, Copy)]
+struct BodyLimit(usize);
+
+/// Reject oversized requests with HTTP 413 based on the `Content-Length` header,
+/// before the handler reads the body. This covers the GraphQL POST endpoint,
+/// which actix's `PayloadConfig` does *not* bound (async-graphql reads the body
+/// itself). Bodies sent without a `Content-Length` (chunked) bypass this — the
+/// reverse proxy is the backstop for those (see ops/reverse-proxy/).
+async fn enforce_body_limit<B: MessageBody>(
+    req: ServiceRequest,
+    next: Next<B>,
+) -> Result<ServiceResponse<B>, Error> {
+    if let Some(&BodyLimit(max)) = req.app_data::<BodyLimit>() {
+        let len = req
+            .headers()
+            .get(http::header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<usize>().ok());
+        if let Some(len) = len {
+            if len > max {
+                return Err(ErrorPayloadTooLarge(
+                    "request body exceeds the configured maximum (--web-max-body-bytes)",
+                ));
+            }
+        }
+    }
+    next.call(req).await
 }
 
 fn load_locked_balances() -> LockedBalances {
@@ -124,7 +164,7 @@ pub async fn start_web_server<A: net::ToSocketAddrs>(
         App::new()
             .app_data(Data::new(state.clone()))
             .app_data(Data::new(locked.clone()))
-            .app_data(web::PayloadConfig::new(body_limit))
+            .app_data(BodyLimit(body_limit))
             .service(blocks::get_blocks)
             .service(blocks::get_block_by_state_hash)
             .service(accounts::get_account)
@@ -149,6 +189,8 @@ pub async fn start_web_server<A: net::ToSocketAddrs>(
             )
             .wrap(build_cors(&cors_allowed_origins))
             .wrap(middleware::Logger::default())
+            // Reject oversized bodies (HTTP 413) via Content-Length.
+            .wrap(from_fn(enforce_body_limit))
             // Registered last ⇒ runs first: rate-limited requests are rejected
             // (HTTP 429) before any other processing. No-op when disabled.
             .wrap(Condition::new(

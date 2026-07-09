@@ -1912,12 +1912,69 @@ test_check_mode() {
 		--genesis-hash $HARDFORK_GENESIS_STATE_HASH
 }
 
+# Serving-layer DoS / security guards. Two server instances: the functional
+# guards run with rate limiting OFF (so hurl's rapid requests don't self-
+# throttle), then rate limiting is exercised on its own low-limit instance.
+test_security() {
+	# --- functional guards: CORS allow-list, GraphQL depth/complexity limits,
+	# introspection toggle (no blocks needed — a genesis-only DB is enough; the
+	# guards fire at request validation, before any resolver/data access).
+	port=$(ephemeral_port)
+	idxr database create --database-dir ./database
+	start \
+		--web-port "$port" \
+		--web-hostname 127.0.0.1 \
+		--database-dir ./database \
+		--web-cors-allowed-origins https://allowed.example \
+		--web-max-body-bytes 1024 \
+		--graphql-max-depth 3 \
+		--graphql-max-complexity 20 \
+		--graphql-disable-introspection
+	sleep 3
+
+	for test_file in "$SRC"/tests/hurl/security/*.hurl; do
+		echo "Running security test: $test_file"
+		hurl --variable url="http://localhost:$port" --test "$test_file"
+	done
+
+	shutdown_idxr
+	sleep 1
+
+	# --- rate limiting: its own instance with a low limit (2 req/s, burst 3).
+	port=$(ephemeral_port)
+	start \
+		--web-port "$port" \
+		--web-hostname 127.0.0.1 \
+		--database-dir ./database \
+		--web-rate-limit-per-second 2 \
+		--web-rate-limit-burst 3
+	sleep 3
+
+	codes=""
+	for _ in $(seq 1 8); do
+		codes="$codes $(curl --silent -o /dev/null -w '%{http_code}' "http://localhost:$port/health")"
+	done
+	echo "  rate-limit response codes:$codes"
+	# The first request (fresh burst) must pass; a rapid burst must then trip 429.
+	assert '200' "$(echo $codes | awk '{print $1}')"
+	case "$codes" in
+	*429*) echo "  True: rate limiter engaged (429 seen)" ;;
+	*)
+		echo "  Test Failed: rate limiter did not return 429; got:$codes"
+		exit 1
+		;;
+	esac
+
+	shutdown_idxr
+}
+
 # ----
 # Main
 # ----
 for test_name in "$@"; do
 	case $test_name in
 	"test_indexer_cli_reports") test_indexer_cli_reports ;;
+	"test_security") test_security ;;
 	"test_server_startup_v1") test_server_startup_v1 ;;
 	"test_server_startup_v2") test_server_startup_v2 ;;
 	"test_ipc_is_available_immediately") test_ipc_is_available_immediately ;;

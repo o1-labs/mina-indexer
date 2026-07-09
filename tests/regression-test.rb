@@ -52,6 +52,7 @@ test_names = %w[
   hurl_v1
   hurl_v2
   best_chain_many_blocks
+  security
 ]
 
 puts "Regression testing..."
