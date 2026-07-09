@@ -13,7 +13,7 @@ use actix_cors::Cors;
 use actix_web::{guard, http, middleware, web, web::Data, App, HttpServer};
 use async_graphql_actix_web::GraphQL;
 use log::warn;
-use std::{net, sync::Arc};
+use std::{net, sync::Arc, time::Duration};
 use tokio_graceful_shutdown::{FutureExt, SubsystemHandle};
 
 /// Build the CORS middleware. With an explicit allow-list, only those origins
@@ -52,6 +52,11 @@ pub struct WebServerConfig {
     pub graphql_timeout_secs: u64,
     pub graphql_disable_introspection: bool,
     pub cors_allowed_origins: Vec<String>,
+    /// Seconds to wait for client request headers before dropping the
+    /// connection (`0` disables).
+    pub request_timeout_secs: u64,
+    /// Max accepted request body size in bytes (`0` disables the cap).
+    pub max_body_bytes: usize,
 }
 
 pub async fn start_web_server<A: net::ToSocketAddrs>(
@@ -66,6 +71,8 @@ pub async fn start_web_server<A: net::ToSocketAddrs>(
         graphql_timeout_secs,
         graphql_disable_introspection,
         cors_allowed_origins,
+        request_timeout_secs,
+        max_body_bytes,
     } = config;
 
     let locked = Arc::new(load_locked_balances());
@@ -80,10 +87,18 @@ pub async fn start_web_server<A: net::ToSocketAddrs>(
     }
     let cors_allowed_origins = Arc::new(cors_allowed_origins);
 
+    // `0` disables the cap; actix's PayloadConfig needs a concrete ceiling.
+    let body_limit = if max_body_bytes == 0 {
+        usize::MAX
+    } else {
+        max_body_bytes
+    };
+
     let _ = HttpServer::new(move || {
         App::new()
             .app_data(Data::new(state.clone()))
             .app_data(Data::new(locked.clone()))
+            .app_data(web::PayloadConfig::new(body_limit))
             .service(blocks::get_blocks)
             .service(blocks::get_block_by_state_hash)
             .service(accounts::get_account)
@@ -109,6 +124,9 @@ pub async fn start_web_server<A: net::ToSocketAddrs>(
             .wrap(build_cors(&cors_allowed_origins))
             .wrap(middleware::Logger::default())
     })
+    // Drop connections that stall before sending their request headers. A zero
+    // duration disables the timeout (our `0` = disabled).
+    .client_request_timeout(Duration::from_secs(request_timeout_secs))
     .bind(addrs)
     .unwrap()
     .run()
