@@ -33,6 +33,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so the format check can diff against the PR base
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@main
@@ -44,6 +46,15 @@ jobs:
         run: |
           export GIT_COMMIT_HASH="$(git rev-parse --short=8 HEAD || echo unknown)"
           nix develop --command rake .build/cargo_clippy
+
+      # Blocking, but only on the lines this PR changed: `rustfmt` must be clean
+      # on touched code. Pre-existing drift elsewhere is ignored (no repo-wide
+      # reformat). PR-only.
+      - name: Format check (touched lines)
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags origin "$GITHUB_BASE_REF"
+          FMT_BASE=FETCH_HEAD nix develop --command rake fmt_check
 
       # Blocking: fails the PR on any dependency advisory. cargo-audit is pinned
       # via the `nixpkgs-audit` flake input (0.22.x, parses CVSS-4.0 advisories);
