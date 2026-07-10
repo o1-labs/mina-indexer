@@ -64,3 +64,4 @@ Current logging is workable; just close the blind spots that cost us during debu
 - **#3 structured JSON logging** — done (PR #13): `MINA_LOG_FORMAT=json`, `RUST_LOG`-overridable.
 - **#2 periodic speedb checkpoints** — done (this PR): `MINA_CHECKPOINT_DIR` / `MINA_CHECKPOINT_INTERVAL_SECS`.
 - **#4 block-dir retention** — done: `--blocks-retention-length` / `MINA_BLOCKS_RETENTION_LENGTH` bounds `blocks-dir` growth; deletions counted by `mina_indexer_blocks_pruned_total`. See [`docs/operating.md`](../docs/operating.md#bounding-block-dir-growth).
+- **#5 dashboards + alerts** — done: ready-to-load Prometheus alert/SLO rules and an importable Grafana dashboard consuming the full metric surface (query histogram, ingest/fetch failure counters, DB-size gauges). See [`ops/observability/`](observability/README.md).
