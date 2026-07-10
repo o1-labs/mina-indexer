@@ -45,10 +45,8 @@ jobs:
           export GIT_COMMIT_HASH="$(git rev-parse --short=8 HEAD || echo unknown)"
           nix develop --command rake .build/cargo_clippy
 
-      # Non-blocking for now: the pinned cargo-audit (0.21.2) can't parse
-      # CVSS-4.0 advisory strings and aborts the whole DB load on an unrelated
-      # advisory (e.g. RUSTSEC-2026-0182). Runs so advisories are still visible;
-      # flip to blocking once cargo-audit is bumped in flake.nix.
+      # Blocking: fails the PR on any dependency advisory. cargo-audit is pinned
+      # via the `nixpkgs-audit` flake input (0.22.x, parses CVSS-4.0 advisories);
+      # `rake audit` ignores RUSTSEC-2026-0009 only (see the Rakefile for why).
       - name: cargo audit (advisory scan)
-        continue-on-error: true
         run: nix develop --command rake audit

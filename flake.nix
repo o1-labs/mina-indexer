@@ -2,6 +2,11 @@
   inputs = {
     rust-overlay.url = "github:oxalica/rust-overlay";
     nixpkgs.url = "github:NixOS/nixpkgs";
+    # Pinned separately just to get a cargo-audit new enough to parse CVSS-4.0
+    # advisory strings (the pinned `nixpkgs` ships 0.21.2, which aborts the whole
+    # advisory-DB load on any CVSS-4.0 advisory). Isolated so it can't perturb the
+    # Rust toolchain / build stdenv. See .github/workflows/test.yml (audit job).
+    nixpkgs-audit.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
@@ -9,6 +14,7 @@
     {
       self,
       nixpkgs,
+      nixpkgs-audit,
       rust-overlay,
       flake-utils,
       ...
@@ -19,6 +25,9 @@
         overlays = [ (import rust-overlay) ];
 
         pkgs = import nixpkgs { inherit system overlays; };
+
+        # Only used for `cargo-audit` (see developmentDependencies).
+        pkgs-audit = import nixpkgs-audit { inherit system; };
 
         rust = pkgs.rust-bin.fromRustupToolchainFile ./rust/rust-toolchain.toml;
 
@@ -52,7 +61,7 @@
           with pkgs;
           [
             biome
-            cargo-audit
+            pkgs-audit.cargo-audit # newer than pinned nixpkgs' — parses CVSS-4.0 advisories
             cargo-machete
             cargo-nextest
             clang # For clang in shell
