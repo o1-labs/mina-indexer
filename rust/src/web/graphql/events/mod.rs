@@ -126,15 +126,29 @@ impl EventsQueryRoot {
 
 impl Event {
     fn new(db: &IndexerStore, event: ZkappEventWithMeta) -> async_graphql::Result<Self> {
+        // These lookups reference the block/command the event came from, so they
+        // should always resolve; return a GraphQL error rather than panicking if
+        // the store is ever inconsistent (e.g. the block was pruned).
         let canonicity = db
             .get_block_canonicity(&event.state_hash)?
-            .unwrap()
+            .ok_or_else(|| {
+                async_graphql::Error::new(format!("no canonicity for {}", event.state_hash))
+            })?
             .to_string();
-        let global_slot = db.get_block_global_slot(&event.state_hash)?.unwrap();
+        let global_slot = db
+            .get_block_global_slot(&event.state_hash)?
+            .ok_or_else(|| {
+                async_graphql::Error::new(format!("no global slot for {}", event.state_hash))
+            })?;
 
         let cmd = db
             .get_user_command_state_hash(&event.txn_hash, &event.state_hash)?
-            .unwrap();
+            .ok_or_else(|| {
+                async_graphql::Error::new(format!(
+                    "no command {} in {}",
+                    event.txn_hash, event.state_hash
+                ))
+            })?;
         let memo = cmd.command.memo();
         let status = format!("{:?}", cmd.status);
 
