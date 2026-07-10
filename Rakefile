@@ -209,6 +209,12 @@ task :format do
   run("nixfmt #{NIX_FILES.join(" ")}")
 end
 
+desc "Check that lines changed vs a base ref are rustfmt-clean (format only what you touch)"
+task :fmt_check do
+  base = ENV["FMT_BASE"].to_s.empty? ? "origin/main" : ENV["FMT_BASE"]
+  run("ops/ci/fmt-check-touched.rb #{base}")
+end
+
 desc "Perform a fast verification of whether the source compiles"
 task check: CARGO_DEPS do
   puts "--- Invoking 'cargo check'"
