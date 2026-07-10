@@ -49,11 +49,12 @@ fn build_cors(allowed_origins: &[String]) -> Cors {
 #[derive(Clone, Copy)]
 struct BodyLimit(usize);
 
-/// Reject oversized requests with HTTP 413 based on the `Content-Length` header,
-/// before the handler reads the body. This covers the GraphQL POST endpoint,
-/// which actix's `PayloadConfig` does *not* bound (async-graphql reads the body
-/// itself). Bodies sent without a `Content-Length` (chunked) bypass this — the
-/// reverse proxy is the backstop for those (see ops/reverse-proxy/).
+/// Reject oversized requests with HTTP 413 based on the `Content-Length`
+/// header, before the handler reads the body. This covers the GraphQL POST
+/// endpoint, which actix's `PayloadConfig` does *not* bound (async-graphql
+/// reads the body itself). Bodies sent without a `Content-Length` (chunked)
+/// bypass this — the reverse proxy is the backstop for those (see
+/// ops/reverse-proxy/).
 async fn enforce_body_limit<B: MessageBody>(
     req: ServiceRequest,
     next: Next<B>,
@@ -75,6 +76,31 @@ async fn enforce_body_limit<B: MessageBody>(
     next.call(req).await
 }
 
+/// Record per-request latency + status into the `mina_indexer_http_request_*`
+/// Prometheus metric. Labelled by the matched route pattern (bounded
+/// cardinality), method, and status; `<unmatched>` for requests that hit no
+/// route (e.g. 404s).
+async fn record_http_metrics<B: MessageBody>(
+    req: ServiceRequest,
+    next: Next<B>,
+) -> Result<ServiceResponse<B>, Error> {
+    let start = std::time::Instant::now();
+    let method = req.method().as_str().to_owned();
+
+    let res = next.call(req).await?;
+
+    let endpoint = res
+        .request()
+        .match_pattern()
+        .unwrap_or_else(|| "<unmatched>".to_owned());
+    let status = res.status().as_u16().to_string();
+    crate::metrics::HTTP_REQUEST_DURATION
+        .with_label_values(&[&endpoint, &method, &status])
+        .observe(start.elapsed().as_secs_f64());
+
+    Ok(res)
+}
+
 fn load_locked_balances() -> LockedBalances {
     match LockedBalances::new() {
         Ok(locked_balances) => locked_balances,
@@ -85,8 +111,9 @@ fn load_locked_balances() -> LockedBalances {
     }
 }
 
-/// Web-server tunables (GraphQL DoS guards + CORS). Bundled so `start_web_server`
-/// stays under the argument-count lint as more knobs are added.
+/// Web-server tunables (GraphQL DoS guards + CORS). Bundled so
+/// `start_web_server` stays under the argument-count lint as more knobs are
+/// added.
 pub struct WebServerConfig {
     pub graphql_max_depth: usize,
     pub graphql_max_complexity: usize,
@@ -130,17 +157,23 @@ pub async fn start_web_server<A: net::ToSocketAddrs>(
     // the middleware type is fixed; `Condition` skips applying it when disabled.
     let rate_limit_enabled = rate_limit_per_second > 0 && rate_limit_burst > 0;
     if rate_limit_enabled {
-        info!(
-            "Rate limiting: {rate_limit_per_second} req/s per IP, burst {rate_limit_burst}"
-        );
+        info!("Rate limiting: {rate_limit_per_second} req/s per IP, burst {rate_limit_burst}");
     }
     let governor_conf = GovernorConfigBuilder::default()
-        .requests_per_second(if rate_limit_enabled {
-            rate_limit_per_second
-        } else {
-            1
-        })
-        .burst_size(if rate_limit_enabled { rate_limit_burst } else { 1 })
+        .requests_per_second(
+            if rate_limit_enabled {
+                rate_limit_per_second
+            } else {
+                1
+            },
+        )
+        .burst_size(
+            if rate_limit_enabled {
+                rate_limit_burst
+            } else {
+                1
+            },
+        )
         .finish()
         .expect("valid governor config (non-zero rate + burst)");
 
@@ -197,6 +230,8 @@ pub async fn start_web_server<A: net::ToSocketAddrs>(
                 rate_limit_enabled,
                 Governor::new(&governor_conf),
             ))
+            // Outermost: time every request (including 429s) into Prometheus.
+            .wrap(from_fn(record_http_metrics))
     })
     // Drop connections that stall before sending their request headers. A zero
     // duration disables the timeout (our `0` = disabled).

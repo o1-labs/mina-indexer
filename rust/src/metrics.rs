@@ -7,10 +7,24 @@
 //! registry.
 
 use prometheus::{
-    register_histogram, register_int_counter, register_int_gauge, Encoder, Histogram, IntCounter,
-    IntGauge, TextEncoder,
+    register_histogram, register_histogram_vec, register_int_counter, register_int_gauge, Encoder,
+    Histogram, HistogramVec, IntCounter, IntGauge, TextEncoder,
 };
 use std::sync::LazyLock;
+
+/// Per-request HTTP latency (seconds), labelled by matched route, method, and
+/// response status. Also serves as the request/error counter (its `_count`
+/// series, sliced by `status`). Labelled by the route *pattern* (e.g.
+/// `/accounts/{public_key}`), never the raw path, to keep cardinality bounded.
+pub static HTTP_REQUEST_DURATION: LazyLock<HistogramVec> = LazyLock::new(|| {
+    register_histogram_vec!(
+        "mina_indexer_http_request_duration_seconds",
+        "HTTP request duration in seconds",
+        &["endpoint", "method", "status"],
+        vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]
+    )
+    .unwrap()
+});
 
 /// Total precomputed blocks applied to the witness tree.
 pub static BLOCKS_PROCESSED: LazyLock<IntCounter> = LazyLock::new(|| {
@@ -114,6 +128,7 @@ pub fn init() {
     LazyLock::force(&FETCH_INVOCATIONS);
     LazyLock::force(&RECONCILE_INGESTED);
     LazyLock::force(&BLOCKS_PRUNED);
+    LazyLock::force(&HTTP_REQUEST_DURATION);
 }
 
 /// Encode the default registry in Prometheus text exposition format.
