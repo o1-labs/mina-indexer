@@ -25,6 +25,7 @@ fires at request validation / the CORS layer, before any resolver or data access
 | `graphql_complexity.hurl` | Query complexity | `--graphql-max-complexity` | 25 aliased fields (> limit 20) → `"Query is too complex."` |
 | `graphql_introspection.hurl` | Introspection toggle | `--graphql-disable-introspection` | `__schema` resolves to `null` (not exposed) |
 | `body_size.hurl` | Max request body size | `--web-max-body-bytes` | GraphQL POST over the cap → HTTP 413 |
+| `json_depth.hurl` | JSON input depth | serde_json's built-in 128-level limit (`unbounded_depth` deliberately not enabled) | body nested past the limit → HTTP 400, no crash |
 | rate-limit burst (in `test_security`) | Rate limiting | `--web-rate-limit-per-second` / `--web-rate-limit-burst` | rapid burst → first requests 200, then HTTP 429 |
 
 Timing note: the rate-limit check is mildly timing-dependent. It's written with a

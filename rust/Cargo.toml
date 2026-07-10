@@ -23,6 +23,13 @@ anyhow = { version = "~1.0.97", default-features = false }
 bincode = "=2.0.0-rc.3"
 derive_more = { version = "~0.99", default-features = false }
 serde = { version = "1.*", default-features = false }
+# `unbounded_depth` enables serde_json's `disable_recursion_limit()`. It is used
+# ONLY by tests that parse the trusted, compile-time-embedded bin_prot layout
+# (`tests/protocol/fixtures/`), which nests past serde_json's default 128 levels,
+# and only alongside `serde_stacker` for stack safety. Production code must NEVER
+# call `disable_recursion_limit()` on request/block input — the default 128-level
+# cap is what protects the public JSON paths (GraphQL bodies, block ingestion)
+# from stack-overflow DoS. Regression test: tests/hurl/security/json_depth.hurl.
 serde_json = { version = "1.*", default-features = false, features = ["unbounded_depth"] }
 prometheus = { version = "0.13", default-features = false }
 smart-default = { version = "0.*", default-features = false }
