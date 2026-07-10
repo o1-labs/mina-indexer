@@ -510,4 +510,17 @@ impl IndexerStore {
             .unwrap()
             .unwrap()
     }
+
+    /// Total on-disk size of the store's SST files in bytes — the actual disk
+    /// footprint (unlike the logical [`estimate_live_data_size`]). `0` if the
+    /// property is unavailable.
+    ///
+    /// [`estimate_live_data_size`]: Self::estimate_live_data_size
+    pub fn total_sst_files_size(&self) -> u64 {
+        self.database
+            .property_int_value(speedb::properties::TOTAL_SST_FILES_SIZE)
+            .ok()
+            .flatten()
+            .unwrap_or(0)
+    }
 }

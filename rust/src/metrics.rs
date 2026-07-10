@@ -115,6 +115,59 @@ pub static BLOCKS_PRUNED: LazyLock<IntCounter> = LazyLock::new(|| {
     .unwrap()
 });
 
+/// Total blocks that parsed but failed to apply to the witness tree
+/// (`block_pipeline` errored), on either the watcher or reconcile path. A
+/// rising rate here means valid-looking blocks are being dropped — an ingest
+/// stall the block counters alone don't surface.
+pub static BLOCKS_INGEST_FAILED: LazyLock<IntCounter> = LazyLock::new(|| {
+    register_int_counter!(
+        "mina_indexer_blocks_ingest_failed_total",
+        "Total blocks that failed to apply to the witness tree"
+    )
+    .unwrap()
+});
+
+/// Total fetch-new-blocks invocations that failed to run (the external fetcher
+/// could not be spawned). Pairs with `FETCH_INVOCATIONS` to give a fetch error
+/// rate; a stuck fetcher otherwise looks identical to "no new blocks".
+pub static FETCH_FAILURES: LazyLock<IntCounter> = LazyLock::new(|| {
+    register_int_counter!(
+        "mina_indexer_fetch_failures_total",
+        "Total fetch-new-blocks invocations that failed to run"
+    )
+    .unwrap()
+});
+
+/// Estimated live (logical) data size of the speedb store in bytes. Scrape-time
+/// gauge (set by the `/metrics` handler from the store's property estimate).
+pub static DB_ESTIMATED_LIVE_DATA_BYTES: LazyLock<IntGauge> = LazyLock::new(|| {
+    register_int_gauge!(
+        "mina_indexer_db_estimated_live_data_bytes",
+        "Estimated live data size of the speedb store in bytes"
+    )
+    .unwrap()
+});
+
+/// Total on-disk size of the store's SST files in bytes — the real disk
+/// footprint. Scrape-time gauge; the signal to watch for disk exhaustion.
+pub static DB_SST_FILES_BYTES: LazyLock<IntGauge> = LazyLock::new(|| {
+    register_int_gauge!(
+        "mina_indexer_db_sst_files_bytes",
+        "Total on-disk size of the speedb store's SST files in bytes"
+    )
+    .unwrap()
+});
+
+/// Estimated number of keys across the whole store. Scrape-time gauge; a
+/// coarse growth/size proxy.
+pub static DB_ESTIMATED_NUM_KEYS: LazyLock<IntGauge> = LazyLock::new(|| {
+    register_int_gauge!(
+        "mina_indexer_db_estimated_num_keys",
+        "Estimated number of keys in the speedb store"
+    )
+    .unwrap()
+});
+
 /// Force every metric to register so it appears in `/metrics` before its first
 /// event.
 pub fn init() {
@@ -129,6 +182,11 @@ pub fn init() {
     LazyLock::force(&RECONCILE_INGESTED);
     LazyLock::force(&BLOCKS_PRUNED);
     LazyLock::force(&HTTP_REQUEST_DURATION);
+    LazyLock::force(&BLOCKS_INGEST_FAILED);
+    LazyLock::force(&FETCH_FAILURES);
+    LazyLock::force(&DB_ESTIMATED_LIVE_DATA_BYTES);
+    LazyLock::force(&DB_SST_FILES_BYTES);
+    LazyLock::force(&DB_ESTIMATED_NUM_KEYS);
 }
 
 /// Encode the default registry in Prometheus text exposition format.
