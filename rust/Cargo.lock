@@ -1932,6 +1932,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-graceful-shutdown",
+ "tracing",
  "tracing-subscriber",
  "ureq",
  "wasm-bindgen-test",

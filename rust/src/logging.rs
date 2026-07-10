@@ -40,6 +40,10 @@ pub fn init(default_level: log::LevelFilter) {
             .with(
                 fmt::layer()
                     .json()
+                    // Hoist event fields (height, state_hash, duration_ms, …) to
+                    // top-level JSON keys so Loki/Datadog can filter on them
+                    // directly instead of digging into a nested `fields` object.
+                    .flatten_event(true)
                     .with_current_span(false)
                     .with_span_list(false),
             )
