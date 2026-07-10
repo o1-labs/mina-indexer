@@ -103,7 +103,12 @@ file ".build/cargo_audit": ["rust/Cargo.lock"] do |t|
   FileUtils.mkdir_p(".build")
   cargo_output("--version")
   cargo_output("audit --version")
-  audit_output = cargo_output("audit")
+  # RUSTSEC-2026-0009 (time DoS via stack exhaustion): transitive via actix-web,
+  # which pins `time 0.3.41`; the fix (time >=0.3.47) requires Rust 1.88 while the
+  # toolchain is pinned at 1.85. Deferred to a toolchain bump — do NOT add other
+  # advisories here without the same explicit justification.
+  ignores = %w[RUSTSEC-2026-0009].map { |id| "--ignore #{id}" }.join(" ")
+  audit_output = cargo_output("audit #{ignores}")
   File.write(t.name, audit_output)
 end
 
