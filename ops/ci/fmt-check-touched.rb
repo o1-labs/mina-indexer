@@ -45,11 +45,16 @@ violations = []
 changed.each_key do |file|
   next unless File.exist?(file)
 
-  out = `rustfmt --check --edition #{edition} --config-path #{config} #{file} 2>&1`
+  # `--skip-children`: rustfmt otherwise follows `mod` declarations and reports
+  # diffs in child modules too, whose line numbers would be cross-matched against
+  # this file's changed ranges. We also match the path in "Diff in <path>:<line>"
+  # so only diffs in THIS file count.
+  out = `rustfmt --check --skip-children --edition #{edition} --config-path #{config} #{file} 2>&1`
   out.each_line do |l|
-    next unless l =~ /^Diff in .+:(\d+):/
+    next unless l =~ %r{^Diff in (.+):(\d+):}
+    next unless Regexp.last_match(1).end_with?(file)
 
-    diff_line = Regexp.last_match(1).to_i
+    diff_line = Regexp.last_match(2).to_i
     violations << "#{file}:#{diff_line}" if changed[file].any? { |r| r.include?(diff_line) }
   end
 end
