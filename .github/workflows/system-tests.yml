@@ -1,0 +1,40 @@
+# Nightly system/regression tests. The PR `test` job runs the fast Rust
+# unit/integration suite (`cargo nextest`); the heavier bash-driven system
+# battery (`tests/regression.bash`, which boots a real server, ingests blocks,
+# and drives HTTP) is too slow for every PR, so it runs on a schedule instead.
+#
+# Starts with the security battery (`rake test_security`): CORS, GraphQL
+# depth/complexity/introspection guards, body-size + rate limiting, and the
+# fail-closed ingest check (malformed files in the watched dir must not crash
+# the process). It is self-contained — a genesis-only DB, no large block
+# fixtures — so it runs cleanly on a hosted runner. See issue #33 (Workstream C:
+# "run the system/regression battery in CI").
+name: System tests (nightly)
+
+on:
+  schedule:
+    - cron: "0 5 * * *" # 05:00 UTC daily (before the 06:00 archive-compare run)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+      - name: Nix build cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      # `rake test_security` release-builds the binary, then drives
+      # tests/regression.bash. VOLUMES_DIR (default /mnt) holds the scratch
+      # DBs/blocks — point it at the runner's temp dir.
+      - name: Run security system tests
+        run: |
+          export GIT_COMMIT_HASH="$(git rev-parse --short=8 HEAD || echo unknown)"
+          export VOLUMES_DIR="$RUNNER_TEMP"
+          nix develop --command rake test_security
