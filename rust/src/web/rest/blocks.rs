@@ -15,6 +15,7 @@ use actix_web::{
     web::{self, Data},
     HttpResponse,
 };
+use log::error;
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -40,11 +41,19 @@ pub async fn get_blocks(
     let db = store.as_ref();
     let limit = get_limit(params.limit);
 
+    // Resolve the block counts once (a store error here is a 500, not a panic;
+    // this also avoids recomputing them per result below).
+    let counts = match get_counts(db, None, None) {
+        Ok(counts) => counts,
+        Err(e) => {
+            error!("GET /blocks failed: {e:?}");
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+
     // Check for height query parameter
     if let Some(height) = params.height {
         if let Ok(blocks) = db.get_blocks_at_height(height) {
-            let counts = get_counts(db, None, None).expect("counts");
-
             let blocks = blocks
                 .iter()
                 .flat_map(|state_hash| {
@@ -63,21 +72,13 @@ pub async fn get_blocks(
         let mut best_chain: Vec<Block> = Vec::with_capacity(limit as usize);
 
         // Process best tip
-        best_chain.push(Block::from_precomputed(
-            db,
-            &best_tip,
-            get_counts(db, None, None).expect("counts"),
-        ));
+        best_chain.push(Block::from_precomputed(db, &best_tip, counts));
 
         let mut parent_state_hash = best_tip.previous_state_hash();
 
         while best_chain.len() < limit as usize {
             if let Ok(Some((block, _))) = db.get_block(&parent_state_hash) {
-                best_chain.push(Block::from_precomputed(
-                    db,
-                    &block,
-                    get_counts(db, None, None).expect("counts"),
-                ));
+                best_chain.push(Block::from_precomputed(db, &block, counts));
                 parent_state_hash = block.previous_state_hash();
             } else {
                 // No parent
@@ -101,8 +102,14 @@ pub async fn get_block_by_state_hash(
 
     if StateHash::is_valid(&state_hash) {
         if let Ok(Some((ref block, _))) = db.get_block(&state_hash.clone().into()) {
-            let block =
-                Block::from_precomputed(db, block, get_counts(db, None, None).expect("counts"));
+            let counts = match get_counts(db, None, None) {
+                Ok(counts) => counts,
+                Err(e) => {
+                    error!("GET /blocks/{{state_hash}} failed: {e:?}");
+                    return HttpResponse::InternalServerError().finish();
+                }
+            };
+            let block = Block::from_precomputed(db, block, counts);
             return HttpResponse::Ok()
                 .content_type(ContentType::json())
                 .body(format!("{block:?}"));
