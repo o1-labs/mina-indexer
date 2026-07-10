@@ -24,6 +24,13 @@ pub async fn get_metrics(store: Data<Arc<IndexerStore>>) -> HttpResponse {
         metrics::SYNCED.set((tip_age_seconds < 2 * block_slot_secs) as i64);
     }
 
+    // Store size gauges (disk-exhaustion visibility). These are cheap speedb
+    // property reads, refreshed on each scrape.
+    let db = store.as_ref();
+    metrics::DB_ESTIMATED_LIVE_DATA_BYTES.set(db.estimate_live_data_size() as i64);
+    metrics::DB_SST_FILES_BYTES.set(db.total_sst_files_size() as i64);
+    metrics::DB_ESTIMATED_NUM_KEYS.set(db.estimate_num_keys() as i64);
+
     HttpResponse::Ok()
         .content_type(ContentType::plaintext())
         .body(metrics::gather())

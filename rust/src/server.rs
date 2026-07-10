@@ -651,7 +651,10 @@ async fn process_event(
                                     info!("Added block {}", block_summary)
                                 }
                             }
-                            Err(e) => error!("Error adding block {}: {}", block_summary, e),
+                            Err(e) => {
+                                crate::metrics::BLOCKS_INGEST_FAILED.inc();
+                                error!("Error adding block {}: {}", block_summary, e)
+                            }
                         }
                     }
                     Err(e) => error!("Error parsing precomputed block: {}", e),
@@ -765,7 +768,10 @@ async fn reconcile_blocks_dir(
                         info!("Reconciled on-disk block {summary}");
                     }
                     Ok(false) => {}
-                    Err(e) => error!("Error reconciling block {summary}: {e}"),
+                    Err(e) => {
+                        crate::metrics::BLOCKS_INGEST_FAILED.inc();
+                        error!("Error reconciling block {summary}: {e}")
+                    }
                 }
             }
             // unparseable blocks are skipped (logged once on the watcher path)
@@ -951,14 +957,17 @@ async fn fetch_new_blocks(
                 info!("Fetch new blocks: {}", stderr);
             }
         }
-        Err(e) => error!(
-            "Error fetching new blocks: {}, pgm: {}, args: {:?}",
-            e,
-            cmd.get_program().to_str().unwrap(),
-            cmd.get_args()
-                .map(|arg| arg.to_str().unwrap())
-                .collect::<Vec<_>>()
-        ),
+        Err(e) => {
+            crate::metrics::FETCH_FAILURES.inc();
+            error!(
+                "Error fetching new blocks: {}, pgm: {}, args: {:?}",
+                e,
+                cmd.get_program().to_str().unwrap(),
+                cmd.get_args()
+                    .map(|arg| arg.to_str().unwrap())
+                    .collect::<Vec<_>>()
+            )
+        }
     }
 
     Ok(())
