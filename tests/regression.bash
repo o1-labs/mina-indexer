@@ -1093,6 +1093,12 @@ test_rest_accounts_summary() {
 	assert $count $(cat output.json | jq -r .totalNumBlocks)
 
 	check-jsonschema --schemafile "$SUMMARY_SCHEMA" output.json
+
+	# Negative: a malformed public key is rejected with 404, and must NOT panic
+	# the handler (which previously dropped the connection / logged a panic).
+	assert '404' "$(curl --silent -o /dev/null -w '%{http_code}' http://localhost:${port}/accounts/notavalidkey)"
+	# The server must still be serving after the malformed request.
+	assert '200' "$(curl --silent -o /dev/null -w '%{http_code}' http://localhost:${port}/health)"
 }
 
 test_rest_blocks() {
@@ -1117,6 +1123,10 @@ test_rest_blocks() {
 	# /blocks?height={height} endpoint
 	curl --silent http://localhost:${port}/blocks?height=100 >output.json
 	assert '3NKLtRnMaWAAfRvdizaeaucDPBePPKGbKw64RVcuRFtMMkE8aAD4' $(cat output.json | jq -r .[0].block.state_hash)
+
+	# Negative: a malformed state hash is rejected with 404, not a panic.
+	assert '404' "$(curl --silent -o /dev/null -w '%{http_code}' http://localhost:${port}/blocks/notavalidstatehash)"
+	assert '200' "$(curl --silent -o /dev/null -w '%{http_code}' http://localhost:${port}/health)"
 }
 
 test_best_chain_many_blocks() {
