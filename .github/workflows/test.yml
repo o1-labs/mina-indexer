@@ -61,3 +61,9 @@ jobs:
       # `rake audit` ignores RUSTSEC-2026-0009 only (see the Rakefile for why).
       - name: cargo audit (advisory scan)
         run: nix develop --command rake audit
+
+      # Blocking: license + source supply-chain gate (the checks cargo-audit
+      # doesn't do). Fails the PR on a dependency license outside the allow-list
+      # or an unapproved source. Config: rust/deny.toml.
+      - name: cargo deny (license/source scan)
+        run: nix develop --command rake deny

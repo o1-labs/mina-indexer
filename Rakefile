@@ -112,6 +112,20 @@ file ".build/cargo_audit": ["rust/Cargo.lock"] do |t|
   File.write(t.name, audit_output)
 end
 
+desc "Perform Cargo deny (dependency license + source supply-chain gate)"
+task deny: [".build/cargo_deny"]
+
+file ".build/cargo_deny": ["rust/Cargo.lock", "rust/deny.toml"] do |t|
+  puts "--- Performing Cargo deny (licenses, bans, sources)"
+  FileUtils.mkdir_p(".build")
+  cargo_output("deny --version")
+  # Advisories are gated by `rake audit`; deny adds the supply-chain checks it
+  # doesn't do — an allow-listed set of dependency licenses and sources — plus a
+  # non-blocking duplicate-version warning. Config: rust/deny.toml.
+  deny_output = cargo_output("deny check licenses bans sources")
+  File.write(t.name, deny_output)
+end
+
 desc "Lint Rust code with clippy"
 task lint_rust: [:audit, ".build/cargo_clippy"]
 

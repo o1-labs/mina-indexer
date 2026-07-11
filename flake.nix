@@ -62,6 +62,7 @@
           [
             biome
             pkgs-audit.cargo-audit # newer than pinned nixpkgs' — parses CVSS-4.0 advisories
+            pkgs-audit.cargo-deny # license/source supply-chain gate (see rust/deny.toml)
             cargo-machete
             cargo-nextest
             clang # For clang in shell
