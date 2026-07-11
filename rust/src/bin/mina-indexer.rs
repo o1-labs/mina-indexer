@@ -1,7 +1,10 @@
 use clap::{Parser, Subcommand};
 use log::{debug, error, info, warn, LevelFilter};
 use mina_indexer::{
+    base::state_hash::StateHash,
     block::precomputed::PcbVersion,
+    block::store::BlockStore,
+    canonicity::store::CanonicityStore,
     chain::ChainId,
     cli::{
         database::DatabaseArgs,
@@ -12,7 +15,11 @@ use mina_indexer::{
     constants::*,
     ledger::genesis::GenesisLedger,
     server::{GenesisVersion, IndexerConfiguration, IndexerVersion, InitializationMode},
-    store::{restore_snapshot, version::IndexerStoreVersion, IndexerStore},
+    store::{
+        restore_snapshot,
+        version::{IndexerStoreVersion, VersionStore},
+        IndexerStore,
+    },
     unix_socket_server::remove_unix_socket,
     web::start_web_server,
 };
@@ -103,6 +110,20 @@ enum DatabaseCommand {
 
     /// Query mina indexer database version
     Version {
+        /// Output JSON data
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Check a database for silent corruption: store version, best tip, and the
+    /// canonical chain's contiguity / block-presence / parent linkage. Opens the
+    /// database read-only (safe to run against a live indexer). Exits non-zero if
+    /// any problem is found.
+    VerifyIntegrity {
+        /// Full path to a mina indexer database directory
+        #[arg(long)]
+        database_dir: PathBuf,
+
         /// Output JSON data
         #[arg(long)]
         json: bool,
@@ -287,6 +308,22 @@ impl DatabaseCommand {
                         version.to_string()
                     }
                 )
+            }
+            Self::VerifyIntegrity { database_dir, json } => {
+                // Open read-only (secondary) so this is safe to run against a
+                // live indexer and never mutates the database.
+                let tmp_dir = TempDir::new()?;
+                let db = IndexerStore::read_only(&database_dir, tmp_dir.as_ref())?;
+                let report = verify_database_integrity(&db)?;
+
+                if json {
+                    println!("{}", serde_json::to_string(&report)?);
+                } else {
+                    print!("{report}");
+                }
+                if !report.ok {
+                    process::exit(2);
+                }
             }
             Self::Snapshot {
                 output_path,
@@ -554,6 +591,133 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Result of a `database verify-integrity` scan.
+#[derive(serde::Serialize)]
+struct IntegrityReport {
+    ok: bool,
+    store_version: String,
+    best_tip_height: Option<u32>,
+    best_tip_hash: Option<String>,
+    canonical_blocks_checked: u32,
+    problems: Vec<String>,
+}
+
+impl std::fmt::Display for IntegrityReport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Mina Indexer database integrity check")?;
+        writeln!(f, "  store version:            {}", self.store_version)?;
+        writeln!(
+            f,
+            "  best tip height:          {}",
+            self.best_tip_height
+                .map_or_else(|| "<none>".to_string(), |h| h.to_string())
+        )?;
+        if let Some(h) = &self.best_tip_hash {
+            writeln!(f, "  best tip hash:            {h}")?;
+        }
+        writeln!(
+            f,
+            "  canonical blocks checked: {}",
+            self.canonical_blocks_checked
+        )?;
+        if self.problems.is_empty() {
+            writeln!(f, "  result:                   OK — no problems found")?;
+        } else {
+            writeln!(
+                f,
+                "  result:                   {} PROBLEM(S) found:",
+                self.problems.len()
+            )?;
+            for p in &self.problems {
+                writeln!(f, "    - {p}")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Read-only integrity scan: store schema version, best-tip presence, and a walk
+/// of the canonical chain (heights `1..=best`) checking contiguity, that each
+/// canonical block resolves in the store, and that each block's parent hash is
+/// its canonical predecessor. (Ledger-hash recomputation is a future
+/// enhancement — this catches the common silent-corruption modes: schema drift,
+/// a missing best tip, chain holes, dangling block references, broken linkage.)
+fn verify_database_integrity(db: &IndexerStore) -> anyhow::Result<IntegrityReport> {
+    let mut problems = Vec::new();
+
+    // 1) store schema version matches this binary
+    let version = db.get_db_version()?;
+    if version.major != IndexerStoreVersion::MAJOR
+        || version.minor != IndexerStoreVersion::MINOR
+        || version.patch != IndexerStoreVersion::PATCH
+    {
+        problems.push(format!(
+            "store schema version {} != this binary's {}.{}.{} (a migration / re-index may be required)",
+            version.major_minor_patch(),
+            IndexerStoreVersion::MAJOR,
+            IndexerStoreVersion::MINOR,
+            IndexerStoreVersion::PATCH,
+        ));
+    }
+
+    // 2) best tip present + resolvable
+    let best_tip = db.get_best_block()?;
+    let best_tip_height = db.get_best_block_height()?;
+    let best_tip_hash = best_tip.as_ref().map(|b| b.state_hash().0);
+    if best_tip.is_none() {
+        problems.push("no best block in the store (empty or corrupt database)".to_string());
+    }
+
+    // 3) canonical chain: contiguity + block presence + parent linkage
+    let mut canonical_blocks_checked = 0u32;
+    if let Some(best_height) = best_tip_height {
+        let mut prev_hash: Option<StateHash> = None;
+        let mut resumed_after_gap = false;
+        for height in 1..=best_height {
+            match db.get_canonical_hash_at_height(height)? {
+                Some(hash) => {
+                    if resumed_after_gap {
+                        problems.push(format!(
+                            "canonical chain has a hole before height {height} (not contiguous)"
+                        ));
+                        resumed_after_gap = false;
+                    }
+                    if db.get_block(&hash)?.is_none() {
+                        problems.push(format!(
+                            "height {height}: canonical block {hash} is referenced but missing from the store"
+                        ));
+                    } else if let Some(prev) = prev_hash.as_ref() {
+                        match db.get_block_parent_hash(&hash)? {
+                            Some(parent) if &parent == prev => {}
+                            Some(parent) => problems.push(format!(
+                                "height {height}: block {hash} parent {parent} != canonical predecessor {prev}"
+                            )),
+                            None => problems.push(format!(
+                                "height {height}: block {hash} has no parent hash"
+                            )),
+                        }
+                    }
+                    prev_hash = Some(hash);
+                    canonical_blocks_checked += 1;
+                }
+                // The canonical chain ends ~k blocks below the tip, so a trailing
+                // run of `None` is expected. Only a `Some` *after* a `None` is a
+                // real gap (flagged above).
+                None => resumed_after_gap = true,
+            }
+        }
+    }
+
+    Ok(IntegrityReport {
+        ok: problems.is_empty(),
+        store_version: version.to_string(),
+        best_tip_height,
+        best_tip_hash,
+        canonical_blocks_checked,
+        problems,
+    })
+}
+
 /// Remove PID file located in the database directory
 fn remove_pid<P: AsRef<Path>>(database_dir: P) {
     let pid_path = database_dir.as_ref().join("PID");
@@ -596,5 +760,37 @@ fn check_or_write_pid_file<P: AsRef<Path>>(database_dir: P) {
     if let Err(e) = write_pid_to_file(&pid_path) {
         error!("Error writing PID to {pid_path:?}: {e}");
         process::exit(131);
+    }
+}
+
+#[cfg(test)]
+mod verify_integrity_tests {
+    use super::{verify_database_integrity, IndexerStore};
+
+    #[test]
+    fn clean_but_empty_database_is_flagged() {
+        // A freshly-created store has a matching schema version but no blocks —
+        // verify-integrity must report a problem (missing best tip) and not "OK".
+        let dir = tempfile::tempdir().unwrap();
+        let db = IndexerStore::new(dir.path(), true).unwrap();
+
+        let report = verify_database_integrity(&db).unwrap();
+
+        assert!(!report.ok, "an empty database must not report OK");
+        assert!(
+            report
+                .problems
+                .iter()
+                .any(|p| p.contains("no best block")),
+            "expected a 'no best block' problem, got: {:?}",
+            report.problems
+        );
+        assert_eq!(report.best_tip_height, None);
+        assert_eq!(report.canonical_blocks_checked, 0);
+        // The store version itself matches the binary, so that is NOT a problem.
+        assert!(
+            !report.problems.iter().any(|p| p.contains("schema version")),
+            "freshly-created store version should match the binary"
+        );
     }
 }
