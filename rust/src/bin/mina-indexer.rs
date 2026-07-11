@@ -194,6 +194,10 @@ impl ServerCommand {
                 // bring logging up before the (rare, operator-triggered) restore
                 // so its progress is visible; the later init() call is a no-op.
                 mina_indexer::logging::init(args.db.log_level.0);
+                // reject conflicting flags up front; surface ineffective ones.
+                for w in args.validate()? {
+                    warn!("config: {w}");
+                }
                 // disaster recovery: optionally seed the database dir from a
                 // periodic checkpoint before we decide how to initialize, so a
                 // restored DB is then opened in Sync mode (CURRENT present).
