@@ -19,6 +19,8 @@
 - [development-principles-and-practices.md](development-principles-and-practices.md)
 - [indexer_store.md](indexer_store.md) — the speedb store layout.
 - [canonical-chain-discovery.md](canonical-chain-discovery.md)
+- [reorg-behavior.md](reorg-behavior.md) — reorg handling, finality zones (canonical
+  threshold vs `k`), and which query results are provisional vs final.
 - [ledger-calculations.md](ledger-calculations.md)
 - [understanding-mainnet-transaction-fees.md](understanding-mainnet-transaction-fees.md)
 - [user-commands.md](user-commands.md)
