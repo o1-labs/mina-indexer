@@ -105,8 +105,20 @@ Shared database flags (`cli/database.rs`) plus server flags (`cli/server.rs`):
 | `--log-level <LEVEL>` | info | Crate log level when `RUST_LOG` is unset. |
 | `--canonical-threshold`, `--prune-interval`, `--ledger-cadence`, … | see `cli/database.rs` | Tuning knobs. |
 
-Other subcommands: `server shutdown`, `database create|snapshot|restore|version`, the
-client query commands (`mina-indexer <query> …` against the running socket), and `version`.
+Other subcommands: `server shutdown`, `database create|snapshot|restore|version|verify-integrity`,
+the client query commands (`mina-indexer <query> …` against the running socket), and `version`.
+
+### Checking a database for corruption
+
+`database verify-integrity --database-dir <DIR>` opens the store **read-only** (safe to run
+against a live indexer) and reports silent corruption: a schema-version mismatch, a missing
+best tip, and — by walking the canonical chain — any holes, canonical blocks missing from the
+store, or broken parent linkage. It prints a summary (add `--json` for machine output) and
+**exits non-zero** if any problem is found, so it drops into a cron/healthcheck:
+
+```bash
+mina-indexer database verify-integrity --database-dir /data/db || alert "indexer db integrity!"
+```
 
 ## Environment variables
 
