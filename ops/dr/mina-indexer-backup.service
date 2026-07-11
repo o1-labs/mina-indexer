@@ -1,0 +1,22 @@
+# Off-host backup of the Mina Indexer database. Oneshot unit driven by
+# mina-indexer-backup.timer. Configure via /etc/mina-indexer/backup.env
+# (see ops/dr/README.md for the variables — REMOTE, RETENTION, VERIFY, …).
+[Unit]
+Description=Mina Indexer off-host database backup
+After=network-online.target
+Wants=network-online.target
+# If you run the indexer under systemd, prefer online snapshots while it is up:
+After=mina-indexer.service
+
+[Service]
+Type=oneshot
+# Least-privilege: run as the indexer's user so the online snapshot can reach
+# the Unix socket (and, for offline snapshots, read the database dir).
+User=mina-indexer
+Group=mina-indexer
+EnvironmentFile=-/etc/mina-indexer/backup.env
+ExecStart=/usr/local/bin/mina-indexer-backup.sh
+# Backups are I/O heavy; be a good neighbor to a live indexer on the same host.
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=3600

@@ -1,0 +1,15 @@
+# Schedule for mina-indexer-backup.service. Daily at 03:30 with jitter; catches
+# up (Persistent) if the host was down at the scheduled time. Tune OnCalendar to
+# your RPO (e.g. `hourly` for a 1h RPO — but see the RPO note in ops/dr/README.md:
+# periodic on-host checkpoints already give a much tighter effective RPO).
+[Unit]
+Description=Schedule Mina Indexer off-host database backup
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=mina-indexer-backup.service
+
+[Install]
+WantedBy=timers.target

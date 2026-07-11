@@ -148,6 +148,11 @@ the full exported-metric reference. Design rationale and the metric list:
 
 ## Checkpoints & recovery
 
+> For the full disaster-recovery story — RTO/RPO, **off-host** scheduled backups
+> ([`ops/dr/`](../ops/dr/)), restore procedures, and the failover playbook — see the
+> [disaster-recovery runbook](disaster-recovery.md). Checkpoints below are the *on-host*
+> (tight-RPO) layer; they do not survive losing the disk.
+
 A speedb checkpoint dir is itself a complete, openable database. With `MINA_CHECKPOINT_DIR`
 set, the indexer writes a consistent, hard-link-cheap checkpoint to `<dir>/latest` every
 `MINA_CHECKPOINT_INTERVAL_SECS` (atomic tmp+rename, so `latest` is always complete).
