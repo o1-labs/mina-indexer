@@ -1,0 +1,54 @@
+# cargo-deny configuration.
+#
+# Gates dependency *licenses* and *sources* (and surfaces duplicate versions) in
+# CI — the supply-chain checks `cargo audit` doesn't do. Advisory scanning stays
+# primarily on `cargo audit` (see the Rakefile); CI runs
+# `cargo deny check licenses bans sources`.
+#
+# The license allow-list is derived from the actual dependency tree
+# (`cargo deny list`); adding a dependency under a new license will fail the gate
+# until the license is consciously allowed here.
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "BSL-1.0",
+    "CC0-1.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.8
+# The `mina-indexer` crate itself is not published and carries its license via
+# the repo LICENSE file, so skip the unlicensed check for private crates.
+private = { ignore = true }
+
+# actix-governor (the per-IP rate limiter) is GPL-3.0-or-later — the only
+# copyleft dependency in the tree. Allowed explicitly, scoped to that crate, so
+# any *new* copyleft dependency still fails the gate and gets a conscious review.
+[[licenses.exceptions]]
+crate = "actix-governor"
+allow = ["GPL-3.0-or-later"]
+
+[bans]
+# Duplicate transitive versions are common and benign in a large tree; surface
+# them but don't block CI.
+multiple-versions = "warn"
+wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+# crates.io is allowed implicitly. The async-graphql patch (see Cargo.toml) pulls
+# from a maintained fork pending upstream async-graphql#1703.
+allow-git = ["https://github.com/yasamoka/async-graphql.git"]
+
+[advisories]
+# Advisories are gated by `cargo audit`; this mirrors its one justified ignore so
+# a local `cargo deny check advisories` agrees with the Rakefile.
+ignore = ["RUSTSEC-2026-0009"]
