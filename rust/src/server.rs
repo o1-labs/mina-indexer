@@ -612,6 +612,45 @@ async fn retry_parse_staking_ledger(path: &Path) -> anyhow::Result<StakingLedger
     )
 }
 
+/// Apply a block via [`IndexerState::block_pipeline`], catching any panic so a
+/// single poison block cannot take down the whole ingestion subsystem.
+///
+/// `block_pipeline` is synchronous. Without this guard a panic in it propagates
+/// out of the watcher/reconcile task; `tokio_graceful_shutdown` treats a
+/// subsystem panic as fatal, so the process exits — and on restart it re-ingests
+/// the very same block and panics again: a crash loop that takes the indexer
+/// permanently offline. Catching converts that into a logged, counted, skipped
+/// block (via the callers' existing `Err` arms) while every other block stays
+/// consistent and the service keeps serving reads.
+///
+/// Trade-off: after a caught panic the in-memory state for *that* block may be
+/// partially applied. That is strictly better than a total outage — a
+/// deterministic panic just skips that one block forever. `tokio`'s `RwLock`
+/// does not poison on panic, so the held write guard remains usable.
+fn apply_block_catching_panic(
+    state: &mut IndexerState,
+    block: &PrecomputedBlock,
+    block_bytes: u64,
+) -> anyhow::Result<bool> {
+    catch_block_apply(|| state.block_pipeline(block, block_bytes))
+}
+
+/// Run a synchronous block-apply closure, converting a panic into an `Err`
+/// rather than letting it unwind out of the ingestion task. Split out from
+/// [`apply_block_catching_panic`] so the catch behavior is unit-testable without
+/// constructing a full `IndexerState`.
+fn catch_block_apply<F>(apply: F) -> anyhow::Result<bool>
+where
+    F: FnOnce() -> anyhow::Result<bool>,
+{
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(apply)) {
+        Ok(res) => res,
+        Err(_) => Err(anyhow::anyhow!(
+            "panic while applying block to the witness tree (block skipped to keep ingestion alive)"
+        )),
+    }
+}
+
 /// Precomputed block & staking ledger event handler
 async fn process_event(
     event: Event,
@@ -649,7 +688,8 @@ async fn process_event(
                         let state_hash = block.state_hash();
                         let apply_start = std::time::Instant::now();
 
-                        match state.block_pipeline(&block, path.metadata()?.len()) {
+                        let len = path.metadata()?.len();
+                        match apply_block_catching_panic(&mut state, &block, len) {
                             Ok(is_added) => {
                                 if is_added {
                                     tracing::info!(
@@ -777,7 +817,7 @@ async fn reconcile_blocks_dir(
                 let height = block.blockchain_length();
                 let state_hash = block.state_hash();
                 let mut st = state.write().await;
-                match st.block_pipeline(&block, len) {
+                match apply_block_catching_panic(&mut st, &block, len) {
                     Ok(true) => {
                         reconciled += 1;
                         tracing::info!(height, state_hash = %state_hash, "Reconciled on-disk block");
@@ -1230,8 +1270,32 @@ fn log_dirs_msg(blocks_dir: Option<&PathBuf>, staking_ledgers_dir: Option<&PathB
 
 #[cfg(test)]
 mod tests {
-    use super::prunable_block_files;
+    use super::{catch_block_apply, prunable_block_files};
     use std::{collections::HashSet, fs, path::PathBuf};
+
+    #[test]
+    fn catch_block_apply_passes_through_ok_and_err() {
+        assert!(matches!(catch_block_apply(|| Ok(true)), Ok(true)));
+        assert!(matches!(catch_block_apply(|| Ok(false)), Ok(false)));
+        assert!(catch_block_apply(|| anyhow::bail!("pipeline error")).is_err());
+    }
+
+    #[test]
+    fn catch_block_apply_converts_panic_to_err() {
+        // The whole point: a panic in the sync pipeline must become an `Err`
+        // (block skipped) instead of unwinding out and killing the process.
+        // Silence the default panic hook so the caught panic doesn't spam a
+        // backtrace into the test output.
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let result = catch_block_apply(|| panic!("boom in block_pipeline"));
+        std::panic::set_hook(prev);
+
+        assert!(
+            result.is_err(),
+            "a panic must be caught and returned as Err"
+        );
+    }
 
     // any 52-char "3N…" string is a structurally valid state hash
     fn hash(seed: char) -> String {
