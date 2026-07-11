@@ -1,0 +1,191 @@
+# Prometheus alerting rules + SLO recording rules for the Mina Indexer.
+#
+# Load alongside your scrape config:
+#   rule_files:
+#     - /etc/prometheus/mina-indexer/alerts.yml
+#
+# Every expression references a metric the indexer actually exports on
+# `/metrics` (see ops/observability/README.md for the full series list). A few
+# thresholds are deployment-specific and called out inline with `TUNE:` — review
+# them before wiring to a pager.
+#
+# The scrape job is assumed to be labelled `job="mina-indexer"`. Adjust the
+# selectors if you name it differently.
+
+groups:
+  # --- SLO indicators (recording rules) -----------------------------------
+  # Rolling windows that back the SLOs in the production-readiness epic. Graph
+  # these next to their targets; alert off the burn where it matters.
+  - name: mina-indexer.slo
+    interval: 1m
+    rules:
+      # Availability SLO: synced ≥ 99.9% of the time. `mina_indexer_synced` is
+      # 1 when the tip is within ~2 slots of now. 30d rolling fraction.
+      - record: slo:mina_indexer_synced:ratio30d
+        expr: avg_over_time(mina_indexer_synced[30d])
+
+      # Serving SLO: p99 HTTP latency over 5m, across all endpoints.
+      - record: slo:mina_indexer_http_latency:p99_5m
+        expr: >
+          histogram_quantile(
+            0.99,
+            sum by (le) (rate(mina_indexer_http_request_duration_seconds_bucket[5m]))
+          )
+
+      # Serving SLO: fraction of HTTP responses that are 5xx over 5m.
+      - record: slo:mina_indexer_http_errors:ratio5m
+        expr: >
+          sum(rate(mina_indexer_http_request_duration_seconds_count{status=~"5.."}[5m]))
+          /
+          clamp_min(sum(rate(mina_indexer_http_request_duration_seconds_count[5m])), 1)
+
+  # --- Liveness / scrape health -------------------------------------------
+  - name: mina-indexer.liveness
+    rules:
+      - alert: IndexerDown
+        expr: up{job="mina-indexer"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Indexer {{ $labels.instance }} is down"
+          description: "Prometheus cannot scrape /metrics for 2m (process crashed, OOM, or port unreachable)."
+
+      - alert: IndexerMetricsAbsent
+        expr: absent(mina_indexer_synced)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Indexer metrics absent"
+          description: "No mina_indexer_* series for 5m — the target is gone or /metrics stopped serving."
+
+  # --- Sync / ingest health -----------------------------------------------
+  - name: mina-indexer.sync
+    rules:
+      # Primary availability page: the tip is stale.
+      - alert: IndexerNotSynced
+        expr: mina_indexer_synced == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Indexer {{ $labels.instance }} not synced (10m)"
+          description: "mina_indexer_synced=0 for 10m — the best tip is older than ~2 slots. Check the fetcher, ingest, and upstream block source."
+
+      # Tip lag warning ahead of the hard not-synced page.
+      # TUNE: 1200s ≈ ~6-7 mainnet slots. Lower for tighter freshness SLAs.
+      - alert: IndexerTipLagHigh
+        expr: mina_indexer_tip_age_seconds > 1200
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Indexer tip lag high ({{ $value | humanizeDuration }})"
+          description: "mina_indexer_tip_age_seconds > 1200 for 10m — the tip is falling behind but not yet unsynced."
+
+      # Ingest actively failing: valid-looking blocks are being dropped.
+      - alert: IndexerIngestFailures
+        expr: rate(mina_indexer_blocks_ingest_failed_total[10m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Indexer block ingest failures"
+          description: "block_pipeline is erroring ({{ $value | printf \"%.3f\" }}/s over 10m) on the watcher or reconcile path — blocks parse but won't apply."
+
+      # Ingest wedged: nothing processed for a while *and* the tip is stale.
+      # (Guarded by synced==0 so a legitimately idle/caught-up node is quiet.)
+      - alert: IndexerIngestStalled
+        expr: increase(mina_indexer_blocks_processed_total[30m]) == 0 and mina_indexer_synced == 0
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Indexer ingest stalled"
+          description: "No blocks processed in 30m while unsynced — ingest loop is wedged (starved fetch, deadlock, or exhausted source)."
+
+      # Disconnected branches piling up in the witness tree (missing parents).
+      # TUNE: a small transient count is normal during catch-up.
+      - alert: IndexerDanglingBranchesHigh
+        expr: mina_indexer_dangling_branches > 5
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Indexer dangling branches high ({{ $value }})"
+          description: "Persistent disconnected branches in the witness tree — parent blocks are missing; missing-block recovery may be behind."
+
+  # --- Fetcher health ------------------------------------------------------
+  - name: mina-indexer.fetch
+    rules:
+      - alert: IndexerFetchFailing
+        expr: rate(mina_indexer_fetch_failures_total[10m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Indexer fetch-new-blocks failing"
+          description: "The external fetch executable failed to run ({{ $value | printf \"%.3f\" }}/s over 10m) — bad path, permissions, or missing deps. Ingest will fall behind."
+
+      # Slow fetcher blocks the ingest timer (the O(tree)/window-200 class of
+      # bug). p95 fetch wall time crossing the fetch delay is the tell.
+      # TUNE: 60s ~ a fetch delay of a few minutes; align with --fetch-new-blocks-delay.
+      - alert: IndexerFetchSlow
+        expr: >
+          histogram_quantile(0.95, sum by (le) (rate(mina_indexer_fetch_seconds_bucket[15m]))) > 60
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Indexer fetch slow (p95 {{ $value | humanizeDuration }})"
+          description: "fetch-new-blocks p95 wall time > 60s — a slow fetch runs synchronously in the timer branch and starves reconcile."
+
+  # --- Serving health ------------------------------------------------------
+  - name: mina-indexer.serving
+    rules:
+      # TUNE: 2s p99 target. Tighten/loosen per your query-latency SLO.
+      - alert: IndexerHighQueryLatency
+        expr: slo:mina_indexer_http_latency:p99_5m > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Indexer p99 query latency high ({{ $value | humanizeDuration }})"
+          description: "p99 HTTP latency > 2s for 10m across all endpoints (GraphQL + REST)."
+
+      - alert: IndexerHighErrorRate
+        expr: slo:mina_indexer_http_errors:ratio5m > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Indexer HTTP 5xx rate high ({{ $value | humanizePercentage }})"
+          description: "More than 5% of responses are 5xx for 10m — a handler is failing (store error, panic-boundary 500s)."
+
+  # --- Storage / capacity --------------------------------------------------
+  - name: mina-indexer.storage
+    rules:
+      # Capacity projection: the store's on-disk footprint is growing toward a
+      # ceiling. Prometheus can't see the volume's free space, so alert on the
+      # store size itself crossing a budget you set for the data volume.
+      # TUNE: set 500e9 (500 GB) to ~80% of the DB volume's capacity.
+      - alert: IndexerDbSizeApproachingBudget
+        expr: mina_indexer_db_sst_files_bytes > 500e9
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Indexer DB size high ({{ $value | humanize1024 }}B)"
+          description: "On-disk SST size crossed the configured budget — provision more disk or plan compaction/retention before the volume fills."
+
+      # Growth-rate early warning: projected to double the budget within 7d.
+      # TUNE: keep the 500e9 budget in sync with the alert above.
+      - alert: IndexerDbGrowthProjectedHigh
+        expr: predict_linear(mina_indexer_db_sst_files_bytes[6h], 7 * 24 * 3600) > 500e9
+        for: 1h
+        labels:
+          severity: info
+        annotations:
+          summary: "Indexer DB projected to exceed budget within 7d"
+          description: "Linear projection of on-disk SST size over the next 7 days exceeds the configured budget — capacity-plan ahead of exhaustion."

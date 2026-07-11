@@ -123,12 +123,16 @@ client query commands (`mina-indexer <query> …` against the running socket), a
 
 - **Metrics:** `GET /metrics` — Prometheus exposition (blocks processed, ingest/fetch
   latency histograms, best-tip height, tip age, synced flag, dangling branches, reconcile
-  counts, blocks pruned). Point Prometheus at `:8080/metrics`.
+  counts, blocks pruned, ingest/fetch failure counters, HTTP request histogram, DB-size
+  gauges). Point Prometheus at `:8080/metrics`.
 - **Health / summary:** `GET /health`, `GET /summary` (chain summary as JSON).
 - **Logs:** human-readable by default; set `MINA_LOG_FORMAT=json` for aggregation. Filter
   with `RUST_LOG`.
 
-Full rationale and the metric list: [`ops/OBSERVABILITY.md`](../ops/OBSERVABILITY.md).
+Ready-to-load **Prometheus alert rules + SLO recording rules** and an importable
+**Grafana dashboard** are in [`ops/observability/`](../ops/observability/README.md), with
+the full exported-metric reference. Design rationale and the metric list:
+[`ops/OBSERVABILITY.md`](../ops/OBSERVABILITY.md).
 
 ## Checkpoints & recovery
 
