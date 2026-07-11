@@ -207,6 +207,64 @@ impl ServerArgs {
         self.pid = Some(pid);
         self
     }
+
+    /// Reject conflicting / silently-ineffective flag combinations at startup so
+    /// an operator finds out immediately, not after a "why isn't this working"
+    /// incident. Returns non-fatal `warnings` on success; `Err` on a hard
+    /// conflict that should abort startup.
+    pub fn validate(&self) -> anyhow::Result<Vec<String>> {
+        let mut warnings = Vec::new();
+
+        // Hard: the rate limiter is only active when BOTH knobs are > 0. Setting
+        // just one leaves it silently OFF — the operator thinks the deployment is
+        // protected when it isn't.
+        let rps = self.web_rate_limit_per_second;
+        let burst = self.web_rate_limit_burst;
+        if (rps > 0) != (burst > 0) {
+            anyhow::bail!(
+                "rate limiting needs BOTH --web-rate-limit-per-second and \
+                 --web-rate-limit-burst > 0 (got per-second={rps}, burst={burst}); \
+                 set both to enable it, or neither to disable it"
+            );
+        }
+
+        // Hard: --restore-force only means anything alongside --restore-from-checkpoint.
+        if self.restore_force && self.restore_from_checkpoint.is_none() {
+            anyhow::bail!(
+                "--restore-force has no effect without --restore-from-checkpoint"
+            );
+        }
+
+        // Soft: a delay without its executable means the timer does nothing.
+        if self.fetch_new_blocks_delay.is_some() && self.fetch_new_blocks_exe.is_none() {
+            warnings.push(
+                "--fetch-new-blocks-delay set without --fetch-new-blocks-exe: \
+                 no new blocks will be fetched"
+                    .to_string(),
+            );
+        }
+        if (self.missing_block_recovery_delay.is_some()
+            || self.missing_block_recovery_batch.is_some())
+            && self.missing_block_recovery_exe.is_none()
+        {
+            warnings.push(
+                "--missing-block-recovery-delay/-batch set without \
+                 --missing-block-recovery-exe: no missing-block recovery will run"
+                    .to_string(),
+            );
+        }
+
+        // Soft: port 0 binds an OS-assigned ephemeral port clients can't predict.
+        if self.web_port == 0 {
+            warnings.push(
+                "--web-port 0 binds an OS-assigned ephemeral port; clients cannot \
+                 predict it"
+                    .to_string(),
+            );
+        }
+
+        Ok(warnings)
+    }
 }
 
 /////////////////
@@ -327,5 +385,98 @@ impl From<DatabaseArgs> for ServerArgs {
             web_port: DEFAULT_WEB_PORT,
             ..Default::default()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ServerArgs;
+    use crate::constants::DEFAULT_WEB_PORT;
+
+    fn base() -> ServerArgs {
+        // A minimal, valid config (a real port; everything else off/unset).
+        ServerArgs {
+            web_port: DEFAULT_WEB_PORT,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn valid_config_has_no_warnings() {
+        let w = base().validate().expect("valid config");
+        assert!(w.is_empty(), "unexpected warnings: {w:?}");
+    }
+
+    #[test]
+    fn half_configured_rate_limiter_is_rejected() {
+        // per-second without burst
+        let a = ServerArgs {
+            web_rate_limit_per_second: 100,
+            web_rate_limit_burst: 0,
+            ..base()
+        };
+        assert!(a.validate().is_err());
+
+        // burst without per-second
+        let a = ServerArgs {
+            web_rate_limit_per_second: 0,
+            web_rate_limit_burst: 5,
+            ..base()
+        };
+        assert!(a.validate().is_err());
+
+        // both set is fine
+        let a = ServerArgs {
+            web_rate_limit_per_second: 100,
+            web_rate_limit_burst: 5,
+            ..base()
+        };
+        assert!(a.validate().unwrap().is_empty());
+    }
+
+    #[test]
+    fn restore_force_without_checkpoint_is_rejected() {
+        let a = ServerArgs {
+            restore_force: true,
+            restore_from_checkpoint: None,
+            ..base()
+        };
+        assert!(a.validate().is_err());
+
+        let a = ServerArgs {
+            restore_force: true,
+            restore_from_checkpoint: Some("/data/checkpoints".into()),
+            ..base()
+        };
+        assert!(a.validate().unwrap().is_empty());
+    }
+
+    #[test]
+    fn ineffective_flags_warn_but_do_not_abort() {
+        let a = ServerArgs {
+            fetch_new_blocks_delay: Some(60),
+            fetch_new_blocks_exe: None,
+            ..base()
+        };
+        let w = a.validate().expect("soft issues only warn");
+        assert!(w.iter().any(|m| m.contains("fetch-new-blocks-delay")));
+
+        let a = ServerArgs {
+            missing_block_recovery_delay: Some(120),
+            missing_block_recovery_exe: None,
+            ..base()
+        };
+        let w = a.validate().unwrap();
+        assert!(w.iter().any(|m| m.contains("missing-block-recovery")));
+    }
+
+    #[test]
+    fn web_port_zero_warns() {
+        let a = ServerArgs {
+            web_port: 0,
+            ..base()
+        };
+        let w = a.validate().unwrap();
+        assert!(w.iter().any(|m| m.contains("--web-port 0")));
     }
 }
