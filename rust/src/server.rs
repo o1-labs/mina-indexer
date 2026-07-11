@@ -373,7 +373,7 @@ fn spawn_periodic_checkpoints(store: Arc<IndexerStore>, dir: PathBuf) {
 }
 
 /// Write a consistent speedb checkpoint to `<dir>/latest`, atomically (tmp + rename).
-fn write_db_checkpoint(store: &IndexerStore, dir: &Path) -> anyhow::Result<PathBuf> {
+pub(crate) fn write_db_checkpoint(store: &IndexerStore, dir: &Path) -> anyhow::Result<PathBuf> {
     fs::create_dir_all(dir)?;
     let tmp = dir.join(".tmp-checkpoint");
     let latest = dir.join("latest");
@@ -1341,5 +1341,89 @@ mod tests {
     #[test]
     fn missing_dir_yields_empty() {
         assert!(prunable_block_files(std::path::Path::new("/no/such/dir"), 100).is_empty());
+    }
+
+    // ---- checkpoint crash-consistency ----
+    //
+    // The periodic checkpoint writes `<dir>/latest` via a fully-written
+    // `.tmp-checkpoint` + atomic `rename`, so `latest` is never partial — the
+    // recovery path (`maybe_restore_from_checkpoint`) gates on `latest/CURRENT`.
+    // These tests pin those guarantees.
+
+    use crate::store::IndexerStore;
+    use super::write_db_checkpoint;
+
+    #[test]
+    fn checkpoint_is_complete_and_reopenable() {
+        let src = tempfile::tempdir().unwrap();
+        let ckpt = tempfile::tempdir().unwrap();
+
+        let store = IndexerStore::new(src.path(), true).unwrap();
+        store.database.put(b"crash-key", b"crash-val").unwrap();
+        store.database.flush().unwrap();
+
+        let latest = write_db_checkpoint(&store, ckpt.path()).unwrap();
+
+        // A complete DB: CURRENT is the openable marker the restore path checks.
+        assert!(
+            latest.join("CURRENT").exists(),
+            "checkpoint `latest` must be a complete, openable DB"
+        );
+
+        // Reopen the checkpoint as an independent store — the data round-trips.
+        let restored = IndexerStore::new(&latest, false).unwrap();
+        assert_eq!(
+            restored.database.get(b"crash-key").unwrap().as_deref(),
+            Some(&b"crash-val"[..]),
+            "restored checkpoint must contain the data present at checkpoint time"
+        );
+    }
+
+    #[test]
+    fn stale_tmp_checkpoint_is_cleaned_and_next_checkpoint_succeeds() {
+        let src = tempfile::tempdir().unwrap();
+        let ckpt = tempfile::tempdir().unwrap();
+
+        let store = IndexerStore::new(src.path(), true).unwrap();
+        store.database.put(b"k", b"v").unwrap();
+        store.database.flush().unwrap();
+
+        // Simulate a crash *during* a previous checkpoint: a partial
+        // `.tmp-checkpoint` is left behind. The next checkpoint must remove it
+        // and still produce a good `latest` (self-healing).
+        let stale = ckpt.path().join(".tmp-checkpoint");
+        std::fs::create_dir_all(&stale).unwrap();
+        std::fs::write(stale.join("garbage.sst"), b"partial write").unwrap();
+
+        let latest = write_db_checkpoint(&store, ckpt.path()).unwrap();
+
+        assert!(latest.join("CURRENT").exists());
+        assert!(
+            !stale.exists(),
+            "a stale `.tmp-checkpoint` from a crashed run must be cleaned up"
+        );
+    }
+
+    #[test]
+    fn checkpoint_latest_reflects_newest_write() {
+        let src = tempfile::tempdir().unwrap();
+        let ckpt = tempfile::tempdir().unwrap();
+
+        let store = IndexerStore::new(src.path(), true).unwrap();
+        store.database.put(b"gen", b"1").unwrap();
+        store.database.flush().unwrap();
+        write_db_checkpoint(&store, ckpt.path()).unwrap();
+
+        // A second checkpoint must atomically replace `latest` with the newer DB.
+        store.database.put(b"gen", b"2").unwrap();
+        store.database.flush().unwrap();
+        let latest = write_db_checkpoint(&store, ckpt.path()).unwrap();
+
+        let restored = IndexerStore::new(&latest, false).unwrap();
+        assert_eq!(
+            restored.database.get(b"gen").unwrap().as_deref(),
+            Some(&b"2"[..]),
+            "`latest` must reflect the most recent checkpoint"
+        );
     }
 }
