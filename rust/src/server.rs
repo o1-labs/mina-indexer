@@ -362,9 +362,11 @@ fn spawn_periodic_checkpoints(store: Arc<IndexerStore>, dir: PathBuf) {
             let dir = dir.clone();
             // create_checkpoint is blocking I/O — keep it off the async workers
             match tokio::task::spawn_blocking(move || write_db_checkpoint(&store, &dir)).await {
-                Ok(Ok(path)) => info!("DB checkpoint written: {path:#?}"),
-                Ok(Err(e)) => error!("DB checkpoint failed: {e}"),
-                Err(e) => error!("DB checkpoint task panicked: {e}"),
+                Ok(Ok(path)) => {
+                    tracing::info!(path = %path.display(), "DB checkpoint written")
+                }
+                Ok(Err(e)) => tracing::error!(error = %e, "DB checkpoint failed"),
+                Err(e) => tracing::error!(error = %e, "DB checkpoint task panicked"),
             }
         }
     });
@@ -643,21 +645,33 @@ async fn process_event(
                 match retry_parse_precomputed_block(&path, pcb_version).await {
                     Ok(block) => {
                         let mut state = state.write().await;
-                        let block_summary = block.summary();
+                        let height = block.blockchain_length();
+                        let state_hash = block.state_hash();
+                        let apply_start = std::time::Instant::now();
 
                         match state.block_pipeline(&block, path.metadata()?.len()) {
                             Ok(is_added) => {
                                 if is_added {
-                                    info!("Added block {}", block_summary)
+                                    tracing::info!(
+                                        height,
+                                        state_hash = %state_hash,
+                                        duration_ms = apply_start.elapsed().as_millis() as u64,
+                                        "Added block"
+                                    );
                                 }
                             }
                             Err(e) => {
                                 crate::metrics::BLOCKS_INGEST_FAILED.inc();
-                                error!("Error adding block {}: {}", block_summary, e)
+                                tracing::error!(
+                                    height,
+                                    state_hash = %state_hash,
+                                    error = %e,
+                                    "Error adding block"
+                                );
                             }
                         }
                     }
-                    Err(e) => error!("Error parsing precomputed block: {}", e),
+                    Err(e) => tracing::error!(error = %e, "Error parsing precomputed block"),
                 }
             } else if StakingLedger::is_valid(&path) {
                 debug!("Valid staking ledger file: {:#?}", path);
@@ -760,17 +774,23 @@ async fn reconcile_blocks_dir(
                     Ok(m) => m.len(),
                     Err(_) => continue,
                 };
-                let summary = block.summary();
+                let height = block.blockchain_length();
+                let state_hash = block.state_hash();
                 let mut st = state.write().await;
                 match st.block_pipeline(&block, len) {
                     Ok(true) => {
                         reconciled += 1;
-                        info!("Reconciled on-disk block {summary}");
+                        tracing::info!(height, state_hash = %state_hash, "Reconciled on-disk block");
                     }
                     Ok(false) => {}
                     Err(e) => {
                         crate::metrics::BLOCKS_INGEST_FAILED.inc();
-                        error!("Error reconciling block {summary}: {e}")
+                        tracing::error!(
+                            height,
+                            state_hash = %state_hash,
+                            error = %e,
+                            "Error reconciling block"
+                        );
                     }
                 }
             }
@@ -781,7 +801,10 @@ async fn reconcile_blocks_dir(
     crate::metrics::RECONCILE_INGESTED.inc_by(reconciled as u64);
     crate::metrics::DANGLING_BRANCHES.set(state.read().await.dangling_branches.len() as i64);
     if reconciled > 0 {
-        info!("Reconcile: ingested {reconciled} on-disk block(s) the fs-watcher missed");
+        tracing::info!(
+            ingested = reconciled,
+            "Reconcile ingested on-disk block(s) the fs-watcher missed"
+        );
     }
     Ok(())
 }
@@ -947,26 +970,25 @@ async fn fetch_new_blocks(
             let stdout = stdout.trim_end();
 
             if !stdout.is_empty() {
-                info!("Fetch new blocks: {}", stdout);
+                tracing::info!(network = %network, output = %stdout, "fetch-new-blocks output");
             }
 
             let stderr = String::from_utf8(output.stderr)?;
             let stderr = stderr.trim_end();
 
             if !stderr.is_empty() {
-                info!("Fetch new blocks: {}", stderr);
+                tracing::info!(network = %network, output = %stderr, "fetch-new-blocks stderr");
             }
         }
         Err(e) => {
             crate::metrics::FETCH_FAILURES.inc();
-            error!(
-                "Error fetching new blocks: {}, pgm: {}, args: {:?}",
-                e,
-                cmd.get_program().to_str().unwrap(),
-                cmd.get_args()
-                    .map(|arg| arg.to_str().unwrap())
-                    .collect::<Vec<_>>()
-            )
+            tracing::error!(
+                network = %network,
+                error = %e,
+                program = %cmd.get_program().to_string_lossy(),
+                args = ?cmd.get_args().map(|a| a.to_string_lossy()).collect::<Vec<_>>(),
+                "Error fetching new blocks"
+            );
         }
     }
 

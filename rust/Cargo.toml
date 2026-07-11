@@ -49,6 +49,7 @@ speedb = { version = "0.*", default-features = false, features = ["zstd"] }
 id_tree = { version = "1.*", default-features = false }
 time = { version = "0.*", default-features = false }
 log = { version = "0.*", default-features = false }
+tracing = { version = "0.1", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt", "env-filter", "json", "tracing-log"] }
 bytesize = { version = "1.*", default-features = true }
 rust_decimal = { version = "1.*", default-features = false }
