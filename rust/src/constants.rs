@@ -222,3 +222,12 @@ pub const DEFAULT_GRAPHQL_TIMEOUT_SECS: u64 = 30;
 /// vector. Every paginated resolver clamps its `limit` to this. Generous (10x the
 /// per-query default of 100) so real paging isn't affected.
 pub const GRAPHQL_MAX_PAGE_SIZE: usize = 1000;
+
+/// Default cap on the number of records returned by the `internal-commands
+/// public-key` client query when no `--limit` is given. The JSON path
+/// materializes every record into one `Vec` + pretty-printed string, so an
+/// unbounded fetch for a high-volume account (a block producer collects a
+/// coinbase + fee transfers in nearly every block) is a memory-blowup vector.
+/// Generous enough that ordinary accounts are never truncated; pass `--limit 0`
+/// (or use `--csv`, which streams) for a full export of a large account.
+pub const DEFAULT_INTERNAL_COMMANDS_LIMIT: usize = 100_000;
