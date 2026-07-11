@@ -31,6 +31,14 @@ pub async fn get_metrics(store: Data<Arc<IndexerStore>>) -> HttpResponse {
     metrics::DB_SST_FILES_BYTES.set(db.total_sst_files_size() as i64);
     metrics::DB_ESTIMATED_NUM_KEYS.set(db.estimate_num_keys() as i64);
 
+    // Store & process resource gauges (memory / compaction / fd pressure).
+    metrics::DB_BLOCK_CACHE_BYTES.set(db.block_cache_usage() as i64);
+    metrics::DB_TABLE_READERS_BYTES.set(db.table_readers_mem() as i64);
+    metrics::DB_RUNNING_COMPACTIONS.set(db.num_running_compactions() as i64);
+    metrics::DB_COMPACTION_PENDING.set(db.compaction_pending() as i64);
+    metrics::PROCESS_RESIDENT_MEMORY_BYTES.set(metrics::resident_memory_bytes() as i64);
+    metrics::PROCESS_OPEN_FDS.set(metrics::open_fd_count() as i64);
+
     HttpResponse::Ok()
         .content_type(ContentType::plaintext())
         .body(metrics::gather())
