@@ -1931,10 +1931,12 @@ test_security() {
 	# guards fire at request validation, before any resolver/data access).
 	port=$(ephemeral_port)
 	idxr database create --database-dir ./database
+	mkdir -p ./security-blocks
 	start \
 		--web-port "$port" \
 		--web-hostname 127.0.0.1 \
 		--database-dir ./database \
+		--blocks-dir ./security-blocks \
 		--web-cors-allowed-origins https://allowed.example \
 		--web-max-body-bytes 1024 \
 		--graphql-max-depth 3 \
@@ -1946,6 +1948,22 @@ test_security() {
 		echo "Running security test: $test_file"
 		hurl --variable url="http://localhost:$port" --test "$test_file"
 	done
+
+	# --- fail-closed ingest: malformed files in the watched dir must be
+	# skipped, never crash the process (Workstream-A boundary). Each of these
+	# would previously either crash the guard or the parser:
+	#   - `foo.gz`: bare .gz with no inner .json → panicked the filename guard
+	#   - valid name + garbage JSON → parser must skip, not panic
+	#   - non-u32 height / empty / bad .gz → rejected by the guard
+	echo "Dropping malformed files into the watched blocks dir (fail-closed check)"
+	printf 'not gzip' >./security-blocks/foo.gz
+	printf '{ not json' >"./security-blocks/mainnet-2-3NLyWnjZqUECniE1q719CoLmes6WDQAod4vrTeLfN7XXJbHv6EHH.json"
+	printf 'x' >./security-blocks/mainnet-notaheight-3Nabc.json
+	printf '' >./security-blocks/empty.json
+	printf 'junk' >./security-blocks/mainnet-9-3Nbadhash.json.gz
+	sleep 4
+	# The process must still be alive and serving after the malformed drops.
+	assert '200' "$(curl --silent -o /dev/null -w '%{http_code}' http://localhost:${port}/health)"
 
 	shutdown_idxr
 	sleep 1

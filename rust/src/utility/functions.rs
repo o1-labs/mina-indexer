@@ -124,16 +124,14 @@ where
     // check extension
     if let Some(ext) = path.as_ref().extension().and_then(|ext| ext.to_str()) {
         if ext == "gz" {
-            // gzip compressed json
-            if let Some((stem, ext)) = file_stem.as_ref().map(|file| {
-                let mut parts = file.split('.');
-                (parts.next().unwrap(), parts.next().unwrap())
-            }) {
-                if ext != "json" {
-                    return false;
-                }
-
-                file_stem = Some(stem);
+            // gzip-compressed json: the stem must itself end in `.json`
+            // (e.g. `mainnet-1-<hash>.json.gz`). A bare `.gz` with no inner
+            // `.json` (e.g. `foo.gz`) is not a block file — reject it rather
+            // than panicking. This runs on every file dropped into the watched
+            // dir, so a panic here crashes the whole indexer.
+            match file_stem.and_then(|stem| stem.rsplit_once('.')) {
+                Some((stem, "json")) => file_stem = Some(stem),
+                _ => return false,
             }
         } else if ext != "json" {
             // uncompressed
@@ -277,5 +275,37 @@ mod tests {
         assert!(!is_valid_block_file(
             "mainnet-42-3Nabcdef12345678901234567890123456789012345678901234-123.json"
         ));
+    }
+
+    #[test]
+    fn valid_gzip_block_file_accepted() {
+        // `.json.gz` is the compressed block form and must be accepted.
+        assert!(is_valid_block_file(
+            "mainnet-42-3Nabcdef12345678901234567890123456789012345678901234.json.gz"
+        ));
+    }
+
+    #[test]
+    fn malformed_filenames_are_rejected_not_fatal() {
+        // Regression: these all run through the validity guard on every file
+        // dropped into the watched dir. Each must return `false`, NEVER panic
+        // — a panic here crashes the whole indexer (a trivial remote DoS: drop
+        // one bad file into blocks_dir).
+
+        // Bare `.gz` with no inner `.json` — previously panicked on
+        // `split('.').next().unwrap()` inside the guard.
+        assert!(!is_valid_block_file("foo.gz"));
+        assert!(!is_valid_block_file("mainnet-42-3Nabc.gz"));
+        // `.gz` over a non-json inner extension.
+        assert!(!is_valid_block_file("mainnet-42-3Nabc.txt.gz"));
+        // Non-u32 height.
+        assert!(!is_valid_block_file(
+            "mainnet-notaheight-3Nabcdef12345678901234567890123456789012345678901234.json"
+        ));
+        // Empty / extensionless / dotfiles.
+        assert!(!is_valid_block_file(""));
+        assert!(!is_valid_block_file("mainnet-42-3Nabc"));
+        assert!(!is_valid_block_file(".gz"));
+        assert!(!is_valid_block_file(".json"));
     }
 }
