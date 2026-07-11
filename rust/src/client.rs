@@ -435,6 +435,13 @@ pub enum InternalCommands {
         /// Format output as CSV
         #[arg(long, default_value_t = false)]
         csv: bool,
+
+        /// Max records to return for the JSON output (0 = unlimited). A block
+        /// producer can have hundreds of thousands of records; the default caps
+        /// memory. Use `0` or `--csv` (streamed) for a full export. Ignored with
+        /// `--csv`.
+        #[arg(long)]
+        limit: Option<usize>,
     },
 }
 

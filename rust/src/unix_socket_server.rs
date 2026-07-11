@@ -1101,6 +1101,7 @@ pub async fn handle_connection(
                 path,
                 public_key: pk,
                 csv,
+                limit,
             }) => {
                 if !PublicKey::is_valid(&pk) {
                     invalid_public_key(&pk)
@@ -1114,8 +1115,31 @@ pub async fn handle_connection(
                         )),
                     }
                 } else {
-                    let internal_cmds =
-                        db.get_internal_commands_public_key(&pk.clone().into(), 0, usize::MAX)?;
+                    // The JSON path materializes every record into one Vec +
+                    // pretty-printed string, so bound it by default. `--limit 0`
+                    // opts back into unlimited (use --csv, which streams, for a
+                    // large full export).
+                    let effective_limit = match limit {
+                        Some(0) => usize::MAX,
+                        Some(n) => n,
+                        None => crate::constants::DEFAULT_INTERNAL_COMMANDS_LIMIT,
+                    };
+
+                    let total = db
+                        .get_pk_num_internal_commands(&pk.clone().into())?
+                        .unwrap_or(0) as usize;
+                    if total > effective_limit {
+                        warn!(
+                            "Internal commands for {pk}: returning {effective_limit} of {total} \
+                             (truncated). Pass --limit 0 or --csv for the full set."
+                        );
+                    }
+
+                    let internal_cmds = db.get_internal_commands_public_key(
+                        &pk.clone().into(),
+                        0,
+                        effective_limit,
+                    )?;
                     let internal_cmds_str = serde_json::to_string_pretty(&internal_cmds)?;
 
                     if path.is_none() {
