@@ -794,3 +794,105 @@ mod verify_integrity_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod checkpoint_restore_tests {
+    //! Recovery half of the checkpoint crash-consistency story (the write half
+    //! lives in `server::tests`). The periodic checkpoint only ever swaps
+    //! `<dir>/latest` via an atomic rename, so a `kill -9` mid-write can leave
+    //! `latest` briefly absent — but never a *partial* DB. `maybe_restore_from_checkpoint`
+    //! gates on `latest/CURRENT`, so an absent/partial checkpoint is refused
+    //! (safe) rather than restored as garbage.
+    use super::{copy_dir_recursive, maybe_restore_from_checkpoint};
+    use std::fs;
+
+    /// Make `<dir>/latest` look like a complete speedb DB (CURRENT is the marker
+    /// the restore path checks) with a couple of files to copy.
+    fn make_valid_latest(checkpoint_dir: &std::path::Path) {
+        let latest = checkpoint_dir.join("latest");
+        fs::create_dir_all(latest.join("subdir")).unwrap();
+        fs::write(latest.join("CURRENT"), b"MANIFEST-000001\n").unwrap();
+        fs::write(latest.join("MANIFEST-000001"), b"manifest").unwrap();
+        fs::write(latest.join("subdir/000001.sst"), b"sst").unwrap();
+    }
+
+    #[test]
+    fn none_checkpoint_is_a_noop() {
+        let db = tempfile::tempdir().unwrap();
+        assert!(maybe_restore_from_checkpoint(None, db.path(), false).is_ok());
+        assert!(!db.path().join("CURRENT").exists());
+    }
+
+    #[test]
+    fn absent_latest_is_refused() {
+        // A crash in the remove-then-rename window leaves `latest` absent.
+        let ckpt = tempfile::tempdir().unwrap();
+        let db = tempfile::tempdir().unwrap();
+        assert!(
+            maybe_restore_from_checkpoint(Some(ckpt.path()), db.path(), false).is_err(),
+            "an absent checkpoint must be refused, not restored"
+        );
+    }
+
+    #[test]
+    fn partial_latest_without_current_is_refused() {
+        // A `latest` dir that exists but lacks CURRENT (never a real state given
+        // the atomic rename, but the guard must still reject it).
+        let ckpt = tempfile::tempdir().unwrap();
+        fs::create_dir_all(ckpt.path().join("latest")).unwrap();
+        fs::write(ckpt.path().join("latest/000001.sst"), b"orphan sst").unwrap();
+        let db = tempfile::tempdir().unwrap();
+        assert!(maybe_restore_from_checkpoint(Some(ckpt.path()), db.path(), false).is_err());
+    }
+
+    #[test]
+    fn valid_checkpoint_is_restored_into_empty_dir() {
+        let ckpt = tempfile::tempdir().unwrap();
+        make_valid_latest(ckpt.path());
+        let db = tempfile::tempdir().unwrap();
+        // remove so the target dir is truly absent (fresh restore)
+        fs::remove_dir_all(db.path()).unwrap();
+
+        maybe_restore_from_checkpoint(Some(ckpt.path()), db.path(), false).unwrap();
+
+        assert!(db.path().join("CURRENT").exists());
+        assert_eq!(fs::read(db.path().join("MANIFEST-000001")).unwrap(), b"manifest");
+        assert_eq!(fs::read(db.path().join("subdir/000001.sst")).unwrap(), b"sst");
+    }
+
+    #[test]
+    fn existing_db_is_kept_without_force_and_overwritten_with_force() {
+        let ckpt = tempfile::tempdir().unwrap();
+        make_valid_latest(ckpt.path());
+
+        // Target already holds a (different) DB.
+        let db = tempfile::tempdir().unwrap();
+        fs::write(db.path().join("CURRENT"), b"existing db\n").unwrap();
+
+        // Without force: left as-is (the live DB is usually newer than the checkpoint).
+        maybe_restore_from_checkpoint(Some(ckpt.path()), db.path(), false).unwrap();
+        assert_eq!(fs::read(db.path().join("CURRENT")).unwrap(), b"existing db\n");
+
+        // With force: replaced by the checkpoint.
+        maybe_restore_from_checkpoint(Some(ckpt.path()), db.path(), true).unwrap();
+        assert_eq!(fs::read(db.path().join("CURRENT")).unwrap(), b"MANIFEST-000001\n");
+        assert!(db.path().join("subdir/000001.sst").exists());
+    }
+
+    #[test]
+    fn copy_dir_recursive_copies_nested_tree() {
+        let src = tempfile::tempdir().unwrap();
+        fs::create_dir_all(src.path().join("a/b")).unwrap();
+        fs::write(src.path().join("top.txt"), b"top").unwrap();
+        fs::write(src.path().join("a/mid.txt"), b"mid").unwrap();
+        fs::write(src.path().join("a/b/leaf.txt"), b"leaf").unwrap();
+
+        let dst = tempfile::tempdir().unwrap();
+        let dst = dst.path().join("copy");
+        copy_dir_recursive(src.path(), &dst).unwrap();
+
+        assert_eq!(fs::read(dst.join("top.txt")).unwrap(), b"top");
+        assert_eq!(fs::read(dst.join("a/mid.txt")).unwrap(), b"mid");
+        assert_eq!(fs::read(dst.join("a/b/leaf.txt")).unwrap(), b"leaf");
+    }
+}
