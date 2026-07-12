@@ -100,3 +100,13 @@ first event. Source: `rust/src/metrics.rs`.
 | `mina_indexer_db_sst_files_bytes` | On-disk SST footprint (the real disk usage) |
 | `mina_indexer_db_estimated_live_data_bytes` | Estimated logical live data size |
 | `mina_indexer_db_estimated_num_keys` | Estimated total key count |
+
+### Resources (gauges, refreshed at scrape time)
+| Metric | Meaning |
+|---|---|
+| `mina_indexer_process_resident_memory_bytes` | Process RSS (from `/proc/self/status`) |
+| `mina_indexer_process_open_fds` | Open file descriptors (watch vs the `ulimit -n` 4096 floor) |
+| `mina_indexer_db_block_cache_bytes` | speedb block-cache RAM (read working set) |
+| `mina_indexer_db_table_readers_bytes` | RAM held by SST index/filter blocks |
+| `mina_indexer_db_running_compactions` | Compactions currently running |
+| `mina_indexer_db_compaction_pending` | 1 if a compaction is pending, else 0 |

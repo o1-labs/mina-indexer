@@ -523,4 +523,32 @@ impl IndexerStore {
             .flatten()
             .unwrap_or(0)
     }
+
+    fn u64_property(&self, prop: &'static speedb::properties::PropName) -> u64 {
+        self.database
+            .property_int_value(prop)
+            .ok()
+            .flatten()
+            .unwrap_or(0)
+    }
+
+    /// Bytes of RAM the speedb block cache is currently using (read working set).
+    pub fn block_cache_usage(&self) -> u64 {
+        self.u64_property(speedb::properties::BLOCK_CACHE_USAGE)
+    }
+
+    /// Estimated bytes of RAM held by SST index/filter blocks ("table readers").
+    pub fn table_readers_mem(&self) -> u64 {
+        self.u64_property(speedb::properties::ESTIMATE_TABLE_READERS_MEM)
+    }
+
+    /// Number of compactions currently running.
+    pub fn num_running_compactions(&self) -> u64 {
+        self.u64_property(speedb::properties::NUM_RUNNING_COMPACTIONS)
+    }
+
+    /// `1` if at least one compaction is pending, else `0` (compaction backlog).
+    pub fn compaction_pending(&self) -> u64 {
+        self.u64_property(speedb::properties::COMPACTION_PENDING)
+    }
 }

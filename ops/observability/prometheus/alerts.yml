@@ -189,3 +189,15 @@ groups:
         annotations:
           summary: "Indexer DB projected to exceed budget within 7d"
           description: "Linear projection of on-disk SST size over the next 7 days exceeds the configured budget — capacity-plan ahead of exhaustion."
+
+      # File-descriptor pressure. The indexer opens many SST files; crossing the
+      # `ulimit -n` floor of 4096 crashes it. Warn well before that.
+      # TUNE: raise the 3200 (~80% of 4096) if you run a higher LimitNOFILE.
+      - alert: IndexerOpenFdsHigh
+        expr: mina_indexer_process_open_fds > 3200
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Indexer open file descriptors high ({{ $value }})"
+          description: "Open fds are approaching the ulimit -n 4096 floor; raise LimitNOFILE / --ulimit nofile before the indexer hits the cap and crashes."
