@@ -459,4 +459,39 @@ mod tests {
         assert_eq!(paths[2].file_name().unwrap(), "mainnet-2-ghi789.json");
         assert_eq!(paths[3].file_name().unwrap(), "mainnet-3-jkl012.json");
     }
+
+    // ---- fuzz-lite properties for the untrusted ingest filename boundary ----
+    //
+    // Every file dropped into the watched dir runs through this guard, so it must
+    // survive *any* string without panicking (regression class of #59), and the
+    // guard must fully protect the extractor: if a name passes `is_valid_block_file`,
+    // `extract_network_height_hash` must not panic on it. These pin the invariant
+    // the #34 audit relied on.
+
+    /// `is_valid_block_file` never panics, whatever the filename.
+    #[test]
+    fn guard_never_panics_on_arbitrary_input() {
+        fn prop(name: String) -> bool {
+            let _ = is_valid_block_file(name);
+            true
+        }
+        quickcheck::quickcheck(prop as fn(String) -> bool);
+    }
+
+    /// A filename the guard accepts never panics the extractor.
+    #[test]
+    fn accepted_filename_never_panics_the_extractor() {
+        // A real mainnet state hash (valid per `StateHash::is_valid`), so
+        // guard-passing names are actually reachable for dash/dot-free networks.
+        const VALID_HASH: &str = "3NKeMoncuHab5ScarV5ViyF16cJPT4taWNSaTLS64Dp67wuXigPZ";
+        fn prop(network: String, height: u32) -> bool {
+            let name = format!("{network}-{height}-{VALID_HASH}.json");
+            if is_valid_block_file(name.clone()) {
+                // Guard passed ⇒ extraction must not panic.
+                let _ = extract_network_height_hash(Path::new(&name));
+            }
+            true
+        }
+        quickcheck::quickcheck(prop as fn(String, u32) -> bool);
+    }
 }
