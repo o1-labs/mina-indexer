@@ -52,6 +52,56 @@ fn block_stated_account<'a>(
         })
 }
 
+/// Lay the block-stated fields over `account`. No ledger diff can derive them --
+/// `receipt_chain_hash` in particular is a Poseidon chain over the account's
+/// transactions and the indexer has no hasher -- so they are only ever correct if
+/// taken from the block that states them.
+fn set_block_stated_fields(account: &mut Account, stated: Option<&Account>) {
+    account.receipt_chain_hash = stated.and_then(|a| a.receipt_chain_hash.to_owned());
+    account.voting_for = stated.and_then(|a| a.voting_for.to_owned());
+    account.permissions = stated.and_then(|a| a.permissions.to_owned());
+}
+
+/// The account as the *parent* block left it. Used on unapply: the block-stated fields
+/// are not reversible from a diff, so they are rolled back to what the parent said.
+/// Without this an orphaned block's values stick.
+fn parent_stated_account(
+    db: &IndexerStore,
+    parent: Option<&StateHash>,
+    pk: &PublicKey,
+    token: &TokenAddress,
+) -> Option<Account> {
+    parent.and_then(|parent| db.get_staged_account(pk, token, parent).ok().flatten())
+}
+
+/// Roll the block-stated fields back for accounts the unapplied block merely *accessed* --
+/// ones it touched without producing any ledger diff for them.
+fn unapply_accessed_only(
+    db: &IndexerStore,
+    accounts_accessed: &[AccountAccessed],
+    diffed: &HashSet<(PublicKey, TokenAddress)>,
+    parent: Option<&StateHash>,
+) -> Result<()> {
+    for accessed in accounts_accessed.iter() {
+        let pk = accessed.account.public_key.to_owned();
+        let token = accessed.account.token.to_owned().unwrap_or_default();
+
+        if diffed.contains(&(pk.clone(), token.clone())) {
+            continue;
+        }
+
+        if let Some(mut account) = db.get_best_account(&pk, &token)? {
+            let before_values = Some((account.is_zkapp_account(), account.balance.0));
+            let stated = parent_stated_account(db, parent, &pk, &token);
+
+            set_block_stated_fields(&mut account, stated.as_ref());
+            db.update_best_account(&pk, &token, before_values, Some(account), false)?;
+        }
+    }
+
+    Ok(())
+}
+
 pub type DbAccountUpdate = DbUpdate<AccountUpdate>;
 
 impl DbAccountUpdate {
@@ -182,15 +232,10 @@ impl DbAccountUpdate {
                     };
                 }
 
-                // A ledger diff cannot derive receipt_chain_hash, voting_for or
-                // permissions -- receipt_chain_hash in particular is a Poseidon chain
-                // over the account's transactions and the indexer has no hasher. Without
-                // this the fields keep whatever the genesis ledger said, forever. The
-                // block states them outright, so take them from it.
+                // Take the block-stated fields from the block. Without this they keep
+                // whatever the genesis ledger said, forever.
                 if let Some(stated) = block_stated_account(&accounts_accessed, &pk, &token) {
-                    after.receipt_chain_hash = stated.receipt_chain_hash.to_owned();
-                    after.voting_for = stated.voting_for.to_owned();
-                    after.permissions = stated.permissions.to_owned();
+                    set_block_stated_fields(&mut after, Some(stated));
                 }
 
                 // update staged ledger account
@@ -222,9 +267,7 @@ impl DbAccountUpdate {
                 if let Some(mut account) = db.get_best_account(&pk, &token)? {
                     let before_values = Some((account.is_zkapp_account(), account.balance.0));
 
-                    account.receipt_chain_hash = stated.receipt_chain_hash.to_owned();
-                    account.voting_for = stated.voting_for.to_owned();
-                    account.permissions = stated.permissions.to_owned();
+                    set_block_stated_fields(&mut account, Some(stated));
 
                     db.set_staged_account(&pk, &token, state_hash, block_height, &account)?;
                     db.update_best_account(&pk, &token, before_values, Some(account), false)?;
@@ -413,18 +456,9 @@ impl DbAccountUpdate {
                 after.voting_for = stated_before.as_ref().and_then(|a| a.voting_for.to_owned());
                 after.permissions = stated_before.as_ref().and_then(|a| a.permissions.to_owned());
 
-                // Roll the block-stated fields back to what the parent block said. A diff
-                // cannot reverse them, so without this the account keeps the *unapplied*
-                // (orphaned) block's values.
-                let stated_before = parent
-                    .as_ref()
-                    .and_then(|parent| db.get_staged_account(&pk, &token, parent).ok().flatten());
-
-                after.receipt_chain_hash = stated_before
-                    .as_ref()
-                    .and_then(|a| a.receipt_chain_hash.to_owned());
-                after.voting_for = stated_before.as_ref().and_then(|a| a.voting_for.to_owned());
-                after.permissions = stated_before.as_ref().and_then(|a| a.permissions.to_owned());
+                // roll the block-stated fields back to what the parent block said
+                let stated = parent_stated_account(db, parent.as_ref(), &pk, &token);
+                set_block_stated_fields(&mut after, stated.as_ref());
 
                 if new_accounts.contains(&(pk.clone(), token.clone())) {
                     db.remove_staged_account(
@@ -442,32 +476,7 @@ impl DbAccountUpdate {
             }
 
             // ...and the same for accounts the orphaned block merely *accessed*
-            for accessed in accounts_accessed.iter() {
-                let stated = &accessed.account;
-                let pk = stated.public_key.to_owned();
-                let token = stated.token.to_owned().unwrap_or_default();
-
-                if diffed.contains(&(pk.clone(), token.clone())) {
-                    continue;
-                }
-
-                if let Some(mut account) = db.get_best_account(&pk, &token)? {
-                    let before_values = Some((account.is_zkapp_account(), account.balance.0));
-                    let stated_before = parent.as_ref().and_then(|parent| {
-                        db.get_staged_account(&pk, &token, parent).ok().flatten()
-                    });
-
-                    account.receipt_chain_hash = stated_before
-                        .as_ref()
-                        .and_then(|a| a.receipt_chain_hash.to_owned());
-                    account.voting_for =
-                        stated_before.as_ref().and_then(|a| a.voting_for.to_owned());
-                    account.permissions =
-                        stated_before.as_ref().and_then(|a| a.permissions.to_owned());
-
-                    db.update_best_account(&pk, &token, before_values, Some(account), false)?;
-                }
-            }
+            unapply_accessed_only(db, &accounts_accessed, &diffed, parent.as_ref())?;
 
             // unapply token diffs
             for diffs in aggregate_token_diffs(token_diffs).values() {
