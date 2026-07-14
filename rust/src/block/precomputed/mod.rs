@@ -326,10 +326,12 @@ impl PrecomputedBlock {
 
         // maybe coinbase receiver
         if let Some(bal) = self.coinbase_receiver_balance() {
+            let coinbase_reward = self.coinbase_reward();
+
             if [
-                (Amount(MAINNET_COINBASE_REWARD) - MAINNET_ACCOUNT_CREATION_FEE).0,
+                (Amount(coinbase_reward) - MAINNET_ACCOUNT_CREATION_FEE).0,
                 // supercharged
-                (Amount(2 * MAINNET_COINBASE_REWARD) - MAINNET_ACCOUNT_CREATION_FEE).0,
+                (Amount(2 * coinbase_reward) - MAINNET_ACCOUNT_CREATION_FEE).0,
             ]
             .contains(&bal)
             {
@@ -732,6 +734,17 @@ impl PrecomputedBlock {
                 StateHash::from_hashv1(v1.protocol_state.body.t.t.genesis_state_hash.to_owned())
             }
             Self::V2(v2) => v2.protocol_state.body.genesis_state_hash.to_owned(),
+        }
+    }
+
+    /// The coinbase reward is a per-network protocol constant: mesa-mut pays 360
+    /// MINA, mainnet and devnet pay 720. Selected by genesis hash, like the rest
+    /// of the network dispatch.
+    pub fn coinbase_reward(&self) -> u64 {
+        if self.genesis_state_hash().0 == MESA_GENESIS_HASH {
+            MESA_COINBASE_REWARD
+        } else {
+            MAINNET_COINBASE_REWARD
         }
     }
 

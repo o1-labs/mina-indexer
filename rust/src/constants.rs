@@ -98,6 +98,8 @@ pub const MESA_GENESIS_PREV_STATE_HASH: &str =
     "3NLp6dKNhYtsqUj49QYV5GtDaeocSJBAa2y2ER2QQLqLukE3wuZT";
 pub const MESA_GENESIS_LEDGER_HASH: &str = "jxicjVogngTDjJh5EEsTUrvBxa3R4fhepqrAeexiRVMogJGqHdT";
 pub const MESA_GENESIS_LAST_VRF_OUTPUT: &str = "8oxYNPIKw0xNLJJrhcXRICHIS34t4z-8fsvfTfSbIAA=";
+// mesa-mut halved the coinbase: 360 MINA, against mainnet/devnet's 720.
+pub const MESA_COINBASE_REWARD: u64 = 360000000000;
 // Placeholder chain id (valid 64-char hex). mesa-mut's real chain id depends on
 // its constraint-system digests, which are not needed for indexing block data.
 pub const MESA_CHAIN_ID: &str =
