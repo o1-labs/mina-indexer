@@ -69,7 +69,15 @@ fn set_block_stated_fields(account: &mut Account, stated: Option<&Account>) {
     account.receipt_chain_hash = stated.and_then(|a| a.receipt_chain_hash.to_owned());
     account.voting_for = stated.and_then(|a| a.voting_for.to_owned());
     account.permissions = stated.and_then(|a| a.permissions.to_owned());
-    account.zkapp = stated.and_then(|a| a.zkapp.to_owned());
+
+    // Set the zkApp account, but never *clear* it. An account cannot stop being a zkApp
+    // on chain, and `stated` is the parent block's account on unapply -- which may be
+    // absent. Assigning `None` there would destroy the account's zkApp and leave the
+    // store's zkApp-account counter one ahead of reality, since the delete path only
+    // decrements it for an account it still sees as a zkApp.
+    if let Some(zkapp) = stated.and_then(|a| a.zkapp.as_ref()) {
+        account.zkapp = Some(zkapp.to_owned());
+    }
 }
 
 /// The account as the *parent* block left it. Used on unapply: the block-stated fields
