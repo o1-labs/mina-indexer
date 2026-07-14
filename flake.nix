@@ -250,6 +250,24 @@
             text = builtins.readFile ./ops/block-pull.sh;
           };
 
+          # One-shot bulk fetcher, used on first boot only. block-pull follows the
+          # tip and is deliberately slow (a small, synchronous window, so it never
+          # starves reconcile); bootstrapping a fresh instance with it would take
+          # hours. This lists by height prefix and downloads in parallel instead.
+          block-bootstrap = pkgs.writeShellApplication {
+            name = "block-bootstrap";
+            runtimeInputs = with pkgs; [
+              curl
+              gnugrep
+              gnused
+              gawk
+              coreutils
+              findutils
+            ];
+            bashOptions = [ "nounset" "pipefail" ];
+            text = builtins.readFile ./ops/block-bootstrap.sh;
+          };
+
           # Configless per-network entrypoints: each exec's mina-indexer with all
           # flags baked in (zero args/mounts needed). Each per-network file holds
           # only its variables (NETWORK / GENESIS_HASH / FETCH_EXE / GENESIS_GZ);
@@ -263,7 +281,10 @@
             }:
             pkgs.writeShellApplication {
               name = "indexer-entry-${net}";
-              runtimeInputs = [ mina-indexer ] ++ pkgs.lib.optional needsGzip pkgs.gzip;
+              runtimeInputs = [
+                mina-indexer
+                block-bootstrap
+              ] ++ pkgs.lib.optional needsGzip pkgs.gzip;
               bashOptions = [ "errexit" "nounset" "pipefail" ];
               text =
                 builtins.readFile (./ops/entrypoints + "/${net}.sh")

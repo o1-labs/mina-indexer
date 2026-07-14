@@ -27,6 +27,26 @@ if [ -n "${GENESIS_GZ:-}" ]; then
   ledger_args=(--genesis-ledger "$GEN")
 fi
 
+# First boot: bulk-fetch the backlog in parallel.
+#
+# FETCH_EXE follows the *tip*. The indexer calls it synchronously inside its
+# fetch/reconcile timer, so it keeps a deliberately small window (15 heights) --
+# a slow fetch there starves the reconcile step that ingests what was fetched.
+# That is right for staying at the tip and hopeless for starting from nothing:
+# devnet's ~7,700 blocks from its checkpoint would take ~9 hours at that rate.
+#
+# So on a fresh instance (no DB yet) we bulk-fetch the range once, in parallel,
+# which takes minutes. Ingesting it is fast (devnet: ~11k blocks in ~3 minutes),
+# and FETCH_EXE takes over at the tip. Networks that set no BOOTSTRAP_FROM (i.e.
+# mainnet, whose history is far too large to pull this way) simply skip it.
+#
+# Set BOOTSTRAP_FROM=0 to disable; BOOTSTRAP_WORKERS tunes the parallelism.
+if [ -n "${BOOTSTRAP_FROM:-}" ] && [ "${BOOTSTRAP_FROM}" -gt 0 ] && [ ! -d /data/db ]; then
+  echo "first boot: bulk-fetching ${NETWORK} blocks from height ${BOOTSTRAP_FROM}..." >&2
+  block-bootstrap "$NETWORK" "$BOOTSTRAP_FROM" /data/blocks "${BOOTSTRAP_WORKERS:-16}" ||
+    echo "bootstrap incomplete; the fetcher will fill the gaps (slowly)" >&2
+fi
+
 # Bound /data/blocks growth: keep only recent block files on disk (older blocks
 # already live in the speedb DB and are never re-read). Tune with
 # MINA_BLOCKS_RETENTION_LENGTH; set it to 0 to disable and keep every block.
