@@ -56,10 +56,20 @@ fn block_stated_account<'a>(
 /// `receipt_chain_hash` in particular is a Poseidon chain over the account's
 /// transactions and the indexer has no hasher -- so they are only ever correct if
 /// taken from the block that states them.
+///
+/// The zkApp account is here for a different reason: a diff only carries the app-state
+/// fields it *changes*, and rebuilding the account from diffs starts from an 8-wide
+/// default ([`ZKAPP_STATE_FIELD_ELEMENTS_NUM`]) that grows only to the highest index a
+/// diff touches. On mesa, whose app state is 32 fields wide, a zkApp that writes its
+/// first few fields ends up stored 8 wide, with the remaining fields simply absent. The
+/// block states the account's zkApp in full, at the protocol's width, so take it.
+///
+/// [`ZKAPP_STATE_FIELD_ELEMENTS_NUM`]: crate::constants::ZKAPP_STATE_FIELD_ELEMENTS_NUM
 fn set_block_stated_fields(account: &mut Account, stated: Option<&Account>) {
     account.receipt_chain_hash = stated.and_then(|a| a.receipt_chain_hash.to_owned());
     account.voting_for = stated.and_then(|a| a.voting_for.to_owned());
     account.permissions = stated.and_then(|a| a.permissions.to_owned());
+    account.zkapp = stated.and_then(|a| a.zkapp.to_owned());
 }
 
 /// The account as the *parent* block left it. Used on unapply: the block-stated fields
