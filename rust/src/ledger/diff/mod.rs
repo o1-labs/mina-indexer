@@ -7,7 +7,10 @@ use self::account::{AccountDiff, AccountDiffType, FailedTransactionNonceDiff};
 use super::{coinbase::Coinbase, token::TokenAddress, LedgerHash, PublicKey};
 use crate::{
     base::state_hash::StateHash,
-    block::{precomputed::PrecomputedBlock, AccountCreated},
+    block::{
+        post_hardfork::account_accessed::AccountAccessed, precomputed::PrecomputedBlock,
+        AccountCreated,
+    },
     command::{TxnHash, UserCommandWithStatusT},
 };
 use serde::{Deserialize, Serialize};
@@ -43,6 +46,13 @@ pub struct LedgerDiff {
 
     /// Token diffs
     pub token_diffs: Vec<TokenDiff>,
+
+    /// Post-block state of every account the block touched, as stated by the
+    /// block itself. The block is authoritative for the account fields a
+    /// diff cannot derive (`receipt_chain_hash`, `voting_for`,
+    /// `permissions`) -- see `DbAccountUpdate::apply_updates`. Empty for V1
+    /// (pre-hardfork) blocks, which carry no `accounts_accessed`.
+    pub accounts_accessed: Vec<AccountAccessed>,
 }
 
 impl LedgerDiff {
@@ -155,6 +165,7 @@ impl LedgerDiff {
             accounts_created: block.accounts_created_v2(),
             new_pk_balances: accounts_created.0,
             new_coinbase_receiver: accounts_created.1,
+            accounts_accessed: block.accounts_accessed(),
         }
     }
 
@@ -196,6 +207,11 @@ impl LedgerDiff {
         // update new data
         self.blockchain_length = other.blockchain_length;
         self.new_coinbase_receiver = other.new_coinbase_receiver;
+
+        // carry the block-stated account records. Order matters: `_apply_diff` lays them
+        // over the account in sequence, so a later block's statement wins -- which is what
+        // we want when several blocks are aggregated into one diff.
+        self.accounts_accessed.extend(other.accounts_accessed);
 
         for (pk, bal) in other.new_pk_balances {
             self.new_pk_balances.insert(pk, bal);

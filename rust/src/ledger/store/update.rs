@@ -2,7 +2,7 @@
 
 use crate::{
     base::{public_key::PublicKey, state_hash::StateHash},
-    block::store::BlockStore,
+    block::{post_hardfork::account_accessed::AccountAccessed, store::BlockStore},
     ledger::{
         account::Account,
         diff::{
@@ -26,6 +26,80 @@ pub struct AccountUpdate {
     pub token_diffs: Vec<TokenDiff>,
     pub new_accounts: HashSet<(PublicKey, TokenAddress)>,
     pub new_zkapp_accounts: HashSet<(PublicKey, TokenAddress)>,
+
+    /// The block's own account records -- authoritative for the fields no diff
+    /// can derive. Empty for V1 blocks.
+    pub accounts_accessed: Vec<AccountAccessed>,
+
+    /// The block these diffs came from. Needed on unapply: the block-stated fields
+    /// are not reversible from a diff, so they are restored from the parent block's
+    /// staged account instead.
+    pub state_hash: StateHash,
+}
+
+/// The block-stated account for `(pk, token)`, if this block touched it.
+fn block_stated_account<'a>(
+    accounts_accessed: &'a [AccountAccessed],
+    pk: &PublicKey,
+    token: &TokenAddress,
+) -> Option<&'a Account> {
+    accounts_accessed
+        .iter()
+        .map(|accessed| &accessed.account)
+        .find(|account| {
+            account.public_key == *pk
+                && account.token.as_ref().unwrap_or(&TokenAddress::default()) == token
+        })
+}
+
+/// Lay the block-stated fields over `account`. No ledger diff can derive them --
+/// `receipt_chain_hash` in particular is a Poseidon chain over the account's
+/// transactions and the indexer has no hasher -- so they are only ever correct if
+/// taken from the block that states them.
+fn set_block_stated_fields(account: &mut Account, stated: Option<&Account>) {
+    account.receipt_chain_hash = stated.and_then(|a| a.receipt_chain_hash.to_owned());
+    account.voting_for = stated.and_then(|a| a.voting_for.to_owned());
+    account.permissions = stated.and_then(|a| a.permissions.to_owned());
+}
+
+/// The account as the *parent* block left it. Used on unapply: the block-stated fields
+/// are not reversible from a diff, so they are rolled back to what the parent said.
+/// Without this an orphaned block's values stick.
+fn parent_stated_account(
+    db: &IndexerStore,
+    parent: Option<&StateHash>,
+    pk: &PublicKey,
+    token: &TokenAddress,
+) -> Option<Account> {
+    parent.and_then(|parent| db.get_staged_account(pk, token, parent).ok().flatten())
+}
+
+/// Roll the block-stated fields back for accounts the unapplied block merely *accessed* --
+/// ones it touched without producing any ledger diff for them.
+fn unapply_accessed_only(
+    db: &IndexerStore,
+    accounts_accessed: &[AccountAccessed],
+    diffed: &HashSet<(PublicKey, TokenAddress)>,
+    parent: Option<&StateHash>,
+) -> Result<()> {
+    for accessed in accounts_accessed.iter() {
+        let pk = accessed.account.public_key.to_owned();
+        let token = accessed.account.token.to_owned().unwrap_or_default();
+
+        if diffed.contains(&(pk.clone(), token.clone())) {
+            continue;
+        }
+
+        if let Some(mut account) = db.get_best_account(&pk, &token)? {
+            let before_values = Some((account.is_zkapp_account(), account.balance.0));
+            let stated = parent_stated_account(db, parent, &pk, &token);
+
+            set_block_stated_fields(&mut account, stated.as_ref());
+            db.update_best_account(&pk, &token, before_values, Some(account), false)?;
+        }
+    }
+
+    Ok(())
 }
 
 pub type DbAccountUpdate = DbUpdate<AccountUpdate>;
@@ -45,10 +119,12 @@ impl DbAccountUpdate {
             account_diffs,
             token_diffs,
             new_accounts,
+            accounts_accessed,
             ..
         } in apply.into_iter()
         {
             let token_account_diffs = aggregate_token_account_diffs(account_diffs);
+            let mut diffed: HashSet<(PublicKey, TokenAddress)> = HashSet::new();
 
             // apply account diffs
             for ((pk, token), diffs) in token_account_diffs {
@@ -156,6 +232,12 @@ impl DbAccountUpdate {
                     };
                 }
 
+                // Take the block-stated fields from the block. Without this they keep
+                // whatever the genesis ledger said, forever.
+                if let Some(stated) = block_stated_account(&accounts_accessed, &pk, &token) {
+                    set_block_stated_fields(&mut after, Some(stated));
+                }
+
                 // update staged ledger account
                 db.set_staged_account(&pk, &token, state_hash, block_height, &after)?;
 
@@ -166,6 +248,30 @@ impl DbAccountUpdate {
                     Some(after),
                     new_accounts.contains(&(pk.clone(), token.clone())),
                 )?;
+
+                diffed.insert((pk, token));
+            }
+
+            // A block can *access* an account without producing any ledger diff for it,
+            // and it still states that account's fields. Lay those over too, or the store
+            // drifts from the ledger (which applies every accessed record).
+            for accessed in accounts_accessed.iter() {
+                let stated = &accessed.account;
+                let pk = stated.public_key.to_owned();
+                let token = stated.token.to_owned().unwrap_or_default();
+
+                if diffed.contains(&(pk.clone(), token.clone())) {
+                    continue;
+                }
+
+                if let Some(mut account) = db.get_best_account(&pk, &token)? {
+                    let before_values = Some((account.is_zkapp_account(), account.balance.0));
+
+                    set_block_stated_fields(&mut account, Some(stated));
+
+                    db.set_staged_account(&pk, &token, state_hash, block_height, &account)?;
+                    db.update_best_account(&pk, &token, before_values, Some(account), false)?;
+                }
             }
 
             // apply token diffs
@@ -195,10 +301,18 @@ impl DbAccountUpdate {
             account_diffs,
             token_diffs,
             new_accounts,
+            accounts_accessed,
+            state_hash: unapplied_state_hash,
             ..
         } in unapply
         {
             let token_account_diffs = aggregate_token_account_diffs(account_diffs);
+            let mut diffed: HashSet<(PublicKey, TokenAddress)> = HashSet::new();
+
+            // The block-stated fields (receipt_chain_hash, voting_for, permissions) are
+            // laid over the account on apply and cannot be reversed from a diff. Restore
+            // them from the parent block's staged account -- the state before this block.
+            let parent = db.get_block_parent_hash(&unapplied_state_hash)?;
 
             for ((pk, token), diffs) in token_account_diffs {
                 let before = db.get_best_account(&pk, &token)?;
@@ -329,6 +443,23 @@ impl DbAccountUpdate {
                     };
                 }
 
+                // Roll the block-stated fields back to what the parent block said. A diff
+                // cannot reverse them, so without this the account keeps the *unapplied*
+                // (orphaned) block's values.
+                let stated_before = parent
+                    .as_ref()
+                    .and_then(|parent| db.get_staged_account(&pk, &token, parent).ok().flatten());
+
+                after.receipt_chain_hash = stated_before
+                    .as_ref()
+                    .and_then(|a| a.receipt_chain_hash.to_owned());
+                after.voting_for = stated_before.as_ref().and_then(|a| a.voting_for.to_owned());
+                after.permissions = stated_before.as_ref().and_then(|a| a.permissions.to_owned());
+
+                // roll the block-stated fields back to what the parent block said
+                let stated = parent_stated_account(db, parent.as_ref(), &pk, &token);
+                set_block_stated_fields(&mut after, stated.as_ref());
+
                 if new_accounts.contains(&(pk.clone(), token.clone())) {
                     db.remove_staged_account(
                         &pk,
@@ -340,7 +471,12 @@ impl DbAccountUpdate {
                 }
 
                 db.update_best_account(&pk, &token, before_values, Some(after), false)?;
+
+                diffed.insert((pk, token));
             }
+
+            // ...and the same for accounts the orphaned block merely *accessed*
+            unapply_accessed_only(db, &accounts_accessed, &diffed, parent.as_ref())?;
 
             // unapply token diffs
             for diffs in aggregate_token_diffs(token_diffs).values() {
