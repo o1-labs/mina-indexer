@@ -164,6 +164,11 @@ impl Ledger {
         // the indexer has no hasher. The block states them outright for every
         // account it touched, so take them from there. (V1 blocks carry no
         // `accounts_accessed`, so this is a no-op for them.)
+        //
+        // The zkApp account comes from the block for a different reason: a diff carries
+        // only the app-state fields it changes, and rebuilding from diffs starts at an
+        // 8-wide default, so a mesa zkApp (32 fields wide) ends up stored 8 wide with the
+        // rest absent. The block states it in full, at the protocol's width.
         for accessed in diff.accounts_accessed.iter() {
             let stated = &accessed.account;
             let token = stated.token.to_owned().unwrap_or_default();
@@ -175,6 +180,7 @@ impl Ledger {
                 account.receipt_chain_hash = stated.receipt_chain_hash.to_owned();
                 account.voting_for = stated.voting_for.to_owned();
                 account.permissions = stated.permissions.to_owned();
+                account.zkapp = stated.zkapp.to_owned();
             }
         }
 
