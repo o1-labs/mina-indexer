@@ -3,7 +3,6 @@
 use crate::{
     block::precomputed::PrecomputedBlock,
     command::internal::InternalCommand,
-    constants::*,
     ledger::{
         diff::account::{AccountDiff, PaymentDiff, UpdateType},
         PublicKey,
@@ -19,6 +18,10 @@ pub struct Coinbase {
     pub supercharge: bool,
     pub is_new_account: bool,
     pub receiver_balance: Option<u64>,
+
+    /// The block's network coinbase reward: mesa-mut pays 360 MINA, mainnet and
+    /// devnet 720
+    pub reward: u64,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, PartialOrd, Ord)]
@@ -55,9 +58,9 @@ impl Coinbase {
         if matches!(self.kind, CoinbaseKind::Zero) {
             0
         } else if !self.supercharge {
-            MAINNET_COINBASE_REWARD
+            self.reward
         } else {
-            2 * MAINNET_COINBASE_REWARD
+            2 * self.reward
         }
     }
 
@@ -68,6 +71,7 @@ impl Coinbase {
             receiver_balance: block.coinbase_receiver_balance(),
             is_new_account: block.accounts_created().1.is_some(),
             supercharge: block.supercharge_coinbase(),
+            reward: block.coinbase_reward(),
         }
     }
 
@@ -195,7 +199,42 @@ impl From<staged_ledger_diff::CoinBaseFeeTransfer> for CoinbaseFeeTransfer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::block::precomputed::PcbVersion;
+    use crate::{block::precomputed::PcbVersion, constants::*};
+
+    #[test]
+    fn coinbase_reward_is_per_network() -> anyhow::Result<()> {
+        // mesa-mut halved the coinbase to 360 MINA. Paying the mainnet reward on a
+        // mesa block over-credits the producer by 360 MINA per block it produces,
+        // and the drift never washes out.
+        let mesa = PrecomputedBlock::parse_file(
+            std::path::Path::new(
+                "./tests/data/misc_blocks/mesa-297736-3NK6RWU4RvrLkCnsM8hcWykcr2FiAa6XJrBTGBuuzNUU5mBadseV.json",
+            ),
+            PcbVersion::V2,
+        )?;
+
+        assert_eq!(mesa.coinbase_reward(), MESA_COINBASE_REWARD);
+        assert_eq!(
+            Coinbase::from_precomputed(&mesa).amount(),
+            MESA_COINBASE_REWARD
+        );
+
+        // ...while mainnet still pays 720
+        let mainnet = PrecomputedBlock::parse_file(
+            std::path::Path::new(
+                "./tests/data/misc_blocks/mainnet-419989-3NKhZKc1HrEexmpvcbx4eqAtrsbwmfLXcjukF9CJ8Y2y7FEjFWg5.json",
+            ),
+            PcbVersion::V2,
+        )?;
+
+        assert_eq!(mainnet.coinbase_reward(), MAINNET_COINBASE_REWARD);
+        assert_eq!(
+            Coinbase::from_precomputed(&mainnet).amount(),
+            MAINNET_COINBASE_REWARD
+        );
+
+        Ok(())
+    }
 
     #[test]
     fn test_coinbase_fee_transfer() {
@@ -209,6 +248,7 @@ mod tests {
             supercharge: false,
             is_new_account: false,
             receiver_balance: Some(0),
+            reward: MAINNET_COINBASE_REWARD,
         };
         let payment_diffs = coinbase.fee_transfer();
 
@@ -234,6 +274,7 @@ mod tests {
             supercharge: false,
             is_new_account: false,
             receiver_balance: Some(0),
+            reward: MAINNET_COINBASE_REWARD,
         };
         assert!(!coinbase.is_applied());
 
@@ -256,6 +297,7 @@ mod tests {
             supercharge: false,
             is_new_account: false,
             receiver_balance: Some(0),
+            reward: MAINNET_COINBASE_REWARD,
         };
         let fee_transfer_payment_diffs = coinbase.fee_transfer();
         let mut account_diffs = vec![vec![
@@ -281,6 +323,7 @@ mod tests {
             supercharge: false,
             is_new_account: false,
             receiver_balance: Some(0),
+            reward: MAINNET_COINBASE_REWARD,
         };
         assert!(!coinbase.has_fee_transfer());
 
@@ -304,6 +347,7 @@ mod tests {
             supercharge: false,
             is_new_account: false,
             receiver_balance: Some(16790466359034),
+            reward: MAINNET_COINBASE_REWARD,
         };
 
         assert_eq!(Coinbase::from_precomputed(&block), expect);
@@ -320,6 +364,7 @@ mod tests {
             supercharge: false,
             is_new_account: false,
             receiver_balance: None,
+            reward: MAINNET_COINBASE_REWARD,
         };
 
         assert_eq!(Coinbase::from_precomputed(&block), expect);
@@ -340,6 +385,7 @@ mod tests {
                 supercharge: true,
                 is_new_account: false,
                 receiver_balance: None,
+                reward: MAINNET_COINBASE_REWARD,
             }
         );
         Ok(())
@@ -359,6 +405,7 @@ mod tests {
                 supercharge: false,
                 is_new_account: false,
                 receiver_balance: None,
+                reward: MAINNET_COINBASE_REWARD,
             }
         );
 
