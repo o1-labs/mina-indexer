@@ -70,6 +70,11 @@ impl AccountAccessed {
                 msg, account.timing, self.account.timing
             ),
         );
+        // NOTE: receipt_chain_hash, voting_for and permissions are deliberately
+        // not compared here. No ledger diff can derive them, so they
+        // are sourced from this very record (see the `From` impl below
+        // and `DbAccountUpdate::apply_updates`) -- checking them would
+        // compare the block's value against itself.
     }
 }
 
@@ -92,6 +97,14 @@ impl From<(u64, v2::AccountAccessed)> for AccountAccessed {
             token_symbol: Some(value.1.token_symbol),
             timing,
             zkapp: value.1.zkapp,
+
+            // A ledger diff cannot derive these: receipt_chain_hash is a Poseidon chain
+            // over the account's transactions and the indexer has no hasher. The block
+            // states all three outright, so they are only ever correct if taken from here.
+            receipt_chain_hash: Some(value.1.receipt_chain_hash),
+            voting_for: Some(value.1.voting_for.into()),
+            permissions: Some(value.1.permissions.into()),
+
             ..Default::default()
         };
 

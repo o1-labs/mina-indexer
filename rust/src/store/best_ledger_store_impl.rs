@@ -220,6 +220,8 @@ impl BestLedgerStore for IndexerStore {
                             token_diffs: d.token_diffs.into_iter().collect(),
                             new_accounts,
                             new_zkapp_accounts,
+                            accounts_accessed: d.accounts_accessed,
+                            state_hash: d.state_hash,
                         }
                     })
                 })
@@ -239,6 +241,8 @@ impl BestLedgerStore for IndexerStore {
                             token_diffs: d.token_diffs.into_iter().collect(),
                             new_accounts,
                             new_zkapp_accounts,
+                            accounts_accessed: d.accounts_accessed,
+                            state_hash: d.state_hash,
                         }
                     })
                 })

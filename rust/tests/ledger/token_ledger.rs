@@ -107,6 +107,28 @@ async fn check_token_accounts() -> anyhow::Result<()> {
                 delegate: pk.clone().into(),
                 token: Some(minu_token.clone()),
                 creation_fee_paid: true,
+
+                // stated by the block, not derivable from any ledger diff
+                receipt_chain_hash: Some(
+                    "2mzbV7WevxLuchs2dAMY4vQBS6XttnCUF8Hvks4XNBQ5qiSGGBQe".into()
+                ),
+                voting_for: Some(Default::default()),
+                permissions: Some(Permissions {
+                    edit_state: Permission::Signature,
+                    access: Permission::None,
+                    send: Permission::Signature,
+                    receive: Permission::None,
+                    set_delegate: Permission::Signature,
+                    set_permissions: Permission::Signature,
+                    set_verification_key: (Permission::Signature, "3".to_string()),
+                    set_zkapp_uri: Permission::Signature,
+                    edit_action_state: Permission::Signature,
+                    set_token_symbol: Permission::Signature,
+                    increment_nonce: Permission::Signature,
+                    set_voting_for: Permission::Signature,
+                    set_timing: Permission::Signature,
+                }),
+
                 ..Default::default()
             }
         );
@@ -124,6 +146,14 @@ async fn check_token_accounts() -> anyhow::Result<()> {
             token: Some(mina_token.clone()),
             token_symbol: Some("MINU".into()),
             creation_fee_paid: true,
+
+            // stated by the block -- this account has transacted, so its receipt chain
+            // has moved off the default
+            receipt_chain_hash: Some(
+                "2mzwzL1MtAejvkXo2JEzdNk8JxSqpW4npPbExrJojH3MPtyeVhq3".into()
+            ),
+            voting_for: Some(Default::default()),
+
             permissions: Some(Permissions {
                 edit_state: Permission::Proof,
                 access: Permission::None,
@@ -169,6 +199,11 @@ async fn check_token_accounts() -> anyhow::Result<()> {
                 delegate: pk.into(),
                 token: Some(mina_token.clone()),
                 creation_fee_paid: true,
+
+                // stated by the block
+                receipt_chain_hash: Some("2n1LYHPZ5ZBHkQkveZxLyq5UsBFyP2vM5eGVcja2D9JK4YV8Dost".into()),
+                voting_for: Some(Default::default()),
+
                 permissions: Some(Permissions {
                     edit_state: Permission::Proof,
                     access: Permission::None,

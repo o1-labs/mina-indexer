@@ -1,4 +1,6 @@
 #[cfg(test)]
+mod accounts_accessed;
+#[cfg(test)]
 mod best_ledger_balance_sorted_accounts;
 #[cfg(test)]
 mod genesis;

@@ -1168,6 +1168,7 @@ mod tests {
                 receiver_pk: snarker.clone(),
                 fee,
             })),
+            reward: MAINNET_COINBASE_REWARD,
         });
         let expected_account_diff = vec![
             vec![AccountDiff::Coinbase(CoinbaseDiff {
@@ -1284,6 +1285,7 @@ mod tests {
             receiver_balance: None,
             receiver: receiver.clone(),
             kind: CoinbaseKind::One(None),
+            reward: MAINNET_COINBASE_REWARD,
         });
         let expected_account_diff = vec![vec![AccountDiff::Coinbase(CoinbaseDiff {
             public_key: receiver.clone(),

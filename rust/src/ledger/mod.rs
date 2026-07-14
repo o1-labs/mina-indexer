@@ -159,6 +159,25 @@ impl Ledger {
             self._apply_account_diff(acct_diff, &diff.state_hash)?;
         }
 
+        // No account diff can derive receipt_chain_hash, voting_for or permissions --
+        // receipt_chain_hash is a Poseidon chain over the account's transactions and
+        // the indexer has no hasher. The block states them outright for every
+        // account it touched, so take them from there. (V1 blocks carry no
+        // `accounts_accessed`, so this is a no-op for them.)
+        for accessed in diff.accounts_accessed.iter() {
+            let stated = &accessed.account;
+            let token = stated.token.to_owned().unwrap_or_default();
+
+            if let Some(account) = self
+                .get_mut_token_ledger(&token)
+                .and_then(|token_ledger| token_ledger.accounts.get_mut(&stated.public_key))
+            {
+                account.receipt_chain_hash = stated.receipt_chain_hash.to_owned();
+                account.voting_for = stated.voting_for.to_owned();
+                account.permissions = stated.permissions.to_owned();
+            }
+        }
+
         Ok(())
     }
 
@@ -470,6 +489,7 @@ mod tests {
                 }),
             ]],
             token_diffs: vec![],
+            accounts_accessed: vec![],
             accounts_created: vec![],
         };
 
@@ -512,6 +532,7 @@ mod tests {
                 txn_hash: TxnHash::default(),
             })]],
             token_diffs: vec![],
+            accounts_accessed: vec![],
             accounts_created: vec![],
         };
 
