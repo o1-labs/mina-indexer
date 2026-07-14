@@ -1,22 +1,35 @@
 use super::{
-    account::{Account, ReceiptChainHash, Timing, VotingFor},
-    token::TokenAddress,
+    account::{
+        Account, Permission as AccountPermission, Permissions as AccountPermissions,
+        ReceiptChainHash, Timing, VotingFor,
+    },
+    token::{TokenAddress, TokenSymbol},
     Ledger, TokenLedger,
 };
 use crate::{
-    base::{amount::Amount, nonce::Nonce, public_key::PublicKey, state_hash::StateHash},
+    base::{amount::Amount, nonce::Nonce, numeric::Numeric, public_key::PublicKey,
+        state_hash::StateHash},
     block::genesis::GenesisBlock,
     constants::*,
+    mina_blocks::v2::{
+        zkapp::{
+            action_state::ActionState,
+            app_state::{AppState, ZkappState},
+            verification_key::{VerificationKey, VerificationKeyHash},
+        },
+        ZkappAccount, ZkappUri,
+    },
     utility::compression::decompress_gzip,
 };
 use anyhow::anyhow;
 use log::error;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, path::Path, str::FromStr};
+use std::{path::Path, str::FromStr};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenesisLedger {
-    ledger: TokenLedger,
+    /// Keyed by (token, pk) -- see [`GenesisLedger::new`]
+    ledger: Ledger,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,11 +71,21 @@ pub struct GenesisAccount {
     pub token_permissions: Option<TokenPermissions>,
     pub receipt_chain_hash: Option<ReceiptChainHash>,
     pub voting_for: Option<VotingFor>,
-    // Permissions are parsed but not used downstream; accept any shape so the
-    // mesa v2 ledger format (richer permissions, nested set_verification_key,
-    // "none"/"none"-valued perms) parses alongside the mainnet format.
-    pub permissions: Option<serde_json::Value>,
+
+    /// The genesis dump states each account's permissions, and they are hashed into
+    /// the account. Dropping them (as this once did) leaves every untouched genesis
+    /// account with no permissions at all.
+    pub permissions: Option<GenesisPermissionsJson>,
     pub timing: Option<GenesisAccountTiming>,
+
+    #[serde(default)]
+    pub token_symbol: Option<TokenSymbol>,
+
+    /// The genesis dump carries zkApp accounts in full -- app state, action state and
+    /// verification key. On mesa that is ~1,800 accounts whose 32-wide app state is the
+    /// whole point of the network.
+    #[serde(default)]
+    pub zkapp: Option<GenesisZkapp>,
 
     #[serde(default)]
     pub nonce: Option<Nonce>,
@@ -120,6 +143,266 @@ pub struct GenesisAccountTiming {
     pub cliff_amount: String,
     pub vesting_period: String,
     pub vesting_increment: String,
+}
+
+/// The version byte Mina prefixes a base58check-encoded verification key with.
+const VERIFICATION_KEY_VERSION_BYTE: u8 = 0x1b;
+
+/// Blocks write zkApp counters as strings (`"0"`), the genesis dump writes them as bare
+/// numbers (`904964`). [`Numeric`] only parses the former, so accept both.
+fn numeric_str_or_num<'de, D>(deserializer: D) -> Result<Numeric<u32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+
+    Ok(match serde_json::Value::deserialize(deserializer)? {
+        serde_json::Value::Null => Numeric::default(),
+        serde_json::Value::Number(n) => {
+            let n = n
+                .as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or_else(|| D::Error::custom(format!("{n} is not a u32")))?;
+
+            Numeric(n)
+        }
+        serde_json::Value::String(s) => s.parse().map_err(D::Error::custom)?,
+        other => return Err(D::Error::custom(format!("invalid number: {other}"))),
+    })
+}
+
+/// An auth requirement as the *genesis state dump* writes it: a lowercase string.
+/// Blocks write the same thing as a variant array (`["Signature"]`), which is what
+/// [`v2::PermissionKind`] parses -- so the two shapes need two types.
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GenesisAuth {
+    #[default]
+    None,
+    Either,
+    Proof,
+    Signature,
+    Impossible,
+}
+
+impl From<GenesisAuth> for AccountPermission {
+    fn from(value: GenesisAuth) -> Self {
+        match value {
+            GenesisAuth::None => Self::None,
+            GenesisAuth::Either => Self::Either,
+            GenesisAuth::Proof => Self::Proof,
+            GenesisAuth::Signature => Self::Signature,
+            GenesisAuth::Impossible => Self::Impossible,
+        }
+    }
+}
+
+/// `{"auth": "signature", "txn_version": "2"}`
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenesisSetVerificationKey {
+    pub auth: GenesisAuth,
+
+    #[serde(deserialize_with = "numeric_str_or_num")]
+    pub txn_version: Numeric<u32>,
+}
+
+/// Genesis ledgers come in two permission shapes.
+///
+/// The state dumps (mesa, devnet) state permissions in full, including the
+/// `set_verification_key` txn_version -- these are the ones hashed into the account.
+///
+/// The older mainnet/hardfork ledgers state a handful of auths and write
+/// `set_verification_key` as a bare `"signature"`, with **no txn_version anywhere in the
+/// file**. There is nothing to reconstruct it from, so rather than invent one we leave
+/// those accounts' permissions unset, exactly as before.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum GenesisPermissionsJson {
+    Stated(GenesisPermissions),
+    Legacy(serde_json::Value),
+}
+
+impl GenesisPermissionsJson {
+    fn into_permissions(self) -> Option<AccountPermissions> {
+        match self {
+            Self::Stated(permissions) => Some(permissions.into()),
+            Self::Legacy(_) => None,
+        }
+    }
+}
+
+/// Mina's account defaults: everything is `signature` except `access`/`receive`.
+const fn auth_signature() -> GenesisAuth {
+    GenesisAuth::Signature
+}
+
+const fn auth_none() -> GenesisAuth {
+    GenesisAuth::None
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenesisPermissions {
+    #[serde(default = "auth_signature")]
+    pub edit_state: GenesisAuth,
+
+    #[serde(default = "auth_none")]
+    pub access: GenesisAuth,
+
+    #[serde(default = "auth_signature")]
+    pub send: GenesisAuth,
+
+    #[serde(default = "auth_none")]
+    pub receive: GenesisAuth,
+
+    #[serde(default = "auth_signature")]
+    pub set_delegate: GenesisAuth,
+
+    #[serde(default = "auth_signature")]
+    pub set_permissions: GenesisAuth,
+
+    pub set_verification_key: GenesisSetVerificationKey,
+
+    #[serde(default = "auth_signature")]
+    pub set_zkapp_uri: GenesisAuth,
+
+    #[serde(default = "auth_signature")]
+    pub edit_action_state: GenesisAuth,
+
+    #[serde(default = "auth_signature")]
+    pub set_token_symbol: GenesisAuth,
+
+    #[serde(default = "auth_signature")]
+    pub increment_nonce: GenesisAuth,
+
+    #[serde(default = "auth_signature")]
+    pub set_voting_for: GenesisAuth,
+
+    #[serde(default = "auth_signature")]
+    pub set_timing: GenesisAuth,
+}
+
+impl From<GenesisPermissions> for AccountPermissions {
+    fn from(value: GenesisPermissions) -> Self {
+        Self {
+            edit_state: value.edit_state.into(),
+            access: value.access.into(),
+            send: value.send.into(),
+            receive: value.receive.into(),
+            set_delegate: value.set_delegate.into(),
+            set_permissions: value.set_permissions.into(),
+            set_verification_key: (
+                value.set_verification_key.auth.into(),
+                value.set_verification_key.txn_version.0.to_string(),
+            ),
+            set_zkapp_uri: value.set_zkapp_uri.into(),
+            edit_action_state: value.edit_action_state.into(),
+            set_token_symbol: value.set_token_symbol.into(),
+            increment_nonce: value.increment_nonce.into(),
+            set_voting_for: value.set_voting_for.into(),
+            set_timing: value.set_timing.into(),
+        }
+    }
+}
+
+/// A zkApp account as the *genesis state dump* writes it. It differs from the block
+/// shape in two ways that matter, and both are normalised on the way in so the store
+/// holds one encoding regardless of where an account came from:
+///
+/// - field elements are decimal here, `0x`-prefixed hex in blocks;
+/// - the verification key is bare base64 binprot here, base58check in blocks -- and the
+///   dump carries **no vk hash at all**, which blocks do.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenesisZkapp {
+    pub app_state: Vec<String>,
+
+    pub action_state: Vec<String>,
+
+    #[serde(default)]
+    pub verification_key: Option<String>,
+
+    #[serde(default, deserialize_with = "numeric_str_or_num")]
+    pub zkapp_version: Numeric<u32>,
+
+    #[serde(default, deserialize_with = "numeric_str_or_num")]
+    pub last_action_slot: Numeric<u32>,
+
+    #[serde(default)]
+    pub proved_state: bool,
+
+    #[serde(default)]
+    pub zkapp_uri: String,
+}
+
+/// A decimal field element -> the `0x`-prefixed, zero-padded, big-endian hex that
+/// blocks use.
+fn field_to_hex(decimal: &str) -> anyhow::Result<String> {
+    let value = decimal
+        .parse::<num::BigUint>()
+        .map_err(|e| anyhow!("malformed genesis field element {decimal:?}: {e}"))?;
+
+    let mut bytes = [0u8; 32];
+    let be = value.to_bytes_be();
+    if be.len() > 32 {
+        return Err(anyhow!("genesis field element {decimal:?} exceeds 32 bytes"));
+    }
+    bytes[32 - be.len()..].copy_from_slice(&be);
+
+    Ok(format!("0x{}", hex::encode_upper(bytes)))
+}
+
+/// The dump's base64 binprot key -> the base58check encoding blocks use.
+fn vk_to_base58check(base64_vk: &str) -> anyhow::Result<String> {
+    use base64::Engine;
+
+    let binprot = base64::engine::general_purpose::STANDARD
+        .decode(base64_vk)
+        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(base64_vk))
+        .map_err(|e| anyhow!("malformed genesis verification key: {e}"))?;
+
+    Ok(bs58::encode(binprot)
+        .with_check_version(VERIFICATION_KEY_VERSION_BYTE)
+        .into_string())
+}
+
+impl GenesisZkapp {
+    fn into_zkapp_account(self) -> anyhow::Result<ZkappAccount> {
+        let app_state = self
+            .app_state
+            .iter()
+            .map(|fp| field_to_hex(fp).map(AppState))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        let action_state = self
+            .action_state
+            .iter()
+            .map(|fp| field_to_hex(fp).map(ActionState))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let action_state: [ActionState; 5] = action_state
+            .try_into()
+            .map_err(|_| anyhow!("genesis zkapp action_state must hold exactly 5 elements"))?;
+
+        // The dump gives us the key but not its hash -- the hash is a Poseidon hash of
+        // the key, which the indexer cannot compute. Leave it empty rather than invent
+        // one: nothing here keys off it, a verifier recomputes it from the key, and the
+        // first block to touch the account supplies the real hash.
+        let verification_key = match self.verification_key.as_deref() {
+            Some(vk) => VerificationKey {
+                data: vk_to_base58check(vk)?.into(),
+                hash: VerificationKeyHash::default(),
+            },
+            None => VerificationKey::default(),
+        };
+
+        Ok(ZkappAccount {
+            app_state: ZkappState(app_state),
+            action_state,
+            verification_key,
+            proved_state: self.proved_state,
+            zkapp_uri: ZkappUri(self.zkapp_uri),
+            zkapp_version: self.zkapp_version,
+            last_action_slot: self.last_action_slot,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -210,11 +493,16 @@ impl GenesisLedger {
 
     /// This is the only way to construct a genesis ledger
     pub fn new(genesis: GenesisAccounts) -> GenesisLedger {
-        // Add genesis block winner
-        let block_creator = Account::from_genesis(GenesisBlock::new_v1().unwrap());
-        let mut accounts = HashMap::from([(block_creator.public_key.clone(), block_creator)]);
+        // A ledger account is identified by (token, pk), not by pk. Keying the genesis
+        // accounts by pk alone silently drops one of them whenever a public key holds
+        // both a MINA account and a custom-token account -- which loses 141 accounts on
+        // mesa, leaving the ledger with fewer leaves than the protocol's.
+        let mut ledger = Ledger::new();
 
-        // add genesis ledger accounts
+        // genesis block winner
+        let block_creator = Account::from_genesis(GenesisBlock::new_v1().unwrap());
+        ledger.insert_account(block_creator, &TokenAddress::default());
+
         for account in genesis.accounts {
             let balance = account
                 .balance
@@ -225,27 +513,37 @@ impl GenesisLedger {
             let delegate = account
                 .delegate
                 .map_or_else(|| public_key.to_owned(), PublicKey);
+            let token = account.token.clone().unwrap_or_default();
 
-            accounts.insert(
-                public_key.clone(),
+            let zkapp = account.zkapp.map(|zkapp| {
+                zkapp.into_zkapp_account().unwrap_or_else(|e| {
+                    panic!("Unable to parse genesis zkApp account {public_key}: {e}")
+                })
+            });
+
+            ledger.insert_account(
                 Account {
                     public_key,
                     balance,
                     nonce: account.nonce,
                     delegate: delegate.into(),
-                    token: account.token,
+                    token: Some(token.to_owned()),
                     receipt_chain_hash: account.receipt_chain_hash,
                     voting_for: account.voting_for,
                     timing: account.timing.map(Into::into),
+                    permissions: account
+                        .permissions
+                        .and_then(GenesisPermissionsJson::into_permissions),
+                    token_symbol: account.token_symbol,
+                    zkapp,
                     genesis_account: Some(balance),
                     ..Default::default()
                 },
+                &token,
             );
         }
 
-        Self {
-            ledger: TokenLedger { accounts },
-        }
+        Self { ledger }
     }
 
     pub fn parse_file<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
@@ -309,59 +607,55 @@ impl From<GenesisRoot> for GenesisLedger {
     }
 }
 
+/// Add the account-creation fee back to the MINA balances. The ledger deducts it again
+/// when it serializes an account that has not paid it, so the two cancel and the served
+/// balance is the one the genesis ledger states. Custom-token balances are shown as-is.
+fn with_display_fee(account: Account) -> Account {
+    let is_custom_token = account
+        .token
+        .as_ref()
+        .is_some_and(|t| t.0 != MINA_TOKEN_ADDRESS);
+
+    if is_custom_token {
+        account
+    } else {
+        Account {
+            balance: account.balance + MAINNET_ACCOUNT_CREATION_FEE,
+            ..account
+        }
+    }
+}
+
 impl From<GenesisLedger> for Ledger {
     fn from(value: GenesisLedger) -> Self {
-        // Partition genesis accounts into per-token ledgers by each account's own
-        // token, rather than dumping them all into the MINA ledger. Genesis
-        // ledgers (e.g. devnet's state dump) contain custom-token accounts; filing
-        // them under MINA mis-routes their zkApp diffs (token mismatch) and can
-        // even collide a pk's MINA and custom-token accounts in one pk-keyed map.
         let mut ledger = Ledger::new();
-        for (_pk, acct) in value.ledger.accounts.into_iter() {
-            let token = acct.token.clone().unwrap_or_default();
-            let is_custom_token = token.0 != MINA_TOKEN_ADDRESS;
-            let account = Account {
-                // add the account-creation fee back to display balance for MINA
-                // accounts only (custom-token balances are shown as-is)
-                balance: if is_custom_token {
-                    acct.balance
-                } else {
-                    acct.balance + MAINNET_ACCOUNT_CREATION_FEE
-                },
-                ..acct
-            };
-            ledger.insert_account(account, &token);
+
+        for (token, token_ledger) in value.ledger.tokens.into_iter() {
+            for (_pk, account) in token_ledger.accounts.into_iter() {
+                ledger.insert_account(with_display_fee(account), &token);
+            }
         }
+
         ledger
     }
 }
 
 impl From<GenesisLedger> for TokenLedger {
+    /// The MINA token ledger only -- custom-token accounts do not live here. Prefer
+    /// `Ledger`, which keeps every token.
     fn from(value: GenesisLedger) -> Self {
         Self {
             accounts: value
                 .ledger
-                .accounts
-                .into_iter()
-                .map(|(pk, acct)| {
-                    (
-                        pk,
-                        Account {
-                            // add display fee
-                            balance: if acct
-                                .token
-                                .as_ref()
-                                .is_some_and(|t| t.0 != MINA_TOKEN_ADDRESS)
-                            {
-                                acct.balance
-                            } else {
-                                acct.balance + MAINNET_ACCOUNT_CREATION_FEE
-                            },
-                            ..acct
-                        },
-                    )
+                .tokens
+                .get(&TokenAddress::default())
+                .map(|mina| {
+                    mina.accounts
+                        .iter()
+                        .map(|(pk, account)| (pk.to_owned(), with_display_fee(account.to_owned())))
+                        .collect()
                 })
-                .collect(),
+                .unwrap_or_default(),
         }
     }
 }
@@ -396,6 +690,212 @@ impl From<GenesisAccountTiming> for Timing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A ledger account is identified by (token, pk). Keying the genesis accounts by pk
+    /// alone dropped one of them whenever a key held both a MINA and a custom-token
+    /// account -- 141 accounts on mesa, leaving the ledger short of leaves.
+    #[test]
+    fn a_pk_holding_two_tokens_keeps_both_accounts() -> anyhow::Result<()> {
+        let pk = "B62qqdcf6K9HyBSaxqH5JVFJkc1SUEe1VzDc5kYZFQZXWSQyGHoino1";
+        let custom = "xrKHGjDubYExg7mMN6BJfjjGPcMMQb9oEtFvEdA7mfSd6zKJGy";
+
+        let ledger: Ledger = GenesisLedger::new(serde_json::from_str::<GenesisAccounts>(
+            &format!(
+                r#"{{"accounts": [
+                    {{"pk": "{pk}", "balance": "100"}},
+                    {{"pk": "{pk}", "balance": "7", "token": "{custom}"}}
+                ]}}"#
+            ),
+        )?)
+        .into();
+
+        let mina = ledger
+            .tokens
+            .get(&TokenAddress::default())
+            .expect("MINA ledger")
+            .accounts
+            .get(&pk.into())
+            .expect("the MINA account survives");
+        let custom = ledger
+            .tokens
+            .get(&custom.parse::<TokenAddress>()?)
+            .expect("custom token ledger")
+            .accounts
+            .get(&pk.into())
+            .expect("the custom-token account survives too");
+
+        // the MINA balance carries the display creation fee, the custom-token one does not
+        assert_eq!(mina.balance.0, 101 * (1e9 as u64));
+        assert_eq!(custom.balance.0, 7 * (1e9 as u64));
+
+        Ok(())
+    }
+
+    /// The dump states permissions and they are hashed into the account; the loader used
+    /// to parse and discard them.
+    #[test]
+    fn state_dump_permissions_reach_the_account() -> anyhow::Result<()> {
+        let pk = "B62qqdcf6K9HyBSaxqH5JVFJkc1SUEe1VzDc5kYZFQZXWSQyGHoino1";
+        let ledger: Ledger = GenesisLedger::new(serde_json::from_str::<GenesisAccounts>(
+            &format!(
+                r#"{{"accounts": [{{
+                    "pk": "{pk}",
+                    "balance": "1",
+                    "permissions": {{
+                        "edit_state": "signature", "access": "none", "send": "signature",
+                        "receive": "none", "set_delegate": "signature",
+                        "set_permissions": "signature",
+                        "set_verification_key": {{"auth": "signature", "txn_version": "2"}},
+                        "set_zkapp_uri": "signature", "edit_action_state": "signature",
+                        "set_token_symbol": "impossible", "increment_nonce": "signature",
+                        "set_voting_for": "signature", "set_timing": "proof"
+                    }}
+                }}]}}"#
+            ),
+        )?)
+        .into();
+
+        let permissions = ledger
+            .tokens
+            .get(&TokenAddress::default())
+            .unwrap()
+            .accounts
+            .get(&pk.into())
+            .unwrap()
+            .permissions
+            .as_ref()
+            .expect("permissions are stated, so they must be stored");
+
+        assert_eq!(permissions.access, AccountPermission::None);
+        assert_eq!(permissions.set_token_symbol, AccountPermission::Impossible);
+        assert_eq!(permissions.set_timing, AccountPermission::Proof);
+        assert_eq!(
+            permissions.set_verification_key,
+            (AccountPermission::Signature, "2".to_string())
+        );
+
+        Ok(())
+    }
+
+    /// The old mainnet/hardfork ledgers write `set_verification_key` as a bare
+    /// `"signature"` and state no txn_version anywhere. There is nothing to reconstruct
+    /// one from, so we leave those permissions unset rather than invent a version.
+    #[test]
+    fn legacy_permissions_are_left_unset() -> anyhow::Result<()> {
+        let pk = "B62qqdcf6K9HyBSaxqH5JVFJkc1SUEe1VzDc5kYZFQZXWSQyGHoino1";
+        let ledger: Ledger = GenesisLedger::new(serde_json::from_str::<GenesisAccounts>(
+            &format!(
+                r#"{{"accounts": [{{
+                    "pk": "{pk}", "balance": "1",
+                    "permissions": {{
+                        "stake": true, "edit_state": "signature", "send": "signature",
+                        "set_delegate": "signature", "set_permissions": "signature",
+                        "set_verification_key": "signature"
+                    }}
+                }}]}}"#
+            ),
+        )?)
+        .into();
+
+        assert!(ledger
+            .tokens
+            .get(&TokenAddress::default())
+            .unwrap()
+            .accounts
+            .get(&pk.into())
+            .unwrap()
+            .permissions
+            .is_none());
+
+        Ok(())
+    }
+
+    /// The dump writes field elements in decimal, blocks in `0x` hex. Normalise on the
+    /// way in so the store holds one encoding whatever the account's provenance.
+    #[test]
+    fn genesis_field_elements_become_block_hex() -> anyhow::Result<()> {
+        assert_eq!(
+            field_to_hex("100")?,
+            "0x0000000000000000000000000000000000000000000000000000000000000064"
+        );
+        assert_eq!(
+            field_to_hex(
+                "25079927036070901246064867767436987657692091363973573142121686150614948079097"
+            )?,
+            "0x3772BC5435B957F81F86F752E93F2E29E886AC24580B3D1EC879C1DAD26965F9"
+        );
+
+        Ok(())
+    }
+
+    /// The dump carries the verification key as bare base64 binprot, blocks as
+    /// base58check. Re-encode so the two agree; the round trip must give the key back.
+    #[test]
+    fn genesis_verification_key_becomes_base58check() -> anyhow::Result<()> {
+        use base64::Engine;
+
+        let binprot = [0u8, 0, 156, 122, 119, 53, 200, 183, 71, 6, 110, 49];
+        let base64_vk = base64::engine::general_purpose::STANDARD.encode(binprot);
+
+        let base58 = vk_to_base58check(&base64_vk)?;
+        let decoded = bs58::decode(&base58)
+            .with_check(Some(VERIFICATION_KEY_VERSION_BYTE))
+            .into_vec()?;
+
+        // bs58 leaves the version byte on the front of the decoded payload
+        assert_eq!(decoded[1..], binprot);
+
+        Ok(())
+    }
+
+    /// mesa zkApp accounts carry a 32-wide app state, and the dump states it in full.
+    #[test]
+    fn genesis_zkapp_accounts_are_loaded() -> anyhow::Result<()> {
+        let pk = "B62qqdcf6K9HyBSaxqH5JVFJkc1SUEe1VzDc5kYZFQZXWSQyGHoino1";
+        let app_state = (0..32).map(|_| "\"0\"").collect::<Vec<_>>().join(",");
+        let action_state = (0..5).map(|_| "\"1\"").collect::<Vec<_>>().join(",");
+
+        let ledger: Ledger = GenesisLedger::new(serde_json::from_str::<GenesisAccounts>(
+            &format!(
+                r#"{{"accounts": [{{
+                    "pk": "{pk}", "balance": "1",
+                    "zkapp": {{
+                        "app_state": [{app_state}],
+                        "action_state": [{action_state}],
+                        "zkapp_version": "0",
+                        "last_action_slot": 904964,
+                        "proved_state": false,
+                        "zkapp_uri": "https://example.com"
+                    }}
+                }}]}}"#
+            ),
+        )?)
+        .into();
+
+        let zkapp = ledger
+            .tokens
+            .get(&TokenAddress::default())
+            .unwrap()
+            .accounts
+            .get(&pk.into())
+            .unwrap()
+            .zkapp
+            .as_ref()
+            .expect("a stated zkApp account must be stored");
+
+        assert_eq!(zkapp.app_state.0.len(), 32, "mesa's app state is 32 wide");
+        assert_eq!(zkapp.action_state.len(), 5);
+        assert_eq!(zkapp.zkapp_uri.0, "https://example.com");
+
+        // the dump writes this one as a bare number, not a string
+        assert_eq!(zkapp.last_action_slot.0, 904964);
+
+        // the dump has no vk hash -- a verifier recomputes it from the key, and the first
+        // block to touch the account supplies the real one
+        assert_eq!(zkapp.verification_key.hash, VerificationKeyHash::default());
+
+        Ok(())
+    }
     use std::path::PathBuf;
 
     #[test]
@@ -442,6 +942,9 @@ mod tests {
         let ledger = GenesisLedger::new(root.ledger);
         let account = ledger
             .ledger
+            .tokens
+            .get(&TokenAddress::default())
+            .unwrap()
             .accounts
             .get(&"B62qqdcf6K9HyBSaxqH5JVFJkc1SUEe1VzDc5kYZFQZXWSQyGHoino1".into())
             .unwrap();
