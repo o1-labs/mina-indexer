@@ -615,10 +615,15 @@ impl Account {
     /// Apply a ledger diff to an account
     pub fn apply_ledger_diff(self, diff: &LedgerDiff) -> Self {
         let pk = self.public_key.clone();
+        let token = self.token.clone().unwrap_or_default();
         let mut acct = self;
 
         for acct_diff in diff.account_diffs.iter().flatten() {
-            if acct_diff.public_key() == pk {
+            // Match on (public key, token), not the public key alone. A public key can
+            // hold accounts on many tokens, each with its own diffs; applying another
+            // token's diff to this account corrupts its balance and trips the token
+            // check. This reconstructs one account, so it must take only its own diffs.
+            if acct_diff.public_key() == pk && acct_diff.token() == token {
                 acct = acct.apply_account_diff(acct_diff, &diff.state_hash);
             }
         }

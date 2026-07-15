@@ -479,10 +479,13 @@ impl DbAccountUpdate {
                 set_block_stated_fields(&mut after, stated.as_ref());
 
                 if new_accounts.contains(&(pk.clone(), token.clone())) {
+                    // Remove the staged account of the block being unapplied (the
+                    // orphan), not the new best tip -- `state_hash` is the block staying
+                    // canonical.
                     db.remove_staged_account(
                         &pk,
                         &token,
-                        state_hash,
+                        &unapplied_state_hash,
                         block_height,
                         after.balance.0,
                     )?;
@@ -503,9 +506,23 @@ impl DbAccountUpdate {
                 }
             }
 
-            // remove accounts
+            // Remove accounts the unapplied (orphaned) block created -- but only when the
+            // new best chain does not also create them. A public key can be created by
+            // several blocks at the same height (its own fork plus the canonical one); as
+            // the tip wobbles across forks, a late unapply of one fork must not delete an
+            // account the canonical chain already created and credited. Deleting
+            // unconditionally wiped live accounts and made the ledger depend on block
+            // arrival order.
             for (pk, token) in new_accounts.iter() {
-                db.update_best_account(pk, token, None, None, false)?;
+                let on_best_chain = db
+                    .get_staged_account(pk, token, state_hash)
+                    .ok()
+                    .flatten()
+                    .is_some();
+
+                if !on_best_chain {
+                    db.update_best_account(pk, token, None, None, false)?;
+                }
             }
 
             // adjust MINA token supply
