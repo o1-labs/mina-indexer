@@ -725,19 +725,15 @@ impl AccountDiff {
         // token payments
         let amount = elt.account_update.body.balance_change.magnitude.0.into();
 
-        // pay creation fee of receiver zkapp
-        if elt.account_update.body.implicit_account_creation_fee {
-            payment_diffs.push(ZkappPaymentDiff::Payment {
-                creation_fee_paid,
-                payment: PaymentDiff {
-                    amount,
-                    public_key: public_key.to_owned(),
-                    update_type: UpdateType::Debit(None),
-                    token: Some(token.to_owned()),
-                    txn_hash: Some(txn_hash.to_owned()),
-                },
-            });
-        }
+        // `implicit_account_creation_fee` says that *if* this update creates the account,
+        // the creation fee comes out of the balance change rather than being stated
+        // separately. It does NOT say "debit the balance change" -- but that is what this
+        // used to do, pushing a Debit of the whole balance change alongside the Credit, so
+        // the two cancelled and the account never received its funds. The account need not
+        // even be a new one: the flag rides on the update, not on account creation.
+        //
+        // The creation fee is already accounted for by `creation_fee_paid` and the
+        // deduct-on-display convention, so nothing extra belongs here.
 
         // increment nonce of updated account
         let increment_nonce = elt.account_update.body.increment_nonce;
