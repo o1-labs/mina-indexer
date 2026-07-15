@@ -10,3 +10,7 @@ NETWORK=devnet
 GENESIS_HASH=3NK4DL35iKQ6G8VPqPFLZ122M82dcRRPt8rHrpRW662kXWpH8fRa
 FETCH_EXE=/bin/block-pull
 GENESIS_GZ=/genesis/devnet.json.gz
+
+# First block after the checkpoint the indexer roots at (527922). Bulk-fetched in
+# parallel on first boot; the tip-follower would need ~9 hours for the same range.
+BOOTSTRAP_FROM=527923
