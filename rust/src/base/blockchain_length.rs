@@ -1,6 +1,6 @@
 //! Indexer blockchain length type
 
-use crate::{block::precomputed::PcbVersion, constants::HARDFORK_GENESIS_BLOCKCHAIN_LENGTH};
+use crate::constants::HARDFORK_GENESIS_BLOCKCHAIN_LENGTH;
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -33,19 +33,12 @@ impl FromStr for BlockchainLength {
     }
 }
 
-/// If the blockchain length is greater than or equal to the hardfork genesis
-/// blockchain length, return version 2, otherwise return version 1.
-impl From<BlockchainLength> for PcbVersion {
-    fn from(blockchain_length: BlockchainLength) -> Self {
-        if blockchain_length.0 >= HARDFORK_GENESIS_BLOCKCHAIN_LENGTH {
-            PcbVersion::V2
-        } else {
-            PcbVersion::V1
-        }
-    }
-}
-
 impl BlockchainLength {
+    /// Whether a block at this height is post-hardfork, and so V2.
+    pub fn is_hardfork(&self) -> bool {
+        self.0 >= HARDFORK_GENESIS_BLOCKCHAIN_LENGTH
+    }
+
     pub fn from_path(path: &Path) -> anyhow::Result<u32> {
         const BUFFER_CAPACITY: usize = 1000;
 
@@ -113,7 +106,7 @@ impl Display for BlockchainLength {
 #[cfg(test)]
 mod tests {
     use super::BlockchainLength;
-    use crate::block::precomputed::{PcbVersion, PrecomputedBlock};
+    use crate::block::precomputed::{CurrencyEncoding, PcbVersion, PrecomputedBlock};
     use std::{fs::write, path::Path};
     use tempfile::TempDir;
 
@@ -195,7 +188,7 @@ mod tests {
     fn blockchain_length_v2() -> anyhow::Result<()> {
         for path in glob::glob("./tests/data/berkeley/sequential/*.json")?.flatten() {
             let blockchain_length = BlockchainLength::from_path(&path)?;
-            let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2)?;
+            let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2(CurrencyEncoding::Nanomina))?;
             assert_eq!(blockchain_length, block.blockchain_length());
         }
         Ok(())

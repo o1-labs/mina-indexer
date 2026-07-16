@@ -1,4 +1,4 @@
-use super::precomputed::PcbVersion;
+use super::precomputed::{CurrencyEncoding, PcbVersion};
 use crate::{
     base::{blockchain_length::BlockchainLength, state_hash::StateHash},
     block::precomputed::PrecomputedBlock,
@@ -62,15 +62,10 @@ impl GenesisBlock {
         let network = Network::Mainnet;
         let blockchain_length: BlockchainLength = HARDFORK_GENESIS_BLOCKCHAIN_LENGTH.into();
         let state_hash: StateHash = HARDFORK_GENESIS_HASH.into();
+        let version = PcbVersion::V2(CurrencyEncoding::for_network(&network));
 
         Ok(Self(
-            PrecomputedBlock::new(
-                network,
-                blockchain_length,
-                state_hash,
-                contents,
-                PcbVersion::V2,
-            )?,
+            PrecomputedBlock::new(network, blockchain_length, state_hash, contents, version)?,
             size,
         ))
     }
@@ -82,15 +77,10 @@ impl GenesisBlock {
         let network = Network::from("mesa");
         let blockchain_length: BlockchainLength = MESA_GENESIS_BLOCKCHAIN_LENGTH.into();
         let state_hash: StateHash = MESA_GENESIS_HASH.into();
+        let version = PcbVersion::V2(CurrencyEncoding::for_network(&network));
 
         Ok(Self(
-            PrecomputedBlock::new(
-                network,
-                blockchain_length,
-                state_hash,
-                contents,
-                PcbVersion::V2,
-            )?,
+            PrecomputedBlock::new(network, blockchain_length, state_hash, contents, version)?,
             size,
         ))
     }
@@ -102,15 +92,10 @@ impl GenesisBlock {
         let network = Network::Devnet;
         let blockchain_length: BlockchainLength = DEVNET_GENESIS_BLOCKCHAIN_LENGTH.into();
         let state_hash: StateHash = DEVNET_GENESIS_HASH.into();
+        let version = PcbVersion::V2(CurrencyEncoding::for_network(&network));
 
         Ok(Self(
-            PrecomputedBlock::new(
-                network,
-                blockchain_length,
-                state_hash,
-                contents,
-                PcbVersion::V2,
-            )?,
+            PrecomputedBlock::new(network, blockchain_length, state_hash, contents, version)?,
             size,
         ))
     }

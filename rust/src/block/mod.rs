@@ -184,8 +184,8 @@ impl std::cmp::Ord for BlockComparison {
 
         // hardfork blocks are better than pre-hardfork blocks
         match (&self.version, &other.version) {
-            (V1, V2) => return Ordering::Greater,
-            (V2, V1) => return Ordering::Less,
+            (V1, V2(_)) => return Ordering::Greater,
+            (V2(_), V1) => return Ordering::Less,
             _ => (),
         }
 

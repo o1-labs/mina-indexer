@@ -307,7 +307,7 @@ impl IndexerState {
         } else {
             match config.version.version {
                 PcbVersion::V1 => GenesisBlock::new_v1()?,
-                PcbVersion::V2 => GenesisBlock::new_v2()?,
+                PcbVersion::V2(_) => GenesisBlock::new_v2()?,
             }
         };
         let genesis_bytes = genesis_block.1;

@@ -26,8 +26,12 @@ pub struct IndexerStoreVersion {
 
 impl IndexerStoreVersion {
     pub const MAJOR: u32 = 0;
-    pub const MINOR: u32 = 17;
-    pub const PATCH: u32 = 2;
+    // 18: `PcbVersion::V2` carries the producer's currency encoding, so the
+    // block version column family reads `{"V2":"Nanomina"}` where it used to
+    // read `"V2"`. Databases built before this also hold devnet balances that
+    // were a billionth of their real size, and have to be rebuilt regardless.
+    pub const MINOR: u32 = 18;
+    pub const PATCH: u32 = 0;
 
     /// Output as `MAJOR`.`MINOR`.`PATCH`
     pub fn major_minor_patch(&self) -> String {

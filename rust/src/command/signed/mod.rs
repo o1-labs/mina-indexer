@@ -910,7 +910,7 @@ fn recurse_calls_events<'a>(events: &mut Vec<String>, calls: impl Iterator<Item 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::block::precomputed::{PcbVersion, PrecomputedBlock};
+    use crate::block::precomputed::{CurrencyEncoding, PcbVersion, PrecomputedBlock};
     use anyhow::Result;
     use std::path::PathBuf;
 
@@ -974,7 +974,7 @@ mod tests {
     #[test]
     fn signed_command_json_v2() -> Result<()> {
         let block_file = PathBuf::from("./tests/data/hardfork/mainnet-359606-3NKvvtFwjEtQLswWJzXBSxxiKuYVbLJrKXCnmhp6jctYMqAWcftg.json");
-        let precomputed_block = PrecomputedBlock::parse_file(&block_file, PcbVersion::V2)?;
+        let precomputed_block = PrecomputedBlock::parse_file(&block_file, PcbVersion::V2(CurrencyEncoding::Nanomina))?;
         let signed_cmds = precomputed_block
             .commands()
             .into_iter()
@@ -1011,7 +1011,7 @@ mod tests {
     #[test]
     fn tokens() -> Result<()> {
         let path = PathBuf::from("./tests/data/hardfork/mainnet-359617-3NKZ5poCAjtGqg9hHvAVZ7QwriqJsL8mpQsSHFGzqW6ddEEjYfvW.json");
-        let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2)?;
+        let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2(CurrencyEncoding::Nanomina))?;
 
         assert_eq!(block.zkapp_commands().len(), 7);
 
@@ -1043,7 +1043,7 @@ mod tests {
     #[test]
     fn account_updates() -> Result<()> {
         let path = PathBuf::from("./tests/data/hardfork/mainnet-359617-3NKZ5poCAjtGqg9hHvAVZ7QwriqJsL8mpQsSHFGzqW6ddEEjYfvW.json");
-        let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2)?;
+        let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2(CurrencyEncoding::Nanomina))?;
 
         assert_eq!(
             block
@@ -1082,7 +1082,7 @@ mod tests {
     #[test]
     fn actions() -> Result<()> {
         let path = PathBuf::from("./tests/data/misc_blocks/mainnet-412598-3NK6LSkCCBNoHmiRfYhYijDuxwgYQsU5GcdEMbUGhNdHDkJyrh3x.json");
-        let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2)?;
+        let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2(CurrencyEncoding::Nanomina))?;
 
         assert_eq!(
             block
@@ -1116,7 +1116,7 @@ mod tests {
     #[test]
     fn events() -> Result<()> {
         let path = PathBuf::from("./tests/data/misc_blocks/mainnet-412598-3NK6LSkCCBNoHmiRfYhYijDuxwgYQsU5GcdEMbUGhNdHDkJyrh3x.json");
-        let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2)?;
+        let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2(CurrencyEncoding::Nanomina))?;
 
         assert_eq!(
             block

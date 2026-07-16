@@ -43,7 +43,7 @@ impl PreviousStateHash {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::block::precomputed::{PcbVersion, PrecomputedBlock};
+    use crate::block::precomputed::{CurrencyEncoding, PcbVersion, PrecomputedBlock};
     use std::fs::write;
     use tempfile::TempDir;
 
@@ -102,7 +102,7 @@ mod test {
     fn previous_state_hash_v2() -> anyhow::Result<()> {
         for path in glob::glob("./tests/data/berkeley/sequential/*.json")?.flatten() {
             let previous_state_hash = PreviousStateHash::from_path(&path)?;
-            let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2)?;
+            let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2(CurrencyEncoding::Nanomina))?;
             assert_eq!(previous_state_hash, block.previous_state_hash());
         }
         Ok(())

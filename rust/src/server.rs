@@ -5,7 +5,7 @@ use crate::{
     block::{
         self,
         parser::BlockParser,
-        precomputed::{PcbVersion, PrecomputedBlock},
+        precomputed::{CurrencyEncoding, PcbVersion, PrecomputedBlock},
         vrf_output::VrfOutput,
     },
     chain::{ChainId, Network},
@@ -1182,27 +1182,33 @@ impl IndexerVersion {
     }
 
     pub fn v2() -> Self {
+        let network = Network::Mainnet;
+
         Self {
-            network: Network::Mainnet,
-            version: PcbVersion::V2,
+            version: PcbVersion::V2(CurrencyEncoding::for_network(&network)),
+            network,
             chain_id: ChainId::v2(),
             genesis: GenesisVersion::v2(),
         }
     }
 
     pub fn mesa() -> Self {
+        let network = Network::from("mesa");
+
         Self {
-            network: Network::from("mesa"),
-            version: PcbVersion::V2,
+            version: PcbVersion::V2(CurrencyEncoding::for_network(&network)),
+            network,
             chain_id: ChainId::mesa(),
             genesis: GenesisVersion::mesa(),
         }
     }
 
     pub fn devnet() -> Self {
+        let network = Network::Devnet;
+
         Self {
-            network: Network::Devnet,
-            version: PcbVersion::V2,
+            version: PcbVersion::V2(CurrencyEncoding::for_network(&network)),
+            network,
             chain_id: ChainId::devnet(),
             genesis: GenesisVersion::devnet(),
         }

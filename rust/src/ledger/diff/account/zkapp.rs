@@ -528,7 +528,7 @@ impl std::fmt::Debug for ZkappFeePayerNonceDiff {
 mod tests {
     use crate::{
         base::public_key::PublicKey,
-        block::precomputed::{PcbVersion, PrecomputedBlock},
+        block::precomputed::{CurrencyEncoding, PcbVersion, PrecomputedBlock},
         command::TxnHash,
         ledger::{
             account::{Permission, Permissions},
@@ -555,7 +555,7 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn zkapp_account_diff() -> Result<()> {
         let path = PathBuf::from("./tests/data/misc_blocks/mainnet-359630-3NLjRmTyUzeA7meRAT3Yjqxzfe95GKBgkLPD2iLeVE5RMCFcw8eL.json");
-        let pcb = PrecomputedBlock::parse_file(&path, PcbVersion::V2)?;
+        let pcb = PrecomputedBlock::parse_file(&path, PcbVersion::V2(CurrencyEncoding::Nanomina))?;
 
         use AccountDiff::*;
         let global_slot = pcb.global_slot_since_genesis();
@@ -921,7 +921,7 @@ mod tests {
     #[test]
     fn zkapp_account_diff_new_token() -> Result<()> {
         let path = PathBuf::from("./tests/data/misc_blocks/mainnet-360930-3NL3mVAEwJuBS8F3fMWBZZRjQC4JBzdGTD7vN5SqizudnkPKsRyi.json");
-        let pcb = PrecomputedBlock::parse_file(&path, PcbVersion::V2)?;
+        let pcb = PrecomputedBlock::parse_file(&path, PcbVersion::V2(CurrencyEncoding::Nanomina))?;
         let ledger_diff = LedgerDiff::from_precomputed(&pcb);
 
         use AccountDiff::*;
@@ -1106,7 +1106,7 @@ mod tests {
     #[test]
     fn zkapp_account_diff_359611() -> Result<()> {
         let path = PathBuf::from("./tests/data/hardfork/mainnet-359611-3NKybkb8C3R5PjwkxNUVCL6tb5qVf5i4jPWkDCcyJbka9Qgvr8CG.json");
-        let pcb = PrecomputedBlock::parse_file(&path, PcbVersion::V2)?;
+        let pcb = PrecomputedBlock::parse_file(&path, PcbVersion::V2(CurrencyEncoding::Nanomina))?;
         let ledger_diff = LedgerDiff::from_precomputed(&pcb);
 
         use AccountDiff::*;
@@ -1163,7 +1163,7 @@ mod tests {
     #[test]
     fn zkapp_account_diff_359617() -> Result<()> {
         let path = PathBuf::from("./tests/data/hardfork/mainnet-359617-3NKZ5poCAjtGqg9hHvAVZ7QwriqJsL8mpQsSHFGzqW6ddEEjYfvW.json");
-        let pcb = PrecomputedBlock::parse_file(&path, PcbVersion::V2)?;
+        let pcb = PrecomputedBlock::parse_file(&path, PcbVersion::V2(CurrencyEncoding::Nanomina))?;
         let ledger_diff = LedgerDiff::from_precomputed(&pcb);
 
         use AccountDiff::*;
@@ -1220,7 +1220,7 @@ mod tests {
     #[test]
     fn zkapp_account_diff_368442() -> Result<()> {
         let path = PathBuf::from("./tests/data/misc_blocks/mainnet-368442-3NLTFUdvKixsbCqEbjWKskrjWuaSQpwTjoGNXWzK7eaUn4oHscbu.json");
-        let pcb = PrecomputedBlock::parse_file(&path, PcbVersion::V2)?;
+        let pcb = PrecomputedBlock::parse_file(&path, PcbVersion::V2(CurrencyEncoding::Nanomina))?;
         let ledger_diff = LedgerDiff::from_precomputed(&pcb);
 
         use AccountDiff::*;
@@ -1306,7 +1306,7 @@ mod tests {
     #[test]
     fn zkapp_account_diff_413047() -> Result<()> {
         let path = PathBuf::from("./tests/data/misc_blocks/mainnet-413047-3NKJ7ts56Hs43ux5uGWi3rsbNvYKsyZbFmFbgRpgUD552M6Dp6xp.json");
-        let pcb = PrecomputedBlock::parse_file(&path, PcbVersion::V2)?;
+        let pcb = PrecomputedBlock::parse_file(&path, PcbVersion::V2(CurrencyEncoding::Nanomina))?;
         let ledger_diff = LedgerDiff::from_precomputed(&pcb);
 
         use AccountDiff::*;

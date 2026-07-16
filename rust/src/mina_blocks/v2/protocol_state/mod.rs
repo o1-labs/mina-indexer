@@ -59,12 +59,18 @@ pub struct SupplyAdjustment {
 
 /// Deserialize a supply-adjustment magnitude into nanomina.
 ///
-/// V2 precomputed blocks are inconsistent about amount encoding: mainnet/devnet
-/// emit `balance_change.magnitude` as an integer count of nanomina, while the
-/// mesa protocol emits it as a decimal MINA string (e.g. `"6.000659988"`).
-/// Strings containing a `.` are treated as decimal MINA and scaled to nanomina;
-/// plain integers are taken as nanomina verbatim, so existing networks are
-/// unaffected.
+/// This sees canonical text and takes it verbatim. Blocks from a producer that
+/// writes decimal MINA are converted up front, against the network they came
+/// from -- see [CurrencyEncoding][enc] -- because the text alone cannot say
+/// which encoding it is in: `"150"` is 150 nanomina from the hardfork mainnet
+/// node and 150 MINA from the devnet/mesa node.
+///
+/// A decimal is still accepted and scaled. Nothing observed emits one here --
+/// the decimal-MINA producers are normalized before this point, and the
+/// nanomina producers write integers -- but a decimal can only ever have meant
+/// MINA, so reading it that way beats failing.
+///
+/// [enc]: crate::block::precomputed::CurrencyEncoding
 fn deserialize_magnitude_nanomina<'de, D>(deserializer: D) -> Result<Balance, D::Error>
 where
     D: serde::Deserializer<'de>,

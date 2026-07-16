@@ -480,7 +480,7 @@ pub async fn handle_connection(
                 debug!("Received best-chain command");
                 let start_state_hash: StateHash = match start_state_hash {
                     None => {
-                        if let Ok(Some(PcbVersion::V2)) = db.get_best_block_version() {
+                        if let Ok(Some(PcbVersion::V2(_))) = db.get_best_block_version() {
                             HARDFORK_GENESIS_HASH.into()
                         } else {
                             MAINNET_GENESIS_HASH.into()
