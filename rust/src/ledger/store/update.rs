@@ -482,13 +482,7 @@ impl DbAccountUpdate {
                     // Remove the staged account of the block being unapplied (the
                     // orphan), not the new best tip -- `state_hash` is the block staying
                     // canonical.
-                    db.remove_staged_account(
-                        &pk,
-                        &token,
-                        &unapplied_state_hash,
-                        block_height,
-                        after.balance.0,
-                    )?;
+                    db.remove_staged_account(&pk, &token, &unapplied_state_hash, block_height)?;
                 }
 
                 db.update_best_account(&pk, &token, before_values, Some(after), false)?;

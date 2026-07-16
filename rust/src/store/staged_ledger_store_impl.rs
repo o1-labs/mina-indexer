@@ -174,6 +174,10 @@ impl StagedLedgerStore for IndexerStore {
             )?;
         }
 
+        // the sort key carries the balance, so a re-write at a new balance lands
+        // beside the old key rather than on it
+        self.delete_staged_account_balance_sort_key(pk, token, state_hash)?;
+
         // store staged ledger account bytes
         self.database.put_cf(
             self.staged_ledger_accounts_cf(),
@@ -197,7 +201,6 @@ impl StagedLedgerStore for IndexerStore {
         token: &TokenAddress,
         state_hash: &StateHash,
         block_height: u32,
-        balance: u64,
     ) -> Result<()> {
         trace!(
             "Removing staged account pk {} token {} height {} state hash {}",
@@ -211,16 +214,14 @@ impl StagedLedgerStore for IndexerStore {
         self.database
             .delete_cf(self.staged_ledger_accounts_min_block_cf(), pk.0.as_bytes())?;
 
+        // sort staged ledger account bytes -- keyed by the balance the account
+        // was stored under, which is only knowable from the stored account
+        self.delete_staged_account_balance_sort_key(pk, token, state_hash)?;
+
         // store staged ledger account bytes
         self.database.delete_cf(
             self.staged_ledger_accounts_cf(),
             staged_account_key(state_hash, token, pk),
-        )?;
-
-        // sort staged ledger account bytes
-        self.database.delete_cf(
-            self.staged_ledger_account_balance_sort_cf(),
-            staged_account_balance_sort_key(state_hash, token, balance, pk),
         )?;
 
         Ok(())
@@ -663,6 +664,42 @@ impl StagedLedgerStore for IndexerStore {
         let mode = IteratorMode::From(&start, direction);
         self.database
             .iterator_cf(self.staged_ledger_account_balance_sort_cf(), mode)
+    }
+}
+
+impl IndexerStore {
+    /// Drop the account's balance-sort key, if it has one.
+    ///
+    /// Balance is part of the sort key, so writing an account that is already
+    /// stored at a different balance does not overwrite its key -- it adds a
+    /// second one. [`StagedLedgerStore::build_staged_ledger`] reads only this
+    /// column family, descending, letting each account overwrite the last, so a
+    /// leftover key serves the *lowest* balance the account was ever written at.
+    /// An account gets re-written at the same state hash whenever its block is
+    /// applied more than once, which is what a reorg does.
+    ///
+    /// The balance the account is currently stored under is only knowable from
+    /// the stored account itself: a caller that computed a balance is not
+    /// necessarily holding the one the key was built from.
+    fn delete_staged_account_balance_sort_key(
+        &self,
+        pk: &PublicKey,
+        token: &TokenAddress,
+        state_hash: &StateHash,
+    ) -> Result<()> {
+        if let Some(bytes) = self.database.get_cf(
+            self.staged_ledger_accounts_cf(),
+            staged_account_key(state_hash, token, pk),
+        )? {
+            let stored: Account = serde_json::from_slice(&bytes)?;
+
+            self.database.delete_cf(
+                self.staged_ledger_account_balance_sort_cf(),
+                staged_account_balance_sort_key(state_hash, token, stored.balance.0, pk),
+            )?;
+        }
+
+        Ok(())
     }
 }
 
