@@ -401,6 +401,31 @@ impl AccountDiff {
         fees
     }
 
+    /// Whether applying this diff can only lower the balance.
+    ///
+    /// An account's diffs from one block do not arrive in the order the
+    /// protocol applied them -- a zkApp's account updates are a second pass
+    /// over the ledger, after the block's signed commands -- so a debit can
+    /// land before the payment that funds it. Balances are unsigned and
+    /// saturate at zero, which turns that into a silently wrong balance.
+    ///
+    /// Applying an account's credits before its debits cannot underflow: the
+    /// running balance is at its highest once the credits are in, and its
+    /// lowest point after that is the final balance, which the protocol says
+    /// is not negative. The net is the same whatever the order, so this lands
+    /// on the protocol's answer without having to model its passes.
+    pub fn is_debit(&self) -> bool {
+        match self {
+            Self::Payment(diff)
+            | Self::FeeTransfer(diff)
+            | Self::FeeTransferViaCoinbase(diff)
+            | Self::ZkappPayment(ZkappPaymentDiff::Payment { payment: diff, .. }) => {
+                matches!(diff.update_type, UpdateType::Debit(_))
+            }
+            _ => false,
+        }
+    }
+
     pub fn amount(&self) -> i64 {
         match self {
             Self::Delegation(_) | Self::FailedTransactionNonce(_) => 0,

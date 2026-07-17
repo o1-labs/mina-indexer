@@ -254,6 +254,20 @@ impl Account {
     /// successful, or `None` if the debit amount exceeds the current
     /// balance.
     fn debit(self, amount: Amount, nonce: Option<Nonce>) -> Self {
+        // The protocol never lets an account go negative, so a debit bigger
+        // than the balance means the indexer's own diffs or their order are
+        // wrong -- and the balance saturates at zero, quietly serving a number
+        // that is too high by the overshoot ever after. Say so.
+        if amount.0 > self.balance.0 {
+            error!(
+                "Debit of {} exceeds {}'s balance of {} -- balance will saturate at 0 and be wrong by {}",
+                amount.0,
+                self.public_key,
+                self.balance.0,
+                amount.0 - self.balance.0,
+            );
+        }
+
         Self {
             balance: self.balance - amount,
             nonce: nonce.or(self.nonce),
@@ -618,14 +632,24 @@ impl Account {
         let token = self.token.clone().unwrap_or_default();
         let mut acct = self;
 
-        for acct_diff in diff.account_diffs.iter().flatten() {
-            // Match on (public key, token), not the public key alone. A public key can
-            // hold accounts on many tokens, each with its own diffs; applying another
-            // token's diff to this account corrupts its balance and trips the token
-            // check. This reconstructs one account, so it must take only its own diffs.
-            if acct_diff.public_key() == pk && acct_diff.token() == token {
-                acct = acct.apply_account_diff(acct_diff, &diff.state_hash);
-            }
+        // Match on (public key, token), not the public key alone. A public key can
+        // hold accounts on many tokens, each with its own diffs; applying another
+        // token's diff to this account corrupts its balance and trips the token
+        // check. This reconstructs one account, so it must take only its own diffs.
+        let mut acct_diffs: Vec<&AccountDiff> = diff
+            .account_diffs
+            .iter()
+            .flatten()
+            .filter(|acct_diff| acct_diff.public_key() == pk && acct_diff.token() == token)
+            .collect();
+
+        // Credits first, for the same reason as [Ledger::_apply_diff]: these are
+        // not in the order the protocol applied them, and a debit landing ahead
+        // of the payment that funds it saturates the balance at zero.
+        acct_diffs.sort_by_key(|acct_diff| acct_diff.is_debit());
+
+        for acct_diff in acct_diffs {
+            acct = acct.apply_account_diff(acct_diff, &diff.state_hash);
         }
 
         acct

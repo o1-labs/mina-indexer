@@ -550,6 +550,14 @@ fn aggregate_token_account_diffs(
         }
     }
 
+    // Credits first: these are not in the order the protocol applied them, and
+    // an unsigned balance saturates at zero, so a debit arriving before the
+    // payment that funds it silently loses the difference.
+    // See [AccountDiff::is_debit].
+    for diffs in token_account_diffs.values_mut() {
+        diffs.sort_by_key(|diff| diff.is_debit());
+    }
+
     token_account_diffs
 }
 
