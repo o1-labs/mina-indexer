@@ -1321,7 +1321,7 @@ fn recurse_calls_receivers<'a>(
 mod test {
     use super::*;
     use crate::{
-        block::{parser::BlockParser, precomputed::PcbVersion},
+        block::{parser::BlockParser, precomputed::{CurrencyEncoding, PcbVersion}},
         command::decode_memo,
         constants::*,
     };
@@ -1679,7 +1679,7 @@ mod test {
             mina_json
         };
 
-        let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2)?;
+        let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2(CurrencyEncoding::Nanomina))?;
         let user_cmd_with_status = block.commands()[0].clone();
         let user_cmd_with_status: Value = user_cmd_with_status.into();
 
@@ -1831,7 +1831,7 @@ mod test {
     #[test]
     fn txn_memos_v2() -> Result<()> {
         let path = PathBuf::from("./tests/data/misc_blocks/mainnet-425422-3NLhbkx92FD5CETZDBKA4PEXfb2QpVdcrrKdsDEcH2V3DqXkqgZ1.json");
-        let pcb = PrecomputedBlock::parse_file(&path, PcbVersion::V2)?;
+        let pcb = PrecomputedBlock::parse_file(&path, PcbVersion::V2(CurrencyEncoding::Nanomina))?;
 
         let cmds = pcb.commands();
         let res: Vec<_> = cmds.iter().map(|cmd| cmd.memo()).collect();
@@ -1894,7 +1894,7 @@ mod test {
     #[test]
     fn txn_hash_v2() -> Result<()> {
         let block_file = PathBuf::from("./tests/data/hardfork/mainnet-359606-3NKvvtFwjEtQLswWJzXBSxxiKuYVbLJrKXCnmhp6jctYMqAWcftg.json");
-        let precomputed_block = PrecomputedBlock::parse_file(&block_file, PcbVersion::V2).unwrap();
+        let precomputed_block = PrecomputedBlock::parse_file(&block_file, PcbVersion::V2(CurrencyEncoding::Nanomina)).unwrap();
         let hashes = precomputed_block.command_hashes();
 
         // see https://minaexplorer.com/block/3NKvvtFwjEtQLswWJzXBSxxiKuYVbLJrKXCnmhp6jctYMqAWcftg
@@ -1910,7 +1910,7 @@ mod test {
     #[test]
     fn txn_hash_v2_zkapp_command() -> Result<()> {
         let block_file = PathBuf::from("./tests/data/misc_blocks/mainnet-397612-3NLh3tvZpMPXxUhCLz1898BDV6CwtExJqDWpzcZQebVCsZxghoXK.json");
-        let precomputed_block = PrecomputedBlock::parse_file(&block_file, PcbVersion::V2).unwrap();
+        let precomputed_block = PrecomputedBlock::parse_file(&block_file, PcbVersion::V2(CurrencyEncoding::Nanomina)).unwrap();
         let hashes = precomputed_block
             .commands()
             .into_iter()
@@ -1938,7 +1938,7 @@ mod test {
     #[test]
     fn command_receivers_v2() -> Result<()> {
         let path = PathBuf::from("./tests/data/misc_blocks/mainnet-411109-3NLfyFPMhckjLNHNYFzkEAWox7mze9L7ppHAniJMhQJjtgEEWtLQ.json");
-        let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2).unwrap();
+        let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2(CurrencyEncoding::Nanomina)).unwrap();
 
         let mut receivers = HashSet::new();
         block.commands().iter().for_each(|cmd| {

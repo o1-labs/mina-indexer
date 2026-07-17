@@ -174,7 +174,7 @@ impl BlockParser {
         reporting_freq: u32,
     ) -> anyhow::Result<Self> {
         info!("Block parser with canonical chain discovery");
-        let genesis_state_hash = if version == PcbVersion::V2 {
+        let genesis_state_hash = if matches!(version, PcbVersion::V2(_)) {
             HARDFORK_GENESIS_HASH
         } else {
             MAINNET_GENESIS_HASH

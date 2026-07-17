@@ -12,3 +12,5 @@ mod staking_ledger_balance_sorted_accounts;
 mod token_ledger;
 #[cfg(test)]
 mod zkapp_best_ledger_accounts;
+#[cfg(test)]
+mod zkapp_currency_encoding;

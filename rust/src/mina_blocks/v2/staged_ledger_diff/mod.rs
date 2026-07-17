@@ -640,7 +640,7 @@ impl From<UpdateTiming> for Option<Timing> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        block::precomputed::{PcbVersion, PrecomputedBlock},
+        block::precomputed::{CurrencyEncoding, PcbVersion, PrecomputedBlock},
         command::{signed::SignedCommand, to_mina_json, to_zkapp_json, UserCommandWithStatusT},
         mina_blocks::v2::staged_ledger_diff::UserCommandData,
     };
@@ -649,7 +649,7 @@ mod tests {
     #[test]
     fn v2_signed_command_to_mina_json() -> anyhow::Result<()> {
         let block_file = PathBuf::from("./tests/data/hardfork/mainnet-359606-3NKvvtFwjEtQLswWJzXBSxxiKuYVbLJrKXCnmhp6jctYMqAWcftg.json");
-        let precomputed_block = PrecomputedBlock::parse_file(&block_file, PcbVersion::V2).unwrap();
+        let precomputed_block = PrecomputedBlock::parse_file(&block_file, PcbVersion::V2(CurrencyEncoding::Nanomina)).unwrap();
         let signed_cmds = precomputed_block
             .commands()
             .into_iter()
@@ -687,7 +687,7 @@ mod tests {
     #[test]
     fn zkapp_command_to_mina_json_1() -> anyhow::Result<()> {
         let block_file = PathBuf::from("./tests/data/misc_blocks/mainnet-410535-3NLLmswaSwYVSERiQMdvTdKdBN6TNMgUGmd548zK7e82CaS3tNJK.json");
-        let precomputed_block = PrecomputedBlock::parse_file(&block_file, PcbVersion::V2).unwrap();
+        let precomputed_block = PrecomputedBlock::parse_file(&block_file, PcbVersion::V2(CurrencyEncoding::Nanomina)).unwrap();
         let signed_cmds = precomputed_block
             .commands()
             .into_iter()
@@ -727,7 +727,7 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn zkapp_command_to_mina_json_2() -> anyhow::Result<()> {
         let block_file = PathBuf::from("./tests/data/misc_blocks/mainnet-397612-3NLh3tvZpMPXxUhCLz1898BDV6CwtExJqDWpzcZQebVCsZxghoXK.json");
-        let precomputed_block = PrecomputedBlock::parse_file(&block_file, PcbVersion::V2).unwrap();
+        let precomputed_block = PrecomputedBlock::parse_file(&block_file, PcbVersion::V2(CurrencyEncoding::Nanomina)).unwrap();
         let json = precomputed_block
             .commands()
             .into_iter()
@@ -977,7 +977,7 @@ mod tests {
 
         // indexer zkapp command json
         let block_file = PathBuf::from("./tests/data/misc_blocks/mainnet-410535-3NLLmswaSwYVSERiQMdvTdKdBN6TNMgUGmd548zK7e82CaS3tNJK.json");
-        let precomputed_block = PrecomputedBlock::parse_file(&block_file, PcbVersion::V2).unwrap();
+        let precomputed_block = PrecomputedBlock::parse_file(&block_file, PcbVersion::V2(CurrencyEncoding::Nanomina)).unwrap();
         let indexer_json = precomputed_block
             .commands()
             .into_iter()
@@ -1011,7 +1011,7 @@ mod tests {
 
         // indexer zkapp command json
         let block_file = PathBuf::from("./tests/data/misc_blocks/mainnet-397612-3NLh3tvZpMPXxUhCLz1898BDV6CwtExJqDWpzcZQebVCsZxghoXK.json");
-        let precomputed_block = PrecomputedBlock::parse_file(&block_file, PcbVersion::V2).unwrap();
+        let precomputed_block = PrecomputedBlock::parse_file(&block_file, PcbVersion::V2(CurrencyEncoding::Nanomina)).unwrap();
         let indexer_json = precomputed_block
             .commands()
             .into_iter()

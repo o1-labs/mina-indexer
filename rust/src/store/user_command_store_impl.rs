@@ -1364,7 +1364,7 @@ impl<'a> TxnCsvRecord<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::block::precomputed::PcbVersion;
+    use crate::block::precomputed::{CurrencyEncoding, PcbVersion};
     use std::{env, path::Path};
     use tempfile::TempDir;
 
@@ -1398,7 +1398,7 @@ mod tests {
         let store = create_indexer_store()?;
 
         let path = Path::new("./tests/data/hardfork/mainnet-359617-3NKZ5poCAjtGqg9hHvAVZ7QwriqJsL8mpQsSHFGzqW6ddEEjYfvW.json");
-        let pcb = PrecomputedBlock::parse_file(path, PcbVersion::V2)?;
+        let pcb = PrecomputedBlock::parse_file(path, PcbVersion::V2(CurrencyEncoding::Nanomina))?;
 
         for (num, zkapp_cmd) in pcb.zkapp_commands().iter().enumerate() {
             let epoch = pcb.epoch_count();

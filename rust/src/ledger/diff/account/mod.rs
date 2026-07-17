@@ -1060,7 +1060,7 @@ mod tests {
     use super::*;
     use crate::{
         base::{nonce::Nonce, state_hash::StateHash},
-        block::precomputed::{PcbVersion, PrecomputedBlock},
+        block::precomputed::{CurrencyEncoding, PcbVersion, PrecomputedBlock},
         command::{AccountUpdate, Command, Delegation, Payment},
         constants::MAINNET_COINBASE_REWARD,
         ledger::{
@@ -1398,7 +1398,7 @@ mod tests {
     #[test]
     fn genesis_v2() -> Result<()> {
         let path = PathBuf::from("./data/genesis_blocks/mainnet-359605-3NK4BpDSekaqsG6tx8Nse2zJchRft2JpnbvMiog55WCr5xJZaKeP.json");
-        let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2)?;
+        let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2(CurrencyEncoding::Nanomina))?;
         let diff = LedgerDiff::from_precomputed(&block);
 
         assert!(diff.account_diffs.is_empty(), "{:#?}", diff.account_diffs);
@@ -1408,7 +1408,7 @@ mod tests {
     #[test]
     fn zkapp_account_updates() -> Result<()> {
         let path = PathBuf::from("./tests/data/misc_blocks/mainnet-368442-3NLTFUdvKixsbCqEbjWKskrjWuaSQpwTjoGNXWzK7eaUn4oHscbu.json");
-        let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2)?;
+        let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2(CurrencyEncoding::Nanomina))?;
 
         let zkapps = block.zkapp_commands();
         let zkapp_cmd = zkapps.first().unwrap();
@@ -1474,7 +1474,7 @@ mod tests {
     #[test]
     fn zkapp_account_diffs() -> Result<()> {
         let path = PathBuf::from("./tests/data/misc_blocks/mainnet-368442-3NLTFUdvKixsbCqEbjWKskrjWuaSQpwTjoGNXWzK7eaUn4oHscbu.json");
-        let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2)?;
+        let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2(CurrencyEncoding::Nanomina))?;
 
         let state_hash = block.state_hash();
         let global_slot = block.global_slot_since_genesis();

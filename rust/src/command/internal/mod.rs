@@ -344,7 +344,7 @@ impl std::fmt::Display for InternalCommandKind {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::block::precomputed::{PcbVersion, PrecomputedBlock};
+    use crate::block::precomputed::{CurrencyEncoding, PcbVersion, PrecomputedBlock};
 
     #[test]
     fn from_precomputed_v1() -> anyhow::Result<()> {
@@ -420,7 +420,7 @@ mod tests {
     #[test]
     fn from_genesis_v2() -> anyhow::Result<()> {
         let path = std::path::PathBuf::from("./data/genesis_blocks/mainnet-359605-3NK4BpDSekaqsG6tx8Nse2zJchRft2JpnbvMiog55WCr5xJZaKeP.json");
-        let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2)?;
+        let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2(CurrencyEncoding::Nanomina))?;
 
         // empty internal commands
         assert_eq!(InternalCommand::from_precomputed(&block), vec![]);

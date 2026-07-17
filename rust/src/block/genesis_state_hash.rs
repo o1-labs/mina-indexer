@@ -49,7 +49,7 @@ impl From<GenesisStateHash> for StateHash {
 mod test {
     use super::*;
     use crate::{
-        block::precomputed::{PcbVersion, PrecomputedBlock},
+        block::precomputed::{CurrencyEncoding, PcbVersion, PrecomputedBlock},
         chain::Network,
     };
     use std::fs::write;
@@ -117,7 +117,7 @@ mod test {
     fn genesis_state_hash_v2() -> anyhow::Result<()> {
         for path in glob::glob("./tests/data/berkeley/sequential/*.json")?.flatten() {
             let genesis_state_hash = GenesisStateHash::from_path(&path)?;
-            let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2)?;
+            let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2(CurrencyEncoding::Nanomina))?;
             assert_eq!(genesis_state_hash, block.genesis_state_hash());
         }
         Ok(())

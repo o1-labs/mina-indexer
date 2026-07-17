@@ -193,7 +193,7 @@ impl TokenDiff {
 #[cfg(test)]
 mod tests {
     use crate::{
-        block::precomputed::{PcbVersion, PrecomputedBlock},
+        block::precomputed::{CurrencyEncoding, PcbVersion, PrecomputedBlock},
         ledger::{
             diff::{
                 token::{TokenDiff, TokenDiffType},
@@ -207,7 +207,7 @@ mod tests {
     #[test]
     fn token_diffs() -> anyhow::Result<()> {
         let path = PathBuf::from("./tests/data/misc_blocks/mainnet-360930-3NL3mVAEwJuBS8F3fMWBZZRjQC4JBzdGTD7vN5SqizudnkPKsRyi.json");
-        let pcb = PrecomputedBlock::parse_file(&path, PcbVersion::V2)?;
+        let pcb = PrecomputedBlock::parse_file(&path, PcbVersion::V2(CurrencyEncoding::Nanomina))?;
         let diff = LedgerDiff::from_precomputed(&pcb);
 
         let token_diffs = diff.token_diffs;

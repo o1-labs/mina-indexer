@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use log::{debug, error, info, warn, LevelFilter};
 use mina_indexer::{
     base::state_hash::StateHash,
-    block::precomputed::PcbVersion,
+    block::precomputed::{CurrencyEncoding, PcbVersion},
     block::store::BlockStore,
     canonicity::store::CanonicityStore,
     chain::ChainId,
@@ -451,12 +451,27 @@ fn process_indexer_configuration(
 
     // indexer version
     let network = args.db.network;
+    // mesa and devnet run the newer node, which writes currency as decimal MINA;
+    // the hardfork mainnet node writes nanomina. Nothing in a block distinguishes
+    // them, so the genesis hash is what decides. See [CurrencyEncoding].
     let (version, chain_id, genesis) = if genesis_hash == MESA_GENESIS_HASH {
-        (PcbVersion::V2, ChainId::mesa(), GenesisVersion::mesa())
+        (
+            PcbVersion::V2(CurrencyEncoding::DecimalMina),
+            ChainId::mesa(),
+            GenesisVersion::mesa(),
+        )
     } else if genesis_hash == DEVNET_GENESIS_HASH {
-        (PcbVersion::V2, ChainId::devnet(), GenesisVersion::devnet())
+        (
+            PcbVersion::V2(CurrencyEncoding::DecimalMina),
+            ChainId::devnet(),
+            GenesisVersion::devnet(),
+        )
     } else if genesis_hash == HARDFORK_GENESIS_HASH {
-        (PcbVersion::V2, ChainId::v2(), GenesisVersion::v2())
+        (
+            PcbVersion::V2(CurrencyEncoding::Nanomina),
+            ChainId::v2(),
+            GenesisVersion::v2(),
+        )
     } else {
         (PcbVersion::V1, ChainId::v1(), GenesisVersion::v1())
     };
@@ -515,7 +530,7 @@ fn parse_genesis_ledger(
         info!("Using default {} genesis ledger", version);
         match version {
             PcbVersion::V1 => GenesisLedger::new_v1()?,
-            PcbVersion::V2 => GenesisLedger::new_v2()?,
+            PcbVersion::V2(_) => GenesisLedger::new_v2()?,
         }
     };
 

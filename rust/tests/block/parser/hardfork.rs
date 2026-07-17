@@ -1,6 +1,6 @@
 use mina_indexer::block::{
     parser::BlockParser,
-    precomputed::{PcbVersion, PrecomputedBlock},
+    precomputed::{CurrencyEncoding, PcbVersion, PrecomputedBlock},
 };
 use std::path::PathBuf;
 
@@ -36,11 +36,11 @@ async fn hardfork() -> anyhow::Result<()> {
 
         // after consuming a v2 block
         if v2_blocks.contains(&pcb.state_hash().0) {
-            assert_eq!(block_parser.version, PcbVersion::V2);
+            assert_eq!(block_parser.version, PcbVersion::V2(CurrencyEncoding::Nanomina));
         }
     }
 
     // final consumed block is v2
-    assert_eq!(block_parser.version, PcbVersion::V2);
+    assert_eq!(block_parser.version, PcbVersion::V2(CurrencyEncoding::Nanomina));
     Ok(())
 }

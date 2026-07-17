@@ -41,11 +41,111 @@ pub struct BlockFileContents {
     pub(crate) contents: Vec<u8>,
 }
 
+/// How a block's producer wrote currency amounts.
+///
+/// The two V2 networks disagree, and nothing in the block says which is which --
+/// both declare `protocol_version` transaction 3. Only the network does, so this
+/// rides on [PcbVersion] and is decided once, at the genesis-hash dispatch.
+///
+/// The hardfork mainnet node writes `balance_change.magnitude` as an integer
+/// count of nanomina (`"2000000000"` is 2 MINA). The newer devnet/mesa node
+/// writes it as decimal MINA (`"120"` is 120 MINA, `"2.2"` is 2.2 MINA). The
+/// shapes overlap: `"150"` is 150 nanomina on one and 150 MINA on the other, a
+/// factor of a billion apart, so no amount of looking at the text can tell them
+/// apart.
+#[derive(Default, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CurrencyEncoding {
+    /// Integer nanomina, as the hardfork mainnet node writes them.
+    #[default]
+    Nanomina,
+
+    /// Decimal MINA, as the devnet/mesa node writes them.
+    DecimalMina,
+}
+
 #[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PcbVersion {
     #[default]
     V1,
-    V2,
+    V2(CurrencyEncoding),
+}
+
+impl PcbVersion {
+    /// The version of a block at `blockchain_length` on `network`.
+    ///
+    /// Height says whether the block is post-hardfork; only the network says
+    /// how its producer writes currency.
+    pub fn for_block(network: &Network, blockchain_length: BlockchainLength) -> Self {
+        if blockchain_length.is_hardfork() {
+            Self::V2(CurrencyEncoding::for_network(network))
+        } else {
+            Self::V1
+        }
+    }
+}
+
+impl CurrencyEncoding {
+    /// The encoding `network`'s block producer writes.
+    ///
+    /// Only devnet and mesa run the newer node. Everything else keeps the
+    /// nanomina reading, which is what the indexer has always done for integer
+    /// magnitudes -- an unrecognized network is not silently reinterpreted.
+    pub fn for_network(network: &Network) -> Self {
+        match network {
+            Network::Devnet => Self::DecimalMina,
+            Network::Custom(name) if name == "mesa" || name == "mesa-mut" => Self::DecimalMina,
+            _ => Self::Nanomina,
+        }
+    }
+
+    /// Rewrite every currency magnitude in a block's JSON to canonical
+    /// nanomina, so that past this point nothing in the indexer has to know how
+    /// the producer wrote it.
+    ///
+    /// This runs on the file being ingested and nowhere else. Blocks in the
+    /// store are already canonical -- they are re-read straight through
+    /// `Deserialize`, which never scales -- so a stored block cannot be scaled
+    /// a second time.
+    fn normalize_block_json(&self, json: &mut serde_json::Value) {
+        if let Self::Nanomina = self {
+            return;
+        }
+
+        match json {
+            serde_json::Value::Object(map) => {
+                // a supply adjustment is the pair {"magnitude": _, "sgn": _}
+                if map.contains_key("sgn") {
+                    if let Some(magnitude) = map.get_mut("magnitude") {
+                        if let Some(canonical) = Self::mina_text_to_nanomina(magnitude) {
+                            *magnitude = serde_json::Value::String(canonical);
+                        }
+                    }
+                }
+
+                for value in map.values_mut() {
+                    self.normalize_block_json(value);
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for value in values.iter_mut() {
+                    self.normalize_block_json(value);
+                }
+            }
+            _ => (),
+        }
+    }
+
+    /// Scale a decimal MINA magnitude to nanomina, preserving its string shape.
+    /// Returns `None` for anything unparseable, leaving the value for the
+    /// deserializer to reject with its own error.
+    fn mina_text_to_nanomina(magnitude: &serde_json::Value) -> Option<String> {
+        use rust_decimal::{prelude::ToPrimitive, Decimal};
+
+        let mina = magnitude.as_str()?.parse::<Decimal>().ok()?;
+        let nanomina = (mina * crate::constants::MINA_SCALE_DEC).round().to_u64()?;
+
+        Some(nanomina.to_string())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -94,7 +194,20 @@ impl PrecomputedBlock {
                     staged_ledger_diff: staged_ledger_diff.into(),
                 })))
             }
-            PcbVersion::V2 => {
+            PcbVersion::V2(encoding) => {
+                // Currency text is in the producer's encoding, and this is the
+                // only place that knows which one. Convert it here so the rest
+                // of the indexer only ever sees nanomina.
+                let block_file: BlockFileV2 = match encoding {
+                    CurrencyEncoding::Nanomina => serde_json::from_str(&contents)?,
+                    CurrencyEncoding::DecimalMina => {
+                        let mut json: serde_json::Value = serde_json::from_str(&contents)?;
+                        encoding.normalize_block_json(&mut json);
+
+                        serde_json::from_value(json)?
+                    }
+                };
+
                 let BlockFileV2 {
                     version: _,
                     data:
@@ -106,7 +219,7 @@ impl PrecomputedBlock {
                             accounts_accessed,
                             accounts_created,
                         },
-                } = serde_json::from_str(&contents)?;
+                } = block_file;
                 Ok(Self::V2(Box::new(PrecomputedBlockV2 {
                     state_hash,
                     scheduled_time,
@@ -144,7 +257,7 @@ impl PrecomputedBlock {
     /// automatically determines the version.
     pub fn from_path(path: &Path) -> anyhow::Result<Self> {
         let (network, blockchain_length, state_hash) = extract_network_height_hash(path);
-        let version: PcbVersion = blockchain_length.into();
+        let version = PcbVersion::for_block(&network, blockchain_length);
         let contents = std::fs::read(path)?;
 
         Self::new(network, blockchain_length, state_hash, contents, version)
@@ -1421,7 +1534,9 @@ impl PrecomputedBlock {
     pub fn version(&self) -> PcbVersion {
         match self {
             Self::V1(_) => PcbVersion::V1,
-            Self::V2(_) => PcbVersion::V2,
+            // the encoding follows from the network the block came from, so the
+            // block does not have to carry it
+            Self::V2(v2) => PcbVersion::V2(CurrencyEncoding::for_network(&v2.network)),
         }
     }
 }
@@ -1450,7 +1565,7 @@ impl std::fmt::Display for PcbVersion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::V1 => write!(f, "v1"),
-            Self::V2 => write!(f, "v2"),
+            Self::V2(_) => write!(f, "v2"),
         }
     }
 }
@@ -1490,7 +1605,7 @@ mod tests {
     #[test]
     fn vrf_output_v2() -> anyhow::Result<()> {
         let path = PathBuf::from("./tests/data/berkeley/sequential_blocks/berkeley-2-3NLBi19dn8P4Fm5UZgd2gdmi1WbuxyM1uuk2ci1zEwP4iEijHEwJ.json");
-        let pcb = PrecomputedBlock::parse_file(&path, PcbVersion::V2)?;
+        let pcb = PrecomputedBlock::parse_file(&path, PcbVersion::V2(CurrencyEncoding::Nanomina))?;
 
         assert_eq!(
             pcb.last_vrf_output(),
@@ -1522,7 +1637,7 @@ mod tests {
         assert!(std::str::from_utf8(&bytes).is_err());
         // ... but the block must still parse via lossy decode
         let block =
-            PrecomputedBlock::new(network, blockchain_length, state_hash, bytes, PcbVersion::V2)?;
+            PrecomputedBlock::new(network, blockchain_length, state_hash, bytes, PcbVersion::V2(CurrencyEncoding::Nanomina))?;
         assert_eq!(block.blockchain_length(), 360930);
         Ok(())
     }
@@ -1530,7 +1645,7 @@ mod tests {
     #[test]
     fn accounts_created_v2() -> anyhow::Result<()> {
         let path = PathBuf::from("./tests/data/misc_blocks/mainnet-360930-3NL3mVAEwJuBS8F3fMWBZZRjQC4JBzdGTD7vN5SqizudnkPKsRyi.json");
-        let pcb = PrecomputedBlock::parse_file(&path, PcbVersion::V2)?;
+        let pcb = PrecomputedBlock::parse_file(&path, PcbVersion::V2(CurrencyEncoding::Nanomina))?;
 
         // expected accounts created
         let expect = vec![AccountCreated {

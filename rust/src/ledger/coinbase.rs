@@ -199,7 +199,7 @@ impl From<staged_ledger_diff::CoinBaseFeeTransfer> for CoinbaseFeeTransfer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{block::precomputed::PcbVersion, constants::*};
+    use crate::{block::precomputed::{CurrencyEncoding, PcbVersion}, constants::*};
 
     #[test]
     fn coinbase_reward_is_per_network() -> anyhow::Result<()> {
@@ -210,7 +210,7 @@ mod tests {
             std::path::Path::new(
                 "./tests/data/misc_blocks/mesa-297736-3NK6RWU4RvrLkCnsM8hcWykcr2FiAa6XJrBTGBuuzNUU5mBadseV.json",
             ),
-            PcbVersion::V2,
+            PcbVersion::V2(CurrencyEncoding::Nanomina),
         )?;
 
         assert_eq!(mesa.coinbase_reward(), MESA_COINBASE_REWARD);
@@ -224,7 +224,7 @@ mod tests {
             std::path::Path::new(
                 "./tests/data/misc_blocks/mainnet-419989-3NKhZKc1HrEexmpvcbx4eqAtrsbwmfLXcjukF9CJ8Y2y7FEjFWg5.json",
             ),
-            PcbVersion::V2,
+            PcbVersion::V2(CurrencyEncoding::Nanomina),
         )?;
 
         assert_eq!(mainnet.coinbase_reward(), MAINNET_COINBASE_REWARD);
@@ -357,7 +357,7 @@ mod tests {
     #[test]
     fn coinbase_from_precomputed_v2() -> anyhow::Result<()> {
         let path = std::path::PathBuf::from("./tests/data/misc_blocks/mainnet-419989-3NKhZKc1HrEexmpvcbx4eqAtrsbwmfLXcjukF9CJ8Y2y7FEjFWg5.json");
-        let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2)?;
+        let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2(CurrencyEncoding::Nanomina))?;
         let expect = Coinbase {
             kind: CoinbaseKind::One(None),
             receiver: PublicKey::from("B62qospDjUj43x2yMKiNehojWWRUsE1wpdUDVpfxH8V3n5Y1QgJKFfw"),
@@ -394,7 +394,7 @@ mod tests {
     #[test]
     fn genesis_v2() -> anyhow::Result<()> {
         let path = std::path::PathBuf::from("./data/genesis_blocks/mainnet-359605-3NK4BpDSekaqsG6tx8Nse2zJchRft2JpnbvMiog55WCr5xJZaKeP.json");
-        let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2)?;
+        let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2(CurrencyEncoding::Nanomina))?;
         let coinbase = Coinbase::from_precomputed(&block);
 
         assert_eq!(

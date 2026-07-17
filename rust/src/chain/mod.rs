@@ -5,7 +5,11 @@ pub mod store;
 mod id;
 mod network;
 
-use crate::{base::state_hash::StateHash, block::precomputed::PcbVersion, constants::*};
+use crate::{
+    base::state_hash::StateHash,
+    block::precomputed::{CurrencyEncoding, PcbVersion},
+    constants::*,
+};
 use std::collections::HashMap;
 
 // re-export types
@@ -41,18 +45,37 @@ impl std::default::Default for ChainData {
         let devnet_genesis_state_hash: StateHash = DEVNET_GENESIS_HASH.into();
         let devnet_original_genesis_state_hash: StateHash = DEVNET_ORIGINAL_GENESIS_HASH.into();
 
+        // The hardfork mainnet node writes currency as nanomina; the newer node
+        // devnet and mesa run writes it as decimal MINA. The block does not say
+        // which -- both declare protocol_version transaction 3 -- so the chain
+        // it belongs to is the only thing that does. See [CurrencyEncoding].
         Self(HashMap::from([
             (v1_genesis_state_hash, (PcbVersion::V1, v1_chain_id)),
-            (v2_genesis_state_hash, (PcbVersion::V2, v2_chain_id)),
-            (mesa_genesis_state_hash, (PcbVersion::V2, ChainId::mesa())),
+            (
+                v2_genesis_state_hash,
+                (PcbVersion::V2(CurrencyEncoding::Nanomina), v2_chain_id),
+            ),
+            (
+                mesa_genesis_state_hash,
+                (PcbVersion::V2(CurrencyEncoding::DecimalMina), ChainId::mesa()),
+            ),
             (
                 mesa_original_genesis_state_hash,
-                (PcbVersion::V2, ChainId::mesa()),
+                (PcbVersion::V2(CurrencyEncoding::DecimalMina), ChainId::mesa()),
             ),
-            (devnet_genesis_state_hash, (PcbVersion::V2, ChainId::devnet())),
+            (
+                devnet_genesis_state_hash,
+                (
+                    PcbVersion::V2(CurrencyEncoding::DecimalMina),
+                    ChainId::devnet(),
+                ),
+            ),
             (
                 devnet_original_genesis_state_hash,
-                (PcbVersion::V2, ChainId::devnet()),
+                (
+                    PcbVersion::V2(CurrencyEncoding::DecimalMina),
+                    ChainId::devnet(),
+                ),
             ),
         ]))
     }

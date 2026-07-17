@@ -25,7 +25,7 @@
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use mina_indexer::block::precomputed::{PcbVersion, PrecomputedBlock};
+use mina_indexer::block::precomputed::{CurrencyEncoding, PcbVersion, PrecomputedBlock};
 use mina_indexer::mina_blocks::v2::staged_ledger_diff::{SignedCommandData, ZkappCommandData};
 use serde::Serialize;
 use std::{
@@ -143,7 +143,7 @@ fn load_summaries(blocks_dir: &Path) -> anyhow::Result<Vec<BlockSummary>> {
 
     for entry in glob::glob(pattern)? {
         let path = entry?;
-        match PrecomputedBlock::parse_file(&path, PcbVersion::V2) {
+        match PrecomputedBlock::parse_file(&path, PcbVersion::V2(CurrencyEncoding::DecimalMina)) {
             Ok(pcb) => summaries.push(BlockSummary::from_block(&pcb, &path)),
             Err(e) => {
                 failures += 1;

@@ -9,7 +9,7 @@
 //! account, silently.
 
 use mina_indexer::{
-    block::precomputed::{PcbVersion, PrecomputedBlock},
+    block::precomputed::{CurrencyEncoding, PcbVersion, PrecomputedBlock},
     ledger::{diff::LedgerDiff, token::TokenAddress},
 };
 use std::path::PathBuf;
@@ -25,7 +25,7 @@ const VOTING_FOR: &str = "3NK2tkzqqK5spR2sZ7tujjqPksL45M3UUrcA4WhCkeiPtnugyE2x";
 
 #[test]
 fn ledger_diff_carries_block_stated_account_fields() -> anyhow::Result<()> {
-    let block = PrecomputedBlock::parse_file(&PathBuf::from(BLOCK), PcbVersion::V2)?;
+    let block = PrecomputedBlock::parse_file(&PathBuf::from(BLOCK), PcbVersion::V2(CurrencyEncoding::Nanomina))?;
     let diff = LedgerDiff::from_precomputed(&block);
 
     // the diff must carry the block's own account records
@@ -66,7 +66,7 @@ fn ledger_diff_carries_block_stated_account_fields() -> anyhow::Result<()> {
 
 #[test]
 fn applying_a_diff_takes_receipt_chain_hash_from_the_block() -> anyhow::Result<()> {
-    let block = PrecomputedBlock::parse_file(&PathBuf::from(BLOCK), PcbVersion::V2)?;
+    let block = PrecomputedBlock::parse_file(&PathBuf::from(BLOCK), PcbVersion::V2(CurrencyEncoding::Nanomina))?;
     let diff = LedgerDiff::from_precomputed(&block);
 
     // apply onto an empty ledger: the account is created by its diffs, then the
