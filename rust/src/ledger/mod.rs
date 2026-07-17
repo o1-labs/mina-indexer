@@ -155,7 +155,14 @@ impl Ledger {
 
     /// Apply a ledger diff to a mutable ledger
     pub fn _apply_diff(&mut self, diff: &LedgerDiff) -> anyhow::Result<()> {
-        for acct_diff in diff.account_diffs.iter().flatten() {
+        // Credits first: an account's diffs are not in the order the protocol
+        // applied them, and an unsigned balance saturates at zero, so a debit
+        // arriving before the payment that funds it silently loses the
+        // difference. See [AccountDiff::is_debit].
+        let mut acct_diffs: Vec<&AccountDiff> = diff.account_diffs.iter().flatten().collect();
+        acct_diffs.sort_by_key(|acct_diff| acct_diff.is_debit());
+
+        for acct_diff in acct_diffs {
             self._apply_account_diff(acct_diff, &diff.state_hash)?;
         }
 

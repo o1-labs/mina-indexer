@@ -16,3 +16,5 @@ mod token_ledger;
 mod zkapp_best_ledger_accounts;
 #[cfg(test)]
 mod zkapp_currency_encoding;
+#[cfg(test)]
+mod debit_before_credit;
