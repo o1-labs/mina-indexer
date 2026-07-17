@@ -96,7 +96,6 @@ pub trait StagedLedgerStore {
         token: &TokenAddress,
         state_hash: &StateHash,
         block_height: u32,
-        balance: u64,
     ) -> Result<()>;
 
     // Get pk's minimum staged ledger account state hash & block height
