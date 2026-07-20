@@ -581,7 +581,7 @@ mod tests {
                     nonce: None,
                     public_key: "B62qn4SxXSBZuCUCKH3ZqgP32eab9bKNrEXkjoczEnerihQrSNnxoc5".into(),
                     payment_diffs: vec![ZkappPaymentDiff::Payment {
-                        creation_fee_paid: false,
+                        creation_fee_paid: true,
                         payment: PaymentDiff {
                             public_key: "B62qn4SxXSBZuCUCKH3ZqgP32eab9bKNrEXkjoczEnerihQrSNnxoc5"
                                 .into(),
@@ -593,13 +593,14 @@ mod tests {
                     ],
                     txn_hash: TxnHash::new("5JupzBGPDgf3bmLT34EF1uWDDUQNcsgEx8jxNFLRC64da1WkeFaP")?,
                     global_slot,
+                    creation_fee_paid: true,
                     ..Default::default()
                 })),
                 Zkapp(Box::new(ZkappDiff {
                     nonce: None,
                     public_key: "B62qn4SxXSBZuCUCKH3ZqgP32eab9bKNrEXkjoczEnerihQrSNnxoc5".into(),
                     payment_diffs: vec![ZkappPaymentDiff::Payment {
-                        creation_fee_paid: false,
+                        creation_fee_paid: true,
                         payment: PaymentDiff {
                             public_key: "B62qn4SxXSBZuCUCKH3ZqgP32eab9bKNrEXkjoczEnerihQrSNnxoc5"
                                 .into(),
@@ -611,6 +612,7 @@ mod tests {
                     ],
                     txn_hash: TxnHash::new("5JupzBGPDgf3bmLT34EF1uWDDUQNcsgEx8jxNFLRC64da1WkeFaP")?,
                     global_slot,
+                    creation_fee_paid: true,
                     ..Default::default()
                 })),
             ],
@@ -624,7 +626,7 @@ mod tests {
                     nonce: None,
                     public_key: "B62qn4SxXSBZuCUCKH3ZqgP32eab9bKNrEXkjoczEnerihQrSNnxoc5".into(),
                     payment_diffs: vec![ZkappPaymentDiff::Payment {
-                        creation_fee_paid: false,
+                        creation_fee_paid: true,
                         payment: PaymentDiff {
                             public_key: "B62qn4SxXSBZuCUCKH3ZqgP32eab9bKNrEXkjoczEnerihQrSNnxoc5"
                                 .into(),
@@ -636,13 +638,14 @@ mod tests {
                     ],
                     global_slot,
                     txn_hash: TxnHash::new("5JtwZTciHh2vrkNUxAt9UexutRURsXVs4N6ifXQrUq3psVcb1WAR")?,
+                    creation_fee_paid: true,
                     ..Default::default()
                 })),
                 Zkapp(Box::new(ZkappDiff {
                     nonce: None,
                     public_key: "B62qn4SxXSBZuCUCKH3ZqgP32eab9bKNrEXkjoczEnerihQrSNnxoc5".into(),
                     payment_diffs: vec![ZkappPaymentDiff::Payment {
-                        creation_fee_paid: false,
+                        creation_fee_paid: true,
                         payment: PaymentDiff {
                             public_key: "B62qn4SxXSBZuCUCKH3ZqgP32eab9bKNrEXkjoczEnerihQrSNnxoc5"
                                 .into(),
@@ -654,6 +657,7 @@ mod tests {
                     ],
                     global_slot,
                     txn_hash: TxnHash::new("5JtwZTciHh2vrkNUxAt9UexutRURsXVs4N6ifXQrUq3psVcb1WAR")?,
+                    creation_fee_paid: true,
                     ..Default::default()
                 })),
             ],
@@ -667,7 +671,7 @@ mod tests {
                     nonce: None,
                     public_key: "B62qn4SxXSBZuCUCKH3ZqgP32eab9bKNrEXkjoczEnerihQrSNnxoc5".into(),
                     payment_diffs: vec![ZkappPaymentDiff::Payment {
-                        creation_fee_paid: false,
+                        creation_fee_paid: true,
                         payment: PaymentDiff {
                             public_key: "B62qn4SxXSBZuCUCKH3ZqgP32eab9bKNrEXkjoczEnerihQrSNnxoc5"
                                 .into(),
@@ -679,13 +683,14 @@ mod tests {
                     ],
                     txn_hash: TxnHash::new("5JtW512WGcQTUMn9gUX2Nq7WL2DjbeQswWt6EY6SkqeiGacbawQG")?,
                     global_slot,
+                    creation_fee_paid: true,
                     ..Default::default()
                 })),
                 Zkapp(Box::new(ZkappDiff {
                     nonce: None,
                     public_key: "B62qn4SxXSBZuCUCKH3ZqgP32eab9bKNrEXkjoczEnerihQrSNnxoc5".into(),
                     payment_diffs: vec![ZkappPaymentDiff::Payment {
-                        creation_fee_paid: false,
+                        creation_fee_paid: true,
                         payment: PaymentDiff {
                             public_key: "B62qn4SxXSBZuCUCKH3ZqgP32eab9bKNrEXkjoczEnerihQrSNnxoc5"
                                 .into(),
@@ -697,6 +702,7 @@ mod tests {
                     ],
                     txn_hash: TxnHash::new("5JtW512WGcQTUMn9gUX2Nq7WL2DjbeQswWt6EY6SkqeiGacbawQG")?,
                     global_slot,
+                    creation_fee_paid: true,
                     ..Default::default()
                 })),
             ],
@@ -714,11 +720,11 @@ mod tests {
                             public_key: "B62qkPg6P2We1SZhCq84ZvDKknrWy8P3Moi99Baz8KFpYsMoFJKHHqF"
                                 .into(),
                             token: TokenAddress::default(),
-                            creation_fee_paid: false,
+                            creation_fee_paid: true,
                             txn_hash: TxnHash::new("5JuTH1NmvdZCG5Ko5rT6PC8zLsJVo6rXjEvNU5whwEgbBuoK6Ltm")?,
                         }),
                         ZkappPaymentDiff::Payment {
-                            creation_fee_paid: false,
+                            creation_fee_paid: true,
                             payment: PaymentDiff {
                                 amount: 0.into(),
                                 update_type: UpdateType::Credit,
@@ -753,6 +759,7 @@ mod tests {
                     token_symbol: Some("MINU".into()),
                     increment_nonce: true,
                     global_slot,
+                    creation_fee_paid: true,
                     ..Default::default()
                 }))
             ],
@@ -774,7 +781,7 @@ mod tests {
                     txn_hash: TxnHash::new("5JupzBGPDgf3bmLT34EF1uWDDUQNcsgEx8jxNFLRC64da1WkeFaP")?,
                 }),
                 ZkappPayment(ZkappPaymentDiff::Payment {
-                    creation_fee_paid: false,
+                    creation_fee_paid: true,
                     payment: PaymentDiff {
                         public_key: "B62qn4SxXSBZuCUCKH3ZqgP32eab9bKNrEXkjoczEnerihQrSNnxoc5".into(),
                         update_type: UpdateType::Debit(None),
@@ -783,7 +790,7 @@ mod tests {
                         token: Some(TokenAddress::default()),
                     }}),
                 ZkappPayment(ZkappPaymentDiff::Payment {
-                    creation_fee_paid: false,
+                    creation_fee_paid: true,
                     payment: PaymentDiff {
                         public_key: "B62qn4SxXSBZuCUCKH3ZqgP32eab9bKNrEXkjoczEnerihQrSNnxoc5".into(),
                         update_type: UpdateType::Credit,
@@ -799,7 +806,7 @@ mod tests {
                     txn_hash: TxnHash::new("5JtwZTciHh2vrkNUxAt9UexutRURsXVs4N6ifXQrUq3psVcb1WAR")?,
                 }),
                 ZkappPayment(ZkappPaymentDiff::Payment {
-                    creation_fee_paid: false,
+                    creation_fee_paid: true,
                     payment: PaymentDiff {
                         public_key: "B62qn4SxXSBZuCUCKH3ZqgP32eab9bKNrEXkjoczEnerihQrSNnxoc5".into(),
                         update_type: UpdateType::Debit(None),
@@ -808,7 +815,7 @@ mod tests {
                         token: Some(TokenAddress::default()),
                     }}),
                 ZkappPayment(ZkappPaymentDiff::Payment {
-                    creation_fee_paid: false,
+                    creation_fee_paid: true,
                     payment: PaymentDiff {
                         public_key: "B62qn4SxXSBZuCUCKH3ZqgP32eab9bKNrEXkjoczEnerihQrSNnxoc5".into(),
                         update_type: UpdateType::Credit,
@@ -824,7 +831,7 @@ mod tests {
                     txn_hash: TxnHash::new("5JtW512WGcQTUMn9gUX2Nq7WL2DjbeQswWt6EY6SkqeiGacbawQG")?,
                 }),
                 ZkappPayment(ZkappPaymentDiff::Payment {
-                    creation_fee_paid: false,
+                    creation_fee_paid: true,
                     payment: PaymentDiff {
                         public_key: "B62qn4SxXSBZuCUCKH3ZqgP32eab9bKNrEXkjoczEnerihQrSNnxoc5".into(),
                         update_type: UpdateType::Debit(None),
@@ -833,7 +840,7 @@ mod tests {
                         token: Some(TokenAddress::default()),
                     }}),
                 ZkappPayment(ZkappPaymentDiff::Payment {
-                    creation_fee_paid: false,
+                    creation_fee_paid: true,
                     payment: PaymentDiff {
                         public_key: "B62qn4SxXSBZuCUCKH3ZqgP32eab9bKNrEXkjoczEnerihQrSNnxoc5".into(),
                         update_type: UpdateType::Credit,
@@ -851,11 +858,11 @@ mod tests {
                 ZkappIncrementNonce(ZkappIncrementNonceDiff {
                     public_key: "B62qkPg6P2We1SZhCq84ZvDKknrWy8P3Moi99Baz8KFpYsMoFJKHHqF".into(),
                     token: TokenAddress::default(),
-                    creation_fee_paid: false,
+                    creation_fee_paid: true,
                     txn_hash: TxnHash::new("5JuTH1NmvdZCG5Ko5rT6PC8zLsJVo6rXjEvNU5whwEgbBuoK6Ltm")?,
                 }),
                 ZkappPayment(ZkappPaymentDiff::Payment {
-                    creation_fee_paid: false,
+                    creation_fee_paid: true,
                     payment: PaymentDiff {
                         public_key: "B62qkPg6P2We1SZhCq84ZvDKknrWy8P3Moi99Baz8KFpYsMoFJKHHqF".into(),
                         update_type: UpdateType::Credit,
@@ -1327,7 +1334,7 @@ mod tests {
                         .ok(),
                     token: Some(TokenAddress::default()),
                 },
-                creation_fee_paid: false,
+                creation_fee_paid: true,
             }),
             ZkappState(ZkappStateDiff {
                 token: TokenAddress::default(),
@@ -1372,7 +1379,7 @@ mod tests {
                         .ok(),
                     token: Some(TokenAddress::default()),
                 },
-                creation_fee_paid: false,
+                creation_fee_paid: true,
             }),
             ZkappPayment(ZkappPaymentDiff::Payment {
                 payment: PaymentDiff {
@@ -1383,7 +1390,7 @@ mod tests {
                         .ok(),
                     token: Some(TokenAddress::default()),
                 },
-                creation_fee_paid: false,
+                creation_fee_paid: true,
             }),
         ];
 

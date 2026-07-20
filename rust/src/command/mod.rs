@@ -763,17 +763,6 @@ impl Command {
             Self::Zkapp(data) => data.fee_payer.body.nonce,
         }
     }
-
-    pub fn creation_fee_paid(&self) -> Option<bool> {
-        match self {
-            Self::Zkapp(data) => Some(
-                data.account_updates
-                    .iter()
-                    .any(|update| update.creation_fee_paid()),
-            ),
-            Self::Delegation(_) | Self::Payment(_) => None,
-        }
-    }
 }
 
 impl PaymentPayload {

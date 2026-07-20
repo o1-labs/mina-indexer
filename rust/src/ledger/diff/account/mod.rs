@@ -197,7 +197,6 @@ impl AccountDiff {
     pub fn from_command(command_with_meta: CommandWithMeta, global_slot: u32) -> Vec<Vec<Self>> {
         let txn_hash = command_with_meta.txn_hash.to_owned();
         let CommandWithMeta { command, .. } = command_with_meta;
-        let creation_fee_paid = command.creation_fee_paid().unwrap_or_default();
 
         match command {
             Command::Payment(payment) => {
@@ -226,9 +225,7 @@ impl AccountDiff {
                     txn_hash,
                 })]]
             }
-            Command::Zkapp(zkapp) => {
-                AccountDiff::from_zkapp(&zkapp, global_slot, creation_fee_paid, txn_hash)
-            }
+            Command::Zkapp(zkapp) => AccountDiff::from_zkapp(&zkapp, global_slot, txn_hash),
         }
     }
 
@@ -704,7 +701,6 @@ impl AccountDiff {
     fn from_zkapp(
         zkapp: &ZkappCommandData,
         global_slot: u32,
-        creation_fee_paid: bool,
         txn_hash: TxnHash,
     ) -> Vec<Vec<Self>> {
         let nonce = zkapp.fee_payer.body.nonce;
@@ -720,7 +716,6 @@ impl AccountDiff {
             diffs.push(Self::from_zkapp_account_update(
                 &update.elt,
                 global_slot,
-                creation_fee_paid,
                 txn_hash.to_owned(),
             ));
 
@@ -728,7 +723,6 @@ impl AccountDiff {
                 &mut diffs,
                 update.elt.calls.iter(),
                 global_slot,
-                creation_fee_paid,
                 txn_hash.to_owned(),
             );
         }
@@ -736,12 +730,7 @@ impl AccountDiff {
         vec![diffs]
     }
 
-    fn from_zkapp_account_update(
-        elt: &Elt,
-        global_slot: u32,
-        creation_fee_paid: bool,
-        txn_hash: TxnHash,
-    ) -> Self {
+    fn from_zkapp_account_update(elt: &Elt, global_slot: u32, txn_hash: TxnHash) -> Self {
         let public_key = elt.account_update.body.public_key.to_owned();
 
         let mut payment_diffs = vec![];
@@ -757,8 +746,13 @@ impl AccountDiff {
         // the two cancelled and the account never received its funds. The account need not
         // even be a new one: the flag rides on the update, not on account creation.
         //
-        // The creation fee is already accounted for by `creation_fee_paid` and the
-        // deduct-on-display convention, so nothing extra belongs here.
+        // When it is set, the balance change is gross of the creation fee, so the account
+        // still owes the deduct-on-display fee -- `creation_fee_paid = false`. When it is
+        // unset the fee is stated elsewhere and this balance is already net, so nothing is
+        // deducted again. This is per account update: the earlier command-wide
+        // `any(update.creation_fee_paid())` tarred every account in the command with the
+        // payer's flag, so a zkApp-created account read one MINA high.
+        let creation_fee_paid = !elt.account_update.body.implicit_account_creation_fee;
 
         // increment nonce of updated account
         let increment_nonce = elt.account_update.body.increment_nonce;
@@ -1059,14 +1053,12 @@ fn recurse_calls<'a>(
     diffs: &mut Vec<AccountDiff>,
     calls: impl Iterator<Item = &'a Call>,
     global_slot: u32,
-    creation_fee_paid: bool,
     txn_hash: TxnHash,
 ) {
     for call in calls {
         diffs.push(AccountDiff::from_zkapp_account_update(
             call.elt.as_ref(),
             global_slot,
-            creation_fee_paid,
             txn_hash.to_owned(),
         ));
 
@@ -1074,7 +1066,6 @@ fn recurse_calls<'a>(
             diffs,
             call.elt.calls.iter(),
             global_slot,
-            creation_fee_paid,
             txn_hash.to_owned(),
         );
     }
