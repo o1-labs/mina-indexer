@@ -141,7 +141,7 @@ impl DbAccountUpdate {
             ..
         } in apply.into_iter()
         {
-            let token_account_diffs = aggregate_token_account_diffs(account_diffs);
+            let token_account_diffs = aggregate_token_account_diffs(account_diffs, false);
             let mut diffed: HashSet<(PublicKey, TokenAddress)> = HashSet::new();
 
             // apply account diffs
@@ -324,7 +324,7 @@ impl DbAccountUpdate {
             ..
         } in unapply
         {
-            let token_account_diffs = aggregate_token_account_diffs(account_diffs);
+            let token_account_diffs = aggregate_token_account_diffs(account_diffs, true);
             let mut diffed: HashSet<(PublicKey, TokenAddress)> = HashSet::new();
 
             // The block-stated fields (receipt_chain_hash, voting_for, permissions) are
@@ -532,9 +532,22 @@ impl DbAccountUpdate {
 use super::{best::BestLedgerStore, staged::StagedLedgerStore};
 use std::collections::HashMap;
 
-/// Aggregate diffs per token account
+/// Aggregate diffs per token account.
+///
+/// `debits_first` sets the intra-account fold order. These diffs are not in the
+/// order the protocol applied them and an unsigned balance saturates at zero, so
+/// the order matters and is opposite for apply vs unapply:
+/// - **apply** adds credits before subtracting debits (`debits_first = false`),
+///   or a debit that a same-block payment funds underflows to zero (see PR #85).
+/// - **unapply** is the exact inverse: it must reverse the debits (adding them
+///   back) before reversing the credits (subtracting them) (`debits_first =
+///   true`). Subtracting a large credit first saturates at zero and permanently
+///   loses the balance above it -- the bug behind issue #86.
+///
+/// See [AccountDiff::is_debit].
 fn aggregate_token_account_diffs(
     account_diffs: Vec<AccountDiff>,
+    debits_first: bool,
 ) -> HashMap<(PublicKey, TokenAddress), Vec<AccountDiff>> {
     let mut token_account_diffs = <HashMap<(_, _), Vec<_>>>::with_capacity(account_diffs.len());
 
@@ -550,12 +563,9 @@ fn aggregate_token_account_diffs(
         }
     }
 
-    // Credits first: these are not in the order the protocol applied them, and
-    // an unsigned balance saturates at zero, so a debit arriving before the
-    // payment that funds it silently loses the difference.
-    // See [AccountDiff::is_debit].
+    // Stable sort keeps the relative order within the credit and debit groups.
     for diffs in token_account_diffs.values_mut() {
-        diffs.sort_by_key(|diff| diff.is_debit());
+        diffs.sort_by_key(|diff| diff.is_debit() != debits_first);
     }
 
     token_account_diffs
@@ -577,4 +587,71 @@ fn aggregate_token_diffs(token_diffs: Vec<TokenDiff>) -> HashMap<TokenAddress, V
     }
 
     acc
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        base::amount::Amount,
+        ledger::diff::account::{PaymentDiff, UpdateType},
+    };
+
+    fn pk() -> PublicKey {
+        "B62qrVDERNv1cj1KiPe82ErRkbcS6Cc3sUobVU6KdfbMeXQFyHPGUq8".into()
+    }
+
+    fn mina_payment(update_type: UpdateType, amount: u64) -> AccountDiff {
+        AccountDiff::Payment(PaymentDiff {
+            amount: Amount(amount),
+            update_type,
+            public_key: pk(),
+            token: None,
+            txn_hash: None,
+        })
+    }
+
+    /// Regression for issue #86.
+    ///
+    /// An account's diffs are folded into an unsigned balance that saturates at
+    /// zero, so the fold order must be opposite for apply and unapply. Apply adds
+    /// the credit before subtracting the debits; unapply is the exact inverse and
+    /// must add the debits back before subtracting the credit. Sharing apply's
+    /// credits-first order on unapply subtracted a large credit first, underflowed
+    /// to zero, and permanently lost the balance above it (the +61.1 MINA bug).
+    #[test]
+    fn unapply_orders_debits_before_credits() {
+        // the 531095 shape: one large incoming credit and two smaller debits
+        let diffs = vec![
+            mina_payment(UpdateType::Debit(None), 1_000_000_000),
+            mina_payment(UpdateType::Credit, 5_000_000_000_000),
+            mina_payment(UpdateType::Debit(None), 100_000_000_000),
+        ];
+        let key = (pk(), TokenAddress::default());
+
+        // apply: credits first, so a same-block payment funds its debits
+        let apply = aggregate_token_account_diffs(diffs.clone(), false);
+        let ordered = &apply[&key];
+        assert!(
+            !ordered.first().unwrap().is_debit(),
+            "apply must fold the credit first"
+        );
+        assert!(
+            ordered.last().unwrap().is_debit(),
+            "apply must fold the debits last"
+        );
+
+        // unapply: debits first, so reversing the credit (a subtraction) never
+        // underflows past the debits it is paired with
+        let unapply = aggregate_token_account_diffs(diffs, true);
+        let ordered = &unapply[&key];
+        assert!(
+            ordered.first().unwrap().is_debit(),
+            "unapply must fold the debits first"
+        );
+        assert!(
+            !ordered.last().unwrap().is_debit(),
+            "unapply must fold the credit last"
+        );
+    }
 }
