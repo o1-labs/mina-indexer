@@ -88,3 +88,30 @@ jobs:
         run: |
           export GIT_COMMIT_HASH="$(git rev-parse --short=8 HEAD || echo unknown)"
           nix develop --command rake test_e2e
+
+  # Non-blocking test-coverage report (#19 WS1). Measures source-based coverage
+  # with cargo-llvm-cov over nextest and uploads lcov to Codecov. Deliberately
+  # not a gate: it reports a number + per-PR delta so gaps are visible, without
+  # blocking on a flaky delta. `continue-on-error` keeps a coverage/upload hiccup
+  # from failing the PR. Revisit a floor once the baseline is known.
+  coverage:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+      - name: Nix build cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Measure coverage
+        run: |
+          export GIT_COMMIT_HASH="$(git rev-parse --short=8 HEAD || echo unknown)"
+          nix develop --command rake coverage
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: rust/target/llvm-cov/lcov.info
+          fail_ci_if_error: false

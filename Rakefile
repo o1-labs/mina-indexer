@@ -235,6 +235,20 @@ task check: CARGO_DEPS do
   cargo_output("check")
 end
 
+# Measure test coverage with cargo-llvm-cov (source-based, over the project's
+# nextest runner). Prints a per-crate summary and writes lcov to
+# rust/target/llvm-cov/lcov.info for CI upload (Codecov/Coveralls). Non-blocking:
+# a reporting tool, not a gate -- there is no coverage floor yet (see #19 WS1).
+desc "Measure test coverage (cargo-llvm-cov + nextest)"
+task coverage: CARGO_DEPS do
+  puts "--- Measuring coverage (llvm-cov over nextest)"
+  # Run instrumented tests once, then render both a summary and lcov from it.
+  cargo_output("llvm-cov nextest --no-report")
+  cargo_output("llvm-cov report --summary-only")
+  cargo_output("llvm-cov report --lcov --output-path target/llvm-cov/lcov.info")
+  puts "--- lcov written to rust/target/llvm-cov/lcov.info"
+end
+
 # Build tasks
 namespace :build do
   desc "Perform a Nix build"
