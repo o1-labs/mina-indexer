@@ -89,11 +89,14 @@ jobs:
           export GIT_COMMIT_HASH="$(git rev-parse --short=8 HEAD || echo unknown)"
           nix develop --command rake test_e2e
 
-  # Non-blocking test-coverage report (#19 WS1). Measures source-based coverage
-  # with cargo-llvm-cov over nextest and uploads lcov to Codecov. Deliberately
-  # not a gate: it reports a number + per-PR delta so gaps are visible, without
-  # blocking on a flaky delta. `continue-on-error` keeps a coverage/upload hiccup
-  # from failing the PR. Revisit a floor once the baseline is known.
+  # Non-blocking unit-test coverage report (#19 WS1). Measures source-based
+  # coverage of the crate's unit tests (`rake coverage` = cargo-llvm-cov --lib)
+  # and uploads lcov to Codecov. Scoped to --lib so it stays a fast per-PR job;
+  # the heavy integration tests are ~10-50x slower under instrumentation, so they
+  # are left to the regular `test` job (uninstrumented). Deliberately not a gate:
+  # it reports a number + per-PR delta so gaps are visible, without blocking on a
+  # flaky delta. `continue-on-error` keeps a coverage/upload hiccup from failing
+  # the PR. Revisit a floor once the baseline is known.
   coverage:
     runs-on: ubuntu-latest
     continue-on-error: true

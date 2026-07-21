@@ -235,15 +235,19 @@ task check: CARGO_DEPS do
   cargo_output("check")
 end
 
-# Measure test coverage with cargo-llvm-cov (source-based, over the project's
-# nextest runner). Prints a per-crate summary and writes lcov to
-# rust/target/llvm-cov/lcov.info for CI upload (Codecov/Coveralls). Non-blocking:
-# a reporting tool, not a gate -- there is no coverage floor yet (see #19 WS1).
-desc "Measure test coverage (cargo-llvm-cov + nextest)"
+# Measure test coverage with cargo-llvm-cov (source-based). Scoped to the crate's
+# UNIT tests (`--lib`): those instrument and run fast (~minutes), giving a stable
+# per-PR number + delta. The heavy integration tests under rust/tests/** are
+# excluded on purpose -- under coverage instrumentation they run ~10-50x slower
+# (single tests exceed 4 minutes), which would make a per-PR job impractical;
+# they still run uninstrumented in the regular `test` job. Prints a per-crate
+# summary and writes lcov to rust/target/llvm-cov/lcov.info for CI upload.
+# Non-blocking: a reporting tool, not a gate -- no coverage floor yet (#19 WS1).
+desc "Measure unit-test coverage (cargo-llvm-cov, --lib)"
 task coverage: CARGO_DEPS do
-  puts "--- Measuring coverage (llvm-cov over nextest)"
-  # Run instrumented tests once, then render both a summary and lcov from it.
-  cargo_output("llvm-cov nextest --no-report")
+  puts "--- Measuring unit-test coverage (llvm-cov --lib)"
+  # Run instrumented lib tests once, then render both a summary and lcov from it.
+  cargo_output("llvm-cov --lib --no-report")
   cargo_output("llvm-cov report --summary-only")
   cargo_output("llvm-cov report --lcov --output-path target/llvm-cov/lcov.info")
   puts "--- lcov written to rust/target/llvm-cov/lcov.info"
