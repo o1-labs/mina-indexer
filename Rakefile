@@ -377,12 +377,14 @@ end
 # nothing external needed) and asserts every account balance matches the
 # accounts_accessed oracle. This is the check that found the bugs fixed in
 # #87/#88/#90, run as a repeatable gate.
-desc "Run the end-to-end ledger fidelity gate"
+desc "Run the end-to-end gates (ledger fidelity + trustless verify-block)"
 task test_e2e: "build:release" do
   puts "--- Checking for prereqs"
   run("python3 --version")
   puts "--- Running e2e ledger fidelity gate"
   run("#{TOP}/tests/e2e/fidelity.sh")
+  puts "--- Running trustless verify-block gate (negative paths)"
+  run("#{TOP}/tests/e2e/verify-gate.sh")
 end
 
 desc "Run the CI tests"
