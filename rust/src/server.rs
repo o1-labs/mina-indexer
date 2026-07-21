@@ -135,6 +135,7 @@ impl IndexerConfiguration {
             version,
             do_not_ingest_orphan_blocks,
             check_mode,
+            verify_block_exe,
             ..
         } = self;
 
@@ -198,6 +199,16 @@ impl IndexerConfiguration {
             {
                 panic!("Failed to ingest staking ledger {staking_ledgers_dir:#?}: {e}");
             }
+        }
+
+        // Trustless gate on startup. Blocks already sitting in `blocks_dir` at boot
+        // are bulk-loaded by the parser below, which does NOT go through the
+        // live-ingest verify path (`process_event` / `reconcile_blocks_dir`). So an
+        // untrusted block placed in the dir before startup would be ingested
+        // unverified. Verify them here first and quarantine any that fail, so the
+        // parser only ever sees verified blocks -- fail-closed, like the live path.
+        if let (Some(exe), Some(blocks_dir)) = (verify_block_exe.as_ref(), blocks_dir.as_ref()) {
+            verify_blocks_dir_or_quarantine(exe, &version.network, blocks_dir).await;
         }
 
         // build witness tree & ingest precomputed blocks
@@ -939,6 +950,71 @@ async fn verify_block(exe: &Path, network: &Network, path: &Path) -> bool {
             error!("verify-block-exe failed to run ({exe:#?}): {e}");
             false
         }
+    }
+}
+
+/// Verify every block file in `blocks_dir` before the startup bulk-load, moving
+/// any that fail into a `.rejected/` quarantine subdir so the parser never
+/// ingests them. Fail-closed: a block whose proof does not verify (or that the
+/// verifier cannot run against) is quarantined, not ingested. The subdir is not
+/// matched by the parser's `*-*-*.json` glob, so quarantined blocks stay out of
+/// every later scan while remaining on disk for audit.
+async fn verify_blocks_dir_or_quarantine(exe: &Path, network: &Network, blocks_dir: &Path) {
+    let paths: Vec<PathBuf> = match std::fs::read_dir(blocks_dir) {
+        Ok(rd) => rd
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| block::is_valid_block_file(p))
+            .collect(),
+        Err(e) => {
+            error!("startup verify: cannot read {blocks_dir:#?}: {e}");
+            return;
+        }
+    };
+
+    if paths.is_empty() {
+        return;
+    }
+
+    info!(
+        "Trustless startup gate: verifying {} block(s) in {:#?}",
+        paths.len(),
+        blocks_dir
+    );
+
+    let quarantine = blocks_dir.join(".rejected");
+    let mut rejected = 0u32;
+
+    for path in paths {
+        if verify_block(exe, network, &path).await {
+            continue;
+        }
+
+        if let Err(e) = fs::create_dir_all(&quarantine) {
+            error!("startup verify: cannot create quarantine dir {quarantine:#?}: {e}");
+            // Fail closed: if we cannot quarantine, do not leave the block to be
+            // ingested unverified.
+            process::exit(1);
+        }
+
+        let dest = path
+            .file_name()
+            .map(|n| quarantine.join(n))
+            .unwrap_or_else(|| quarantine.join("unnamed-rejected-block"));
+
+        match fs::rename(&path, &dest) {
+            Ok(()) => {
+                rejected += 1;
+                warn!("Quarantined unverified block {path:#?} -> {dest:#?}");
+            }
+            Err(e) => {
+                error!("startup verify: cannot quarantine {path:#?}: {e}");
+                process::exit(1);
+            }
+        }
+    }
+
+    if rejected > 0 {
+        warn!("Trustless startup gate: quarantined {rejected} unverified block(s)");
     }
 }
 
