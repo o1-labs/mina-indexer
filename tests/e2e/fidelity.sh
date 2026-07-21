@@ -10,6 +10,11 @@
 # This is the correctness check that found the ledger bugs fixed in #87/#88/#90,
 # run as a self-contained CI gate. Exits non-zero on any balance mismatch.
 #
+# The block slice is vendored (record-and-replay) rather than fetched, for a
+# hermetic/deterministic/offline test. See rust/tests/data/mainnet-e2e/README.md
+# for what those files are, why that height range, and how to regenerate them --
+# and note that SLICE_TOP below is coupled to the vendored range.
+#
 # Usage:  tests/e2e/fidelity.sh [path-to-mina-indexer-binary]
 set -euo pipefail
 
@@ -21,8 +26,10 @@ BLOCKS="$TOP/rust/tests/data/mainnet-e2e"
 GENESIS_HASH=3NK4BpDSekaqsG6tx8Nse2zJchRft2JpnbvMiog55WCr5xJZaKeP
 PORT="${E2E_WEB_PORT:-8091}"
 GQL="http://localhost:${PORT}/graphql"
-# Slice top and the settled height to check. The indexer is idle once ingest
-# finishes, so a small margin is safe (no moving-tip settling in a static test).
+# SLICE_TOP is the top height of the vendored slice (keep in sync with the files
+# in $BLOCKS). MARGIN backs off from the tip to a settled height for the check;
+# the indexer is idle once ingest finishes, so a small margin is safe (no
+# moving-tip settling in this static test).
 SLICE_TOP=359624
 MARGIN=8
 
