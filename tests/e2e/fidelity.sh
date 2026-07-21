@@ -38,15 +38,22 @@ MARGIN=8
 WORK="$(mktemp -d)"
 SOCK="$WORK/s"   # keep the socket path short (SUN_LEN limit)
 LOG="$WORK/indexer.log"
+DATA="$WORK/blocks"
 cleanup() { [ -n "${PID:-}" ] && kill "$PID" 2>/dev/null || true; rm -rf "$WORK"; }
 trap cleanup EXIT
 
-echo "--- booting indexer against $(ls "$BLOCKS" | wc -l) vendored blocks"
+# The block slice is vendored as a single tarball (repo hygiene). The indexer's
+# block ingest globs `*-*-*.json`, so extract it into a temp dir first; the
+# fidelity check then runs against that same dir.
+mkdir -p "$DATA"
+tar xzf "$BLOCKS/blocks.tar.gz" -C "$DATA"
+
+echo "--- booting indexer against $(ls "$DATA" | wc -l) vendored blocks"
 ulimit -n 4096 || true
 RUST_LOG=warn GIT_COMMIT_HASH="${GIT_COMMIT_HASH:-e2e}" "$BIN" \
   --socket "$SOCK" server start \
   --network mainnet --genesis-hash "$GENESIS_HASH" \
-  --database-dir "$WORK/db" --blocks-dir "$BLOCKS" --web-port "$PORT" \
+  --database-dir "$WORK/db" --blocks-dir "$DATA" --web-port "$PORT" \
   >"$LOG" 2>&1 &
 PID=$!
 
@@ -68,4 +75,4 @@ h="$(tip_height)"
 
 echo "--- checking ledger fidelity vs accounts_accessed oracle"
 python3 "$TOP/ops/fidelity-check.py" \
-  --blocks-dir "$BLOCKS" --network mainnet --margin "$MARGIN" --gql "$GQL"
+  --blocks-dir "$DATA" --network mainnet --margin "$MARGIN" --gql "$GQL"
