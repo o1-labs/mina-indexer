@@ -613,11 +613,10 @@ impl StagedLedgerStore for IndexerStore {
     fn get_block_staged_ledger_hash(&self, state_hash: &StateHash) -> Result<Option<LedgerHash>> {
         trace!("Getting block staged ledger hash {}", state_hash);
 
-        Ok(self
-            .database
+        self.database
             .get_cf(self.block_staged_ledger_hash_cf(), state_hash.0.as_bytes())?
             .map(LedgerHash::from_bytes)
-            .transpose()?)
+            .transpose()
     }
 
     fn get_staged_ledger_block_state_hash(
