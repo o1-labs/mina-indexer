@@ -246,6 +246,9 @@ end
 desc "Measure unit-test coverage (cargo-llvm-cov, --lib)"
 task coverage: CARGO_DEPS do
   puts "--- Measuring unit-test coverage (llvm-cov --lib)"
+  # cargo-llvm-cov does not create the --output-path parent dir; make it first
+  # (fresh CI checkouts have no target/llvm-cov/).
+  FileUtils.mkdir_p("#{TOP}/rust/target/llvm-cov")
   # Run instrumented lib tests once, then render both a summary and lcov from it.
   cargo_output("llvm-cov --lib --no-report")
   cargo_output("llvm-cov report --summary-only")
