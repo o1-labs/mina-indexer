@@ -356,6 +356,22 @@ task test_security: "build:release" do
   run("#{REGRESSION_TEST} release security")
 end
 
+# End-to-end ledger fidelity check (issue #19, WS2): asserts the indexer's
+# stagedLedgerAccounts balances match the accounts_accessed oracle in the
+# precomputed blocks it ingested. Needs a running indexer + its blocks dir.
+#   rake 'fidelity[data/mainnet-blocks]'
+#   rake 'fidelity[data/blocks,devnet,40,http://localhost:8080/graphql]'
+desc "Ledger fidelity check vs a running indexer. " \
+     "Args: blocks_dir[,network=mainnet][,margin=40][,gql=http://localhost:8080/graphql]"
+task :fidelity, [:blocks_dir, :network, :margin, :gql] do |_, args|
+  blocks_dir = args[:blocks_dir] || abort("usage: rake 'fidelity[BLOCKS_DIR[,NETWORK,MARGIN,GQL]]'")
+  cmd = ["python3 #{TOP}/ops/fidelity-check.py", "--blocks-dir #{blocks_dir}"]
+  cmd << "--network #{args[:network]}" if args[:network]
+  cmd << "--margin #{args[:margin]}" if args[:margin]
+  cmd << "--gql #{args[:gql]}" if args[:gql]
+  run(cmd.join(" "))
+end
+
 desc "Run the CI tests"
 task ci: [:test, :test_system]
 
