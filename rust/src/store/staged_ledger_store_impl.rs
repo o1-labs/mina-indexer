@@ -22,7 +22,7 @@ use crate::{
         split_staged_account_balance_sort_key, staged_account_balance_sort_key, staged_account_key,
     },
 };
-use anyhow::{bail, Context};
+use anyhow::bail;
 use log::{error, trace};
 use speedb::{DBIterator, Direction, IteratorMode, WriteBatch};
 
@@ -35,19 +35,23 @@ impl StagedLedgerStore for IndexerStore {
     ) -> Result<Option<Account>> {
         trace!("Getting {} staged ledger {} account", pk, state_hash);
 
-        // check if the account is in a sufficiently low staged ledger
-        match self.get_pk_min_staged_ledger_block(pk)? {
-            Some(pk_min_block) => {
-                if let Some(block_height) = self.get_block_height(state_hash)? {
-                    if pk_min_block.blockchain_length > block_height {
-                        return Ok(None);
-                    }
-                }
-            }
-            None => return Ok(None),
+        // Fast path: an account with no stored staged copy anywhere AND absent from
+        // the best ledger has never existed -- skip the walk.
+        //
+        // We must NOT give up merely because the pk's first stored staged copy is
+        // above the query height (or absent). An account created after genesis and
+        // below the first cadence snapshot has no stored staged copy yet but still
+        // exists, and the reconstruction below builds it from block diffs. Querying
+        // below its creation height returns `None` naturally: no diff on the walked
+        // range creates it. (Issue #89.)
+        if self.get_pk_min_staged_ledger_block(pk)?.is_none()
+            && self.get_best_account(pk, token)?.is_none()
+        {
+            return Ok(None);
         }
 
-        // calculate account from canonical ancestor if needed
+        // Reconstruct the account from the nearest stored staged copy on the
+        // canonical ancestry, applying each intervening block's diff forward.
         let mut apply_block_diffs = vec![];
         let mut curr_state_hash = state_hash.clone();
 
@@ -59,34 +63,44 @@ impl StagedLedgerStore for IndexerStore {
             )?
             .is_none()
         {
-            if let Some(parent_hash) = self.get_block_parent_hash(&curr_state_hash)? {
-                apply_block_diffs.push(curr_state_hash.clone());
-                curr_state_hash = parent_hash;
-            } else {
-                bail!("Block {} missing parent from store", curr_state_hash)
+            match self.get_block_parent_hash(&curr_state_hash)? {
+                Some(parent_hash) => {
+                    apply_block_diffs.push(curr_state_hash.clone());
+                    curr_state_hash = parent_hash;
+                }
+                // No parent in the store. If we have reached the genesis base, the
+                // account is not among the genesis accounts, so it was created after
+                // genesis by one of the diffs collected above -- reconstruct it from
+                // an empty base. (The genesis staged ledger is keyed under the
+                // genesis *prev* state hash, which the walk reaches as the genesis
+                // block's parent; a genesis account is found there and never reaches
+                // this arm.) Any other missing parent is a genuinely broken chain.
+                None if is_genesis_prev_state_hash(&curr_state_hash) => break,
+                None => bail!("Block {} missing parent from store", curr_state_hash),
             }
         }
 
         apply_block_diffs.reverse();
 
-        let mut staged_account = self
-            .database
-            .get_cf(
-                self.staged_ledger_accounts_cf(),
-                staged_account_key(&curr_state_hash, token, pk),
-            )?
-            .map(|bytes| serde_json::from_slice::<Account>(&bytes).expect("staged account"))
-            .with_context(|| format!("pk {} state hash {}", pk, curr_state_hash))
-            .expect("account exists");
+        // Base: the stored staged account we stopped on, or `None` when we broke at
+        // the genesis base for a post-genesis account (created by a diff below).
+        // A corrupt stored account or a store error fails the query closed (a
+        // GraphQL/HTTP error) rather than panicking the worker.
+        let mut staged_account = match self.database.get_cf(
+            self.staged_ledger_accounts_cf(),
+            staged_account_key(&curr_state_hash, token, pk),
+        )? {
+            Some(bytes) => Some(serde_json::from_slice::<Account>(&bytes)?),
+            None => None,
+        };
 
-        for diff in apply_block_diffs
-            .iter()
-            .flat_map(|state_hash| self.get_block_ledger_diff(state_hash).expect("ledger diff"))
-        {
-            staged_account = staged_account.apply_ledger_diff(&diff);
+        for state_hash in &apply_block_diffs {
+            if let Some(diff) = self.get_block_ledger_diff(state_hash)? {
+                staged_account = Account::reconstruct_step(staged_account, pk, token, &diff);
+            }
         }
 
-        Ok(Some(staged_account))
+        Ok(staged_account)
     }
 
     fn get_staged_account_display(
@@ -233,10 +247,13 @@ impl StagedLedgerStore for IndexerStore {
     ) -> Result<Option<StateHashWithHeight>> {
         trace!("Getting pk min staged ledger block height {}", pk);
 
-        Ok(self
+        match self
             .database
             .get_cf(self.staged_ledger_accounts_min_block_cf(), pk.0.as_bytes())?
-            .map(|bytes| serde_json::from_slice(&bytes).expect("min staged block")))
+        {
+            Some(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
+            None => Ok(None),
+        }
     }
 
     fn set_pk_min_staged_ledger_block(
@@ -523,7 +540,8 @@ impl StagedLedgerStore for IndexerStore {
         if let Some(state_hash) = self
             .database
             .get_cf(self.staged_ledger_hash_to_block_cf(), key)?
-            .map(|bytes| StateHash::from_bytes(&bytes).expect("state hash"))
+            .map(|bytes| StateHash::from_bytes(&bytes))
+            .transpose()?
         {
             if let Some(ledger) = self.get_staged_ledger_at_state_hash(&state_hash, memoize)? {
                 return Ok(Some(ledger));
@@ -595,10 +613,10 @@ impl StagedLedgerStore for IndexerStore {
     fn get_block_staged_ledger_hash(&self, state_hash: &StateHash) -> Result<Option<LedgerHash>> {
         trace!("Getting block staged ledger hash {}", state_hash);
 
-        Ok(self
-            .database
+        self.database
             .get_cf(self.block_staged_ledger_hash_cf(), state_hash.0.as_bytes())?
-            .map(|bytes| LedgerHash::from_bytes(bytes).expect("ledger hash")))
+            .map(LedgerHash::from_bytes)
+            .transpose()
     }
 
     fn get_staged_ledger_block_state_hash(
@@ -631,10 +649,10 @@ impl StagedLedgerStore for IndexerStore {
                     break;
                 }
 
-                let account = serde_json::from_slice(&value).expect("account serde bytes");
+                let account = serde_json::from_slice(&value)?;
                 ledger.insert_account(account, &token);
             } else {
-                panic!("Invalid staged ledger account balance sort key");
+                bail!("Invalid staged ledger account balance sort key");
             }
         }
 
