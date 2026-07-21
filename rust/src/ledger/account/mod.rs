@@ -655,6 +655,54 @@ impl Account {
         acct
     }
 
+    /// Advance one `(pk, token)` account across a single block diff during
+    /// point-in-time reconstruction, **creating** it if this block is where it
+    /// first appears (`base == None`).
+    ///
+    /// This is the per-account mirror of [`Ledger::_apply_diff`]: it takes only
+    /// this account's diffs, folds credits before debits (an unsigned balance
+    /// saturates at zero, so a debit ahead of the payment that funds it would
+    /// lose the difference), and on creation uses the creating diff's
+    /// `creation_fee_paid` -- exactly as [`Ledger::_apply_account_diff`] does with
+    /// `Account::empty`. Returns `base` unchanged when the block does not touch
+    /// the account, and `None` only when the account does not yet exist and this
+    /// block does not create it.
+    pub fn reconstruct_step(
+        base: Option<Account>,
+        pk: &PublicKey,
+        token: &TokenAddress,
+        diff: &LedgerDiff,
+    ) -> Option<Account> {
+        // Match on (public key, token), not the public key alone. A public key can
+        // hold accounts on many tokens, each with its own diffs; applying another
+        // token's diff to this account corrupts its balance and trips the token
+        // check. This reconstructs one account, so it must take only its own diffs.
+        let mut acct_diffs: Vec<&AccountDiff> = diff
+            .account_diffs
+            .iter()
+            .flatten()
+            .filter(|acct_diff| acct_diff.public_key() == *pk && acct_diff.token() == *token)
+            .collect();
+
+        if acct_diffs.is_empty() {
+            return base;
+        }
+
+        acct_diffs.sort_by_key(|acct_diff| acct_diff.is_debit());
+
+        let mut acct = base.unwrap_or_else(|| {
+            // Created here: the first (credits-first) diff creates the account with
+            // its own fee flag, as `Ledger::_apply_account_diff` does.
+            Account::empty(pk.clone(), token.clone(), acct_diffs[0].creation_fee_paid())
+        });
+
+        for acct_diff in acct_diffs {
+            acct = acct.apply_account_diff(acct_diff, &diff.state_hash);
+        }
+
+        Some(acct)
+    }
+
     /// Checks application to the expected token account
     fn checks(&self, pk: &PublicKey, token: &TokenAddress, state_hash: &StateHash) {
         self.check_pk(pk, state_hash);
@@ -1345,5 +1393,59 @@ mod tests {
                 ..before
             }
         );
+    }
+
+    /// Regression for issue #89: point-in-time reconstruction must be able to
+    /// *create* a post-genesis account from an empty base, not require it to
+    /// already exist in the base staged ledger.
+    #[test]
+    fn reconstruct_step_creates_post_genesis_account() {
+        use crate::ledger::diff::{account::AccountDiff, LedgerDiff};
+
+        let pk = PublicKey::from("B62qn4SxXSBZuCUCKH3ZqgP32eab9bKNrEXkjoczEnerihQrSNnxoc5");
+        let token = TokenAddress::default();
+
+        let credit = AccountDiff::Payment(PaymentDiff {
+            amount: Amount(3_000_000_000),
+            update_type: UpdateType::Credit,
+            public_key: pk.clone(),
+            token: None,
+            txn_hash: None,
+        });
+        let diff = LedgerDiff {
+            account_diffs: vec![vec![credit]],
+            ..Default::default()
+        };
+
+        // No base account: the block creates it (mirrors Ledger::_apply_account_diff).
+        let created = Account::reconstruct_step(None, &pk, &token, &diff)
+            .expect("block creates the account");
+        assert_eq!(created.public_key, pk);
+        assert_eq!(created.balance, Amount(3_000_000_000));
+
+        // A later block advances the existing account.
+        let debit = AccountDiff::Payment(PaymentDiff {
+            amount: Amount(1_000_000_000),
+            update_type: UpdateType::Debit(None),
+            public_key: pk.clone(),
+            token: None,
+            txn_hash: None,
+        });
+        let diff2 = LedgerDiff {
+            account_diffs: vec![vec![debit]],
+            ..Default::default()
+        };
+        let advanced = Account::reconstruct_step(Some(created.clone()), &pk, &token, &diff2)
+            .expect("account still exists");
+        assert_eq!(advanced.balance, Amount(2_000_000_000));
+
+        // A block that does not touch the account leaves the base unchanged, and
+        // an absent account with no creating diff stays absent.
+        let empty = LedgerDiff::default();
+        assert_eq!(
+            Account::reconstruct_step(Some(created.clone()), &pk, &token, &empty),
+            Some(created)
+        );
+        assert_eq!(Account::reconstruct_step(None, &pk, &token, &empty), None);
     }
 }
