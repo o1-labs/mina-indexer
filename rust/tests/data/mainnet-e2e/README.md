@@ -1,10 +1,15 @@
 # mainnet-e2e — vendored block fixtures for the e2e fidelity gate
 
-These 57 `.json` files are **real mainnet precomputed blocks** (the JSON blocks a
-Mina daemon logs) for heights **359605–359624**, the first 20 heights after the
+`blocks.tar.gz` bundles 57 **real mainnet precomputed blocks** (the JSON blocks a
+Mina daemon logs) for heights **359605–359624** — the first 20 heights after the
 mainnet hardfork genesis. They are the input to the end-to-end ledger-fidelity
 gate driven by [`tests/e2e/fidelity.sh`](../../../../tests/e2e/fidelity.sh)
 (`rake test_e2e`, and the `e2e` CI job).
+
+They are vendored as a single gzipped tarball (~732 KB vs ~1.9 MB raw — one blob
+instead of 57 files). The indexer's block ingest globs `*-*-*.json`, so the
+harness extracts the tarball into a temp dir before booting the indexer; the
+fidelity check reads that same dir.
 
 ## Why record-and-replay (why vendor them at all)
 
@@ -49,11 +54,13 @@ or widen the slice, fetch every block (forks included) in the range:
 ```bash
 API="https://storage.googleapis.com/storage/v1/b/mina_network_block_data/o"
 OBJ="https://storage.googleapis.com/mina_network_block_data"
+tmp="$(mktemp -d)"
 for h in $(seq 359605 359624); do
   curl -fsS "${API}?prefix=mainnet-${h}-&fields=items(name)" \
     | grep -oE 'mainnet-[0-9]+-[^"]+\.json' \
-    | while read -r n; do curl -fsS "${OBJ}/${n}" -o "$n"; done
+    | while read -r n; do curl -fsS "${OBJ}/${n}" -o "$tmp/$n"; done
 done
+tar czf blocks.tar.gz -C "$tmp" .   # from this directory
 ```
 
 Keep the range small (see above) and re-check `SLICE_TOP`/`MARGIN` in the harness.
