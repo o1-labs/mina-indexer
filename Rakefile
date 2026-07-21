@@ -372,8 +372,21 @@ task :fidelity, [:blocks_dir, :network, :margin, :gql] do |_, args|
   run(cmd.join(" "))
 end
 
+# Self-contained e2e ledger-fidelity gate (#19 WS2): boots the indexer against a
+# small vendored slice of real mainnet post-hardfork blocks (embedded genesis, so
+# nothing external needed) and asserts every account balance matches the
+# accounts_accessed oracle. This is the check that found the bugs fixed in
+# #87/#88/#90, run as a repeatable gate.
+desc "Run the end-to-end ledger fidelity gate"
+task test_e2e: "build:release" do
+  puts "--- Checking for prereqs"
+  run("python3 --version")
+  puts "--- Running e2e ledger fidelity gate"
+  run("#{TOP}/tests/e2e/fidelity.sh")
+end
+
 desc "Run the CI tests"
-task ci: [:test, :test_system]
+task ci: [:test, :test_system, :test_e2e]
 
 # Test tasks
 namespace :test do
