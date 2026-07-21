@@ -67,3 +67,24 @@ jobs:
       # or an unapproved source. Config: rust/deny.toml.
       - name: cargo deny (license/source scan)
         run: nix develop --command rake deny
+
+  # Self-contained end-to-end ledger-fidelity gate (#19 WS2): boot the indexer
+  # against a small vendored slice of real mainnet post-hardfork blocks (embedded
+  # genesis, nothing external needed) and assert every account balance matches the
+  # accounts_accessed oracle in the source blocks. Exercises the full ingest ->
+  # serve pipeline, catching ledger-correctness regressions (the class fixed in
+  # #87/#88/#90) that unit tests alone would miss.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+      - name: Nix build cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: E2E ledger fidelity gate
+        run: |
+          export GIT_COMMIT_HASH="$(git rev-parse --short=8 HEAD || echo unknown)"
+          nix develop --command rake test_e2e
