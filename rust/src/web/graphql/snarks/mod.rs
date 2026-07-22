@@ -113,7 +113,6 @@ pub struct SnarkQueryRoot;
 
 #[Object]
 impl SnarkQueryRoot {
-    #[allow(clippy::too_many_lines)]
     #[graphql(cache_control(max_age = 3600))]
     async fn snarks(
         &self,
@@ -121,257 +120,152 @@ impl SnarkQueryRoot {
         query: Option<SnarkQueryInput>,
         sort_by: Option<SnarkSortByInput>,
         #[graphql(default = 100)] limit: usize,
+        // `offset`: matching snarks to skip before `limit`. Pair with
+        // `snarksCount(query)` for total-count / page math.
+        #[graphql(default = 0)] offset: usize,
     ) -> Result<Vec<SnarkWithCanonicity>> {
         let limit = limit.min(crate::constants::GRAPHQL_MAX_PAGE_SIZE);
-        let db = db(ctx);
-        let mut snarks = <Vec<SnarkWithCanonicity>>::new();
-        let sort_by = sort_by.unwrap_or(SnarkSortByInput::BlockHeightDesc);
+        snarks_dispatch(
+            db(ctx),
+            query,
+            sort_by.unwrap_or(SnarkSortByInput::BlockHeightDesc),
+            limit,
+            offset,
+        )
+    }
 
-        // state hash
-        if let Some(state_hash) = query
-            .as_ref()
-            .and_then(|q| q.block.as_ref())
-            .and_then(|block| block.state_hash.as_ref())
-        {
-            // validate state hash
-            if !StateHash::is_valid(state_hash) {
-                return Err(async_graphql::Error::new(format!(
-                    "Invalid state hash: {}",
-                    state_hash
-                )));
-            }
+    /// Total snarks matching `query` -- the count companion to `snarks`, for a
+    /// gateway to compute total pages. Runs the same dispatch (same filters),
+    /// uncapped and unpaged, and counts the result so the count can never
+    /// disagree with the list.
+    #[graphql(cache_control(max_age = 3600))]
+    async fn snarks_count(
+        &self,
+        ctx: &Context<'_>,
+        query: Option<SnarkQueryInput>,
+        sort_by: Option<SnarkSortByInput>,
+    ) -> Result<u32> {
+        let all = snarks_dispatch(
+            db(ctx),
+            query,
+            sort_by.unwrap_or(SnarkSortByInput::BlockHeightDesc),
+            usize::MAX,
+            0,
+        )?;
+        Ok(all.len() as u32)
+    }
+}
 
-            let state_hash: StateHash = state_hash.clone().into();
-            if let Some(block_snarks) = db.get_block_snark_work(&state_hash)? {
-                snarks = block_snarks
-                    .into_iter()
-                    .flat_map(|snark| {
-                        snark_summary_matches_query(
-                            db,
-                            &query,
-                            SnarkWorkSummaryWithStateHash {
-                                fee: snark.fee,
-                                prover: snark.prover,
-                                state_hash: state_hash.clone(),
-                            },
-                        )
-                        .ok()
-                        .flatten()
-                    })
-                    .collect();
-            }
+/// Shared query dispatch for `snarks` / `snarksCount`: routes to one of the
+/// query paths (state-hash, block-height, prover, height-bounded, general) by
+/// the query shape, so the list and count always apply the same filters.
+/// `limit` and `offset` page the result (the count passes `usize::MAX` / `0`).
+#[allow(clippy::too_many_lines)]
+fn snarks_dispatch(
+    db: &Arc<IndexerStore>,
+    query: Option<SnarkQueryInput>,
+    sort_by: SnarkSortByInput,
+    limit: usize,
+    offset: usize,
+) -> Result<Vec<SnarkWithCanonicity>> {
+    let mut snarks = <Vec<SnarkWithCanonicity>>::new();
 
-            match sort_by {
-                SnarkSortByInput::BlockHeightAsc => snarks.reverse(),
-                SnarkSortByInput::BlockHeightDesc => (),
-            }
-
-            snarks.truncate(limit);
-            return Ok(snarks);
+    // state hash
+    if let Some(state_hash) = query
+        .as_ref()
+        .and_then(|q| q.block.as_ref())
+        .and_then(|block| block.state_hash.as_ref())
+    {
+        // validate state hash
+        if !StateHash::is_valid(state_hash) {
+            return Err(async_graphql::Error::new(format!(
+                "Invalid state hash: {}",
+                state_hash
+            )));
         }
 
-        // block height
-        if let Some(block_height) = query.as_ref().and_then(|q| q.block_height) {
-            let mut snarks: Vec<SnarkWithCanonicity> = db
-                .get_blocks_at_height(block_height)?
-                .iter()
-                .flat_map(|state_hash| {
-                    let block = get_block(db, state_hash);
-                    SnarkWorkSummaryWithStateHash::from_precomputed(&block)
-                        .into_iter()
-                        .filter_map(|s| snark_summary_matches_query(db, &query, s).ok().flatten())
-                        .collect::<Vec<SnarkWithCanonicity>>()
+        let state_hash: StateHash = state_hash.clone().into();
+        if let Some(block_snarks) = db.get_block_snark_work(&state_hash)? {
+            snarks = block_snarks
+                .into_iter()
+                .flat_map(|snark| {
+                    snark_summary_matches_query(
+                        db,
+                        &query,
+                        SnarkWorkSummaryWithStateHash {
+                            fee: snark.fee,
+                            prover: snark.prover,
+                            state_hash: state_hash.clone(),
+                        },
+                    )
+                    .ok()
+                    .flatten()
                 })
                 .collect();
-
-            match sort_by {
-                SnarkSortByInput::BlockHeightAsc => snarks.reverse(),
-                SnarkSortByInput::BlockHeightDesc => (),
-            }
-
-            snarks.truncate(limit);
-            return Ok(snarks);
         }
 
-        // prover query filter and sort by height
-        if let (Some(prover), Some(block_height_lte)) = (
-            query.as_ref().and_then(|q| q.prover.clone()),
-            query.as_ref().and_then(|q| q.block_height_lte),
-        ) {
-            // validate prover pk
-            if let Ok(prover) = PublicKey::new(prover.to_owned()) {
-                let mut start = prover.0.as_bytes().to_vec();
-                let mode = match sort_by {
-                    SnarkSortByInput::BlockHeightAsc => {
-                        speedb::IteratorMode::From(&start, speedb::Direction::Forward)
-                    }
-                    SnarkSortByInput::BlockHeightDesc => {
-                        start.append(&mut block_height_lte.to_be_bytes().to_vec());
-                        start.append(&mut u32::MAX.to_be_bytes().to_vec());
-                        speedb::IteratorMode::From(&start, speedb::Direction::Reverse)
-                    }
-                };
+        match sort_by {
+            SnarkSortByInput::BlockHeightAsc => snarks.reverse(),
+            SnarkSortByInput::BlockHeightDesc => (),
+        }
 
-                'outer: for (key, snark) in db.snark_prover_block_height_iterator(mode).flatten() {
-                    // exit if prover isn't the same
-                    if key[..PublicKey::LEN] != *prover.0.as_bytes() {
-                        break;
-                    }
+        let snarks = snarks.into_iter().skip(offset).take(limit).collect();
+        return Ok(snarks);
+    }
 
-                    let block_height = from_be_bytes(key[PublicKey::LEN..][..U32_LEN].to_vec());
-                    let blocks_at_height = db.get_blocks_at_height(block_height)?;
+    // block height
+    if let Some(block_height) = query.as_ref().and_then(|q| q.block_height) {
+        let mut snarks: Vec<SnarkWithCanonicity> = db
+            .get_blocks_at_height(block_height)?
+            .iter()
+            .flat_map(|state_hash| {
+                let block = get_block(db, state_hash);
+                SnarkWorkSummaryWithStateHash::from_precomputed(&block)
+                    .into_iter()
+                    .filter_map(|s| snark_summary_matches_query(db, &query, s).ok().flatten())
+                    .collect::<Vec<SnarkWithCanonicity>>()
+            })
+            .collect();
 
-                    for state_hash in blocks_at_height {
-                        // avoid deserializing PCB if possible
-                        let canonical = get_block_canonicity(db, &state_hash);
-                        if let Some(query_canonicity) = query.as_ref().and_then(|q| q.canonical) {
-                            if canonical != query_canonicity {
-                                continue;
-                            }
-                        }
+        match sort_by {
+            SnarkSortByInput::BlockHeightAsc => snarks.reverse(),
+            SnarkSortByInput::BlockHeightDesc => (),
+        }
 
-                        let pcb = get_block(db, &state_hash);
-                        let snark = serde_json::from_slice(&snark)?;
-                        let sw = SnarkWithCanonicity {
-                            canonical,
-                            pcb,
-                            snark: Snark::new(
-                                db,
-                                SnarkWorkSummaryWithStateHash::from(snark, state_hash),
-                                db.get_snarks_epoch_count(None, None)
-                                    .expect("epoch snarks count"),
-                                db.get_snarks_total_count().expect("total snarks count"),
-                            ),
-                        };
+        let snarks = snarks.into_iter().skip(offset).take(limit).collect();
+        return Ok(snarks);
+    }
 
-                        if query.as_ref().is_none_or(|q| q.matches(&sw)) {
-                            snarks.push(sw);
-
-                            if snarks.len() >= limit {
-                                break 'outer;
-                            }
-                        }
-                    }
+    // prover query filter and sort by height
+    if let (Some(prover), Some(block_height_lte)) = (
+        query.as_ref().and_then(|q| q.prover.clone()),
+        query.as_ref().and_then(|q| q.block_height_lte),
+    ) {
+        // validate prover pk
+        if let Ok(prover) = PublicKey::new(prover.to_owned()) {
+            let mut start = prover.0.as_bytes().to_vec();
+            let mode = match sort_by {
+                SnarkSortByInput::BlockHeightAsc => {
+                    speedb::IteratorMode::From(&start, speedb::Direction::Forward)
                 }
-            } else {
-                return Err(async_graphql::Error::new(format!(
-                    "Invalid prover public key: {}",
-                    prover
-                )));
-            }
-
-            return Ok(snarks);
-        }
-
-        // prover query
-        if let Some(prover) = query.as_ref().and_then(|q| q.prover.clone()) {
-            // validate prover pk
-            if let Ok(prover) = PublicKey::new(prover.to_owned()) {
-                let mut start = prover.0.as_bytes().to_vec();
-
-                let mode = match sort_by {
-                    SnarkSortByInput::BlockHeightAsc => {
-                        speedb::IteratorMode::From(&start, speedb::Direction::Forward)
-                    }
-                    SnarkSortByInput::BlockHeightDesc => {
-                        let mut pk_prefix = PublicKey::PREFIX.as_bytes().to_vec();
-
-                        *pk_prefix.last_mut().unwrap_or(&mut 0) += 1;
-                        start.append(&mut u32::MAX.to_be_bytes().to_vec());
-                        start.append(&mut pk_prefix);
-
-                        speedb::IteratorMode::From(&start, speedb::Direction::Reverse)
-                    }
-                };
-
-                'outer: for (key, snark) in db.snark_prover_block_height_iterator(mode).flatten() {
-                    if key[..PublicKey::LEN] != *prover.0.as_bytes() {
-                        break;
-                    }
-
-                    let block_height = from_be_bytes(key[PublicKey::LEN..][..U32_LEN].to_vec());
-                    let blocks_at_slot = db.get_blocks_at_height(block_height)?;
-
-                    for state_hash in blocks_at_slot {
-                        // avoid deserializing PCB if possible
-                        let canonical = get_block_canonicity(db, &state_hash);
-                        if let Some(query_canonicity) = query.as_ref().and_then(|q| q.canonical) {
-                            if canonical != query_canonicity {
-                                continue;
-                            }
-                        }
-
-                        let pcb = get_block(db, &state_hash);
-                        let snark = serde_json::from_slice(&snark)?;
-                        let sw = SnarkWithCanonicity {
-                            canonical,
-                            pcb,
-                            snark: Snark::new(
-                                db,
-                                SnarkWorkSummaryWithStateHash::from(snark, state_hash),
-                                db.get_snarks_epoch_count(None, None)
-                                    .expect("epoch snarks count"),
-                                db.get_snarks_total_count().expect("total snarks count"),
-                            ),
-                        };
-
-                        if query.as_ref().is_none_or(|q| q.matches(&sw)) {
-                            snarks.push(sw);
-
-                            if snarks.len() >= limit {
-                                break 'outer;
-                            }
-                        }
-                    }
+                SnarkSortByInput::BlockHeightDesc => {
+                    start.append(&mut block_height_lte.to_be_bytes().to_vec());
+                    start.append(&mut u32::MAX.to_be_bytes().to_vec());
+                    speedb::IteratorMode::From(&start, speedb::Direction::Reverse)
                 }
-            } else {
-                return Err(async_graphql::Error::new(format!(
-                    "Invalid prover public key: {}",
-                    prover
-                )));
-            }
-
-            return Ok(snarks);
-        }
-
-        // block height bounded query
-        if query.as_ref().is_some_and(|q| {
-            q.block_height_gt.is_some()
-                || q.block_height_gte.is_some()
-                || q.block_height_lt.is_some()
-                || q.block_height_lte.is_some()
-        }) {
-            let (min, max) = {
-                let SnarkQueryInput {
-                    block_height_gt,
-                    block_height_gte,
-                    block_height_lt,
-                    block_height_lte,
-                    ..
-                } = query.as_ref().expect("query will contain a value");
-                let min_bound = match (*block_height_gte, *block_height_gt) {
-                    (Some(gte), Some(gt)) => std::cmp::max(gte, gt + 1),
-                    (Some(gte), None) => gte,
-                    (None, Some(gt)) => gt + 1,
-                    (None, None) => 1,
-                };
-
-                let max_bound = match (*block_height_lte, *block_height_lt) {
-                    (Some(lte), Some(lt)) => std::cmp::min(lte, lt - 1),
-                    (Some(lte), None) => lte,
-                    (None, Some(lt)) => lt - 1,
-                    (None, None) => db.get_best_block_height()?.unwrap(),
-                };
-                (min_bound, max_bound)
             };
 
-            let mut block_heights: Vec<u32> = (min..=max).collect();
-            if sort_by == SnarkSortByInput::BlockHeightDesc {
-                block_heights.reverse()
-            }
+            let mut skipped = 0;
+            'outer: for (key, snark) in db.snark_prover_block_height_iterator(mode).flatten() {
+                // exit if prover isn't the same
+                if key[..PublicKey::LEN] != *prover.0.as_bytes() {
+                    break;
+                }
 
-            'outer: for height in block_heights {
-                for state_hash in db.get_blocks_at_height(height)? {
+                let block_height = from_be_bytes(key[PublicKey::LEN..][..U32_LEN].to_vec());
+                let blocks_at_height = db.get_blocks_at_height(block_height)?;
+
+                for state_hash in blocks_at_height {
                     // avoid deserializing PCB if possible
                     let canonical = get_block_canonicity(db, &state_hash);
                     if let Some(query_canonicity) = query.as_ref().and_then(|q| q.canonical) {
@@ -380,29 +274,25 @@ impl SnarkQueryRoot {
                         }
                     }
 
-                    let block = get_block(db, &state_hash);
-                    let snark_work = db.get_block_snark_work(&state_hash)?;
-                    let snarks_with_canonicity = snark_work.map_or(vec![], |summaries| {
-                        summaries
-                            .into_iter()
-                            .map(|snark| SnarkWithCanonicity {
-                                canonical,
-                                pcb: block.clone(),
-                                snark: Snark::new(
-                                    db,
-                                    SnarkWorkSummaryWithStateHash::from(snark, state_hash.clone()),
-                                    db.get_snarks_epoch_count(None, None)
-                                        .expect("epoch snarks count"),
-                                    db.get_snarks_total_count().expect("total snarks count"),
-                                ),
-                            })
-                            .collect()
-                    });
+                    let pcb = get_block(db, &state_hash);
+                    let snark = serde_json::from_slice(&snark)?;
+                    let sw = SnarkWithCanonicity {
+                        canonical,
+                        pcb,
+                        snark: Snark::new(
+                            db,
+                            SnarkWorkSummaryWithStateHash::from(snark, state_hash),
+                            db.get_snarks_epoch_count(None, None)
+                                .expect("epoch snarks count"),
+                            db.get_snarks_total_count().expect("total snarks count"),
+                        ),
+                    };
 
-                    for sw in snarks_with_canonicity {
-                        if query.as_ref().is_none_or(|q| q.matches(&sw)) {
+                    if query.as_ref().is_none_or(|q| q.matches(&sw)) {
+                        if skipped < offset {
+                            skipped += 1;
+                        } else {
                             snarks.push(sw);
-
                             if snarks.len() >= limit {
                                 break 'outer;
                             }
@@ -410,58 +300,226 @@ impl SnarkQueryRoot {
                     }
                 }
             }
-
-            return Ok(snarks);
+        } else {
+            return Err(async_graphql::Error::new(format!(
+                "Invalid prover public key: {}",
+                prover
+            )));
         }
 
-        // general query
-        let mode = match sort_by {
-            SnarkSortByInput::BlockHeightAsc => speedb::IteratorMode::Start,
-            SnarkSortByInput::BlockHeightDesc => speedb::IteratorMode::End,
-        };
+        return Ok(snarks);
+    }
 
-        'outer: for (key, _) in db.blocks_height_iterator(mode).flatten() {
-            let state_hash = state_hash_suffix(&key)?;
+    // prover query
+    if let Some(prover) = query.as_ref().and_then(|q| q.prover.clone()) {
+        // validate prover pk
+        if let Ok(prover) = PublicKey::new(prover.to_owned()) {
+            let mut start = prover.0.as_bytes().to_vec();
 
-            // avoid deserializing PCB if possible
-            let canonical = get_block_canonicity(db, &state_hash);
-            if let Some(query_canonicity) = query.as_ref().and_then(|q| q.canonical) {
-                if canonical != query_canonicity {
-                    continue;
+            let mode = match sort_by {
+                SnarkSortByInput::BlockHeightAsc => {
+                    speedb::IteratorMode::From(&start, speedb::Direction::Forward)
                 }
-            }
+                SnarkSortByInput::BlockHeightDesc => {
+                    let mut pk_prefix = PublicKey::PREFIX.as_bytes().to_vec();
 
-            let snark_work = db.get_block_snark_work(&state_hash)?;
-            let snarks_with_canonicity = snark_work.map_or(vec![], |summaries| {
-                summaries
-                    .into_iter()
-                    .map(|snark| SnarkWithCanonicity {
+                    *pk_prefix.last_mut().unwrap_or(&mut 0) += 1;
+                    start.append(&mut u32::MAX.to_be_bytes().to_vec());
+                    start.append(&mut pk_prefix);
+
+                    speedb::IteratorMode::From(&start, speedb::Direction::Reverse)
+                }
+            };
+
+            let mut skipped = 0;
+            'outer: for (key, snark) in db.snark_prover_block_height_iterator(mode).flatten() {
+                if key[..PublicKey::LEN] != *prover.0.as_bytes() {
+                    break;
+                }
+
+                let block_height = from_be_bytes(key[PublicKey::LEN..][..U32_LEN].to_vec());
+                let blocks_at_slot = db.get_blocks_at_height(block_height)?;
+
+                for state_hash in blocks_at_slot {
+                    // avoid deserializing PCB if possible
+                    let canonical = get_block_canonicity(db, &state_hash);
+                    if let Some(query_canonicity) = query.as_ref().and_then(|q| q.canonical) {
+                        if canonical != query_canonicity {
+                            continue;
+                        }
+                    }
+
+                    let pcb = get_block(db, &state_hash);
+                    let snark = serde_json::from_slice(&snark)?;
+                    let sw = SnarkWithCanonicity {
                         canonical,
-                        pcb: get_block(db, &state_hash),
+                        pcb,
                         snark: Snark::new(
                             db,
-                            SnarkWorkSummaryWithStateHash::from(snark, state_hash.clone()),
+                            SnarkWorkSummaryWithStateHash::from(snark, state_hash),
                             db.get_snarks_epoch_count(None, None)
                                 .expect("epoch snarks count"),
                             db.get_snarks_total_count().expect("total snarks count"),
                         ),
-                    })
-                    .collect()
-            });
+                    };
 
-            for sw in snarks_with_canonicity {
-                if query.as_ref().is_none_or(|q| q.matches(&sw)) {
+                    if query.as_ref().is_none_or(|q| q.matches(&sw)) {
+                        if skipped < offset {
+                            skipped += 1;
+                        } else {
+                            snarks.push(sw);
+                            if snarks.len() >= limit {
+                                break 'outer;
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            return Err(async_graphql::Error::new(format!(
+                "Invalid prover public key: {}",
+                prover
+            )));
+        }
+
+        return Ok(snarks);
+    }
+
+    // block height bounded query
+    if query.as_ref().is_some_and(|q| {
+        q.block_height_gt.is_some()
+            || q.block_height_gte.is_some()
+            || q.block_height_lt.is_some()
+            || q.block_height_lte.is_some()
+    }) {
+        let (min, max) = {
+            let SnarkQueryInput {
+                block_height_gt,
+                block_height_gte,
+                block_height_lt,
+                block_height_lte,
+                ..
+            } = query.as_ref().expect("query will contain a value");
+            let min_bound = match (*block_height_gte, *block_height_gt) {
+                (Some(gte), Some(gt)) => std::cmp::max(gte, gt + 1),
+                (Some(gte), None) => gte,
+                (None, Some(gt)) => gt + 1,
+                (None, None) => 1,
+            };
+
+            let max_bound = match (*block_height_lte, *block_height_lt) {
+                (Some(lte), Some(lt)) => std::cmp::min(lte, lt - 1),
+                (Some(lte), None) => lte,
+                (None, Some(lt)) => lt - 1,
+                (None, None) => db.get_best_block_height()?.unwrap(),
+            };
+            (min_bound, max_bound)
+        };
+
+        let mut block_heights: Vec<u32> = (min..=max).collect();
+        if sort_by == SnarkSortByInput::BlockHeightDesc {
+            block_heights.reverse()
+        }
+
+        let mut skipped = 0;
+        'outer: for height in block_heights {
+            for state_hash in db.get_blocks_at_height(height)? {
+                // avoid deserializing PCB if possible
+                let canonical = get_block_canonicity(db, &state_hash);
+                if let Some(query_canonicity) = query.as_ref().and_then(|q| q.canonical) {
+                    if canonical != query_canonicity {
+                        continue;
+                    }
+                }
+
+                let block = get_block(db, &state_hash);
+                let snark_work = db.get_block_snark_work(&state_hash)?;
+                let snarks_with_canonicity = snark_work.map_or(vec![], |summaries| {
+                    summaries
+                        .into_iter()
+                        .map(|snark| SnarkWithCanonicity {
+                            canonical,
+                            pcb: block.clone(),
+                            snark: Snark::new(
+                                db,
+                                SnarkWorkSummaryWithStateHash::from(snark, state_hash.clone()),
+                                db.get_snarks_epoch_count(None, None)
+                                    .expect("epoch snarks count"),
+                                db.get_snarks_total_count().expect("total snarks count"),
+                            ),
+                        })
+                        .collect()
+                });
+
+                for sw in snarks_with_canonicity {
+                    if query.as_ref().is_none_or(|q| q.matches(&sw)) {
+                        if skipped < offset {
+                            skipped += 1;
+                        } else {
+                            snarks.push(sw);
+                            if snarks.len() >= limit {
+                                break 'outer;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return Ok(snarks);
+    }
+
+    // general query
+    let mode = match sort_by {
+        SnarkSortByInput::BlockHeightAsc => speedb::IteratorMode::Start,
+        SnarkSortByInput::BlockHeightDesc => speedb::IteratorMode::End,
+    };
+
+    let mut skipped = 0;
+    'outer: for (key, _) in db.blocks_height_iterator(mode).flatten() {
+        let state_hash = state_hash_suffix(&key)?;
+
+        // avoid deserializing PCB if possible
+        let canonical = get_block_canonicity(db, &state_hash);
+        if let Some(query_canonicity) = query.as_ref().and_then(|q| q.canonical) {
+            if canonical != query_canonicity {
+                continue;
+            }
+        }
+
+        let snark_work = db.get_block_snark_work(&state_hash)?;
+        let snarks_with_canonicity = snark_work.map_or(vec![], |summaries| {
+            summaries
+                .into_iter()
+                .map(|snark| SnarkWithCanonicity {
+                    canonical,
+                    pcb: get_block(db, &state_hash),
+                    snark: Snark::new(
+                        db,
+                        SnarkWorkSummaryWithStateHash::from(snark, state_hash.clone()),
+                        db.get_snarks_epoch_count(None, None)
+                            .expect("epoch snarks count"),
+                        db.get_snarks_total_count().expect("total snarks count"),
+                    ),
+                })
+                .collect()
+        });
+
+        for sw in snarks_with_canonicity {
+            if query.as_ref().is_none_or(|q| q.matches(&sw)) {
+                if skipped < offset {
+                    skipped += 1;
+                } else {
                     snarks.push(sw);
-
                     if snarks.len() >= limit {
                         break 'outer;
                     }
                 }
             }
         }
-
-        Ok(snarks)
     }
+
+    Ok(snarks)
 }
 
 fn snark_summary_matches_query(
