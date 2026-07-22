@@ -67,31 +67,14 @@ impl ActionsQueryRoot {
         query: ActionsQueryInput,
         sort_by: Option<ActionsSortByInput>,
         #[graphql(default = 100)] limit: usize,
+        // `offset`: matching actions to skip before `limit`. Pair with
+        // `actionsCount(query)` for total-count / page math.
+        #[graphql(default = 0)] offset: usize,
     ) -> Result<Option<Vec<Action>>> {
         let limit = limit.min(crate::constants::GRAPHQL_MAX_PAGE_SIZE);
         let db = db(ctx);
 
-        let public_key = match PublicKey::new(&query.public_key) {
-            Ok(public_key) => public_key,
-            Err(_) => {
-                return Err(async_graphql::Error::new(format!(
-                    "Invalid public key: {}",
-                    &query.public_key
-                )))
-            }
-        };
-        let token = match query.token.as_ref() {
-            Some(token) => match TokenAddress::new(token) {
-                Some(token) => token,
-                None => {
-                    return Err(async_graphql::Error::new(format!(
-                        "Invalid token: {}",
-                        token
-                    )))
-                }
-            },
-            None => TokenAddress::default(),
-        };
+        let (public_key, token) = query.validate()?;
 
         let direction = match sort_by.unwrap_or_default() {
             ActionsSortByInput::BlockHeightAsc => Direction::Forward,
@@ -103,6 +86,7 @@ impl ActionsQueryRoot {
         };
 
         let mut actions = Vec::with_capacity(limit);
+        let mut skipped = 0;
         for (key, value) in db
             .actions_iterator(&public_key, &token, index, direction)
             .flatten()
@@ -115,11 +99,37 @@ impl ActionsQueryRoot {
             let action: ActionStateWithMeta = serde_json::from_slice(&value)?;
 
             if query.matches(&action, index) {
+                if skipped < offset {
+                    skipped += 1;
+                    continue;
+                }
                 actions.push(Action::new(db, action)?);
             }
         }
 
         Ok(Some(actions))
+    }
+
+    /// Total actions matching `query` -- the count companion to `actions`. Applies
+    /// the same `matches` filter over the same iterator, without building each
+    /// `Action` (which does per-action block/command lookups), so it stays cheap.
+    #[graphql(cache_control(max_age = 3600))]
+    async fn actions_count(&self, ctx: &Context<'_>, query: ActionsQueryInput) -> Result<u32> {
+        let db = db(ctx);
+        let (public_key, token) = query.validate()?;
+
+        let mut count = 0u32;
+        for (key, value) in db
+            .actions_iterator(&public_key, &token, None, Direction::Forward)
+            .flatten()
+        {
+            let index = zkapp_action_index(&key);
+            let action: ActionStateWithMeta = serde_json::from_slice(&value)?;
+            if query.matches(&action, index) {
+                count += 1;
+            }
+        }
+        Ok(count)
     }
 }
 
@@ -169,6 +179,20 @@ impl Action {
 }
 
 impl ActionsQueryInput {
+    /// Validate + parse the public key and token, shared by `actions` and
+    /// `actionsCount` so both reject the same inputs identically.
+    fn validate(&self) -> Result<(PublicKey, TokenAddress)> {
+        let public_key = PublicKey::new(&self.public_key).map_err(|_| {
+            async_graphql::Error::new(format!("Invalid public key: {}", &self.public_key))
+        })?;
+        let token = match self.token.as_ref() {
+            Some(token) => TokenAddress::new(token)
+                .ok_or_else(|| async_graphql::Error::new(format!("Invalid token: {}", token)))?,
+            None => TokenAddress::default(),
+        };
+        Ok((public_key, token))
+    }
+
     fn matches(&self, action: &ActionStateWithMeta, index: u32) -> bool {
         let Self {
             public_key: _,
