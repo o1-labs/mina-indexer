@@ -109,7 +109,6 @@ impl BlocksQueryRoot {
         Ok(None)
     }
 
-    #[allow(clippy::too_many_lines)]
     #[graphql(cache_control(max_age = 3600))]
     async fn blocks(
         &self,
@@ -117,387 +116,343 @@ impl BlocksQueryRoot {
         query: Option<BlockQueryInput>,
         #[graphql(default = 100)] limit: usize,
         sort_by: Option<BlockSortByInput>,
+        // `offset`: matching blocks to skip before `limit`. Pair with
+        // `blocksCount(query)` for total-count / page math.
+        #[graphql(default = 0)] offset: usize,
     ) -> Result<Vec<Block>> {
-        use speedb::{Direction::*, IteratorMode::*};
-        use BlockSortByInput::*;
         let limit = limit.min(crate::constants::GRAPHQL_MAX_PAGE_SIZE);
-        let db = db(ctx);
+        blocks_dispatch(
+            db(ctx),
+            query,
+            sort_by.unwrap_or(BlockSortByInput::BlockHeightDesc),
+            limit,
+            offset,
+        )
+    }
 
-        // unique block producer query
-        if let Some(num_blocks) = query
+    /// Total blocks matching `query` -- the count companion to `blocks`, for a
+    /// gateway to compute total pages. Runs the same dispatch (same filters),
+    /// uncapped and unpaged, and counts the result so the count can never
+    /// disagree with the list.
+    #[graphql(cache_control(max_age = 3600))]
+    async fn blocks_count(
+        &self,
+        ctx: &Context<'_>,
+        query: Option<BlockQueryInput>,
+        sort_by: Option<BlockSortByInput>,
+    ) -> Result<u32> {
+        let all = blocks_dispatch(
+            db(ctx),
+            query,
+            sort_by.unwrap_or(BlockSortByInput::BlockHeightDesc),
+            usize::MAX,
+            0,
+        )?;
+        Ok(all.len() as u32)
+    }
+}
+
+/// Shared query dispatch for `blocks` / `blocksCount`: routes to one of the
+/// query paths (unique-producers, state-hash, block-height, global-slot,
+/// creator, coinbase-receiver, height/slot-sorted, general) by the query shape,
+/// so the list and count always apply the same filters. `limit` and `offset`
+/// page the result (the count passes `usize::MAX` / `0`).
+#[allow(clippy::too_many_lines)]
+fn blocks_dispatch(
+    db: &Arc<IndexerStore>,
+    query: Option<BlockQueryInput>,
+    sort_by: BlockSortByInput,
+    limit: usize,
+    offset: usize,
+) -> Result<Vec<Block>> {
+    use speedb::{Direction::*, IteratorMode::*};
+    use BlockSortByInput::*;
+
+    // unique block producer query
+    if let Some(num_blocks) = query
+        .as_ref()
+        .and_then(|q| q.unique_block_producers_last_n_blocks)
+    {
+        return match unique_block_producers_last_n_blocks(db, num_blocks) {
+            Ok(num_unique_block_producers_last_n_blocks) => Ok(vec![Block {
+                num_unique_block_producers_last_n_blocks,
+                ..Default::default()
+            }]),
+            Err(e) => Err(async_graphql::Error::new(e.to_string())),
+        };
+    }
+
+    let epoch = query.as_ref().and_then(|q| {
+        q.protocol_state
             .as_ref()
-            .and_then(|q| q.unique_block_producers_last_n_blocks)
-        {
-            return match unique_block_producers_last_n_blocks(db, num_blocks) {
-                Ok(num_unique_block_producers_last_n_blocks) => Ok(vec![Block {
-                    num_unique_block_producers_last_n_blocks,
-                    ..Default::default()
-                }]),
-                Err(e) => Err(async_graphql::Error::new(e.to_string())),
-            };
-        }
+            .and_then(|ps| ps.consensus_state.as_ref().and_then(|cs| cs.epoch))
+    });
+    let genesis_state_hash = query
+        .as_ref()
+        .and_then(|q| q.genesis_state_hash.clone())
+        .map(Into::into);
 
-        let epoch = query.as_ref().and_then(|q| {
-            q.protocol_state
-                .as_ref()
-                .and_then(|ps| ps.consensus_state.as_ref().and_then(|cs| cs.epoch))
-        });
-        let genesis_state_hash = query
-            .as_ref()
-            .and_then(|q| q.genesis_state_hash.clone())
-            .map(Into::into);
+    let counts = get_counts(db, epoch, genesis_state_hash.as_ref())?;
+    let mut blocks = Vec::new();
 
-        let counts = get_counts(db, epoch, genesis_state_hash.as_ref())?;
-        let mut blocks = Vec::new();
-        let sort_by = sort_by.unwrap_or(BlockHeightDesc);
-
-        // state hash query
-        if let Some(state_hash) = query.as_ref().and_then(|q| q.state_hash.as_ref()) {
-            // validate state hash
-            let state_hash = match StateHash::new(state_hash) {
-                Ok(state_hash) => state_hash,
-                Err(_) => {
-                    return Err(async_graphql::Error::new(format!(
-                        "Invalid state hash: {}",
-                        state_hash
-                    )))
-                }
-            };
-
-            let block = db.get_block(&state_hash)?;
-            return Ok(block
-                .iter()
-                .filter_map(|(b, _)| precomputed_matches_query(db, &query, b, counts))
-                .collect());
-        }
-
-        // block height query
-        if let Some(block_height) = query.as_ref().and_then(|q| q.block_height) {
-            for state_hash in db.get_blocks_at_height(block_height)?.iter() {
-                let pcb = get_block(db, state_hash);
-
-                if let Some(block) = precomputed_matches_query(db, &query, &pcb, counts) {
-                    blocks.push(block);
-
-                    if blocks.len() >= limit {
-                        break;
-                    }
-                }
+    // state hash query
+    if let Some(state_hash) = query.as_ref().and_then(|q| q.state_hash.as_ref()) {
+        // validate state hash
+        let state_hash = match StateHash::new(state_hash) {
+            Ok(state_hash) => state_hash,
+            Err(_) => {
+                return Err(async_graphql::Error::new(format!(
+                    "Invalid state hash: {}",
+                    state_hash
+                )))
             }
-
-            return Ok(blocks);
-        }
-
-        // global slot query
-        if let Some(global_slot) = query
-            .as_ref()
-            .and_then(|q| q.protocol_state.as_ref())
-            .and_then(|protocol_state| protocol_state.consensus_state.as_ref())
-            .and_then(|consensus_state| consensus_state.slot_since_genesis)
-            .or(query.as_ref().and_then(|q| q.global_slot_since_genesis))
-        {
-            for state_hash in db.get_blocks_at_slot(global_slot)?.iter() {
-                let pcb = get_block(db, state_hash);
-
-                if let Some(block) = precomputed_matches_query(db, &query, &pcb, counts) {
-                    blocks.push(block);
-
-                    if blocks.len() >= limit {
-                        break;
-                    }
-                }
-            }
-
-            return Ok(blocks);
-        }
-
-        // coinbase receiver query
-        if let Some(coinbase_receiver) = query.as_ref().and_then(|q| {
-            q.coinbase_receiver
-                .as_ref()
-                .and_then(|cb| cb.public_key.as_ref())
-        }) {
-            // validate coinbase receiver
-            let coinbase_receiver = match PublicKey::new(coinbase_receiver) {
-                Ok(coinbase_receiver) => coinbase_receiver,
-                Err(_) => {
-                    return Err(async_graphql::Error::new(format!(
-                        "Invalid coinbase receiver public key: {}",
-                        coinbase_receiver
-                    )))
-                }
-            };
-
-            let start = coinbase_receiver.0.as_bytes();
-            let mut end = [0; PublicKey::LEN + U32_LEN];
-            end[..PublicKey::LEN].copy_from_slice(start);
-            end[PublicKey::LEN..].copy_from_slice(&u32::MAX.to_be_bytes());
-
-            let iter = match sort_by {
-                BlockHeightAsc | GlobalSlotAsc => {
-                    db.coinbase_receiver_block_height_iterator(From(start, Forward))
-                }
-                BlockHeightDesc | GlobalSlotDesc => {
-                    db.coinbase_receiver_block_height_iterator(From(&end, Reverse))
-                }
-            };
-
-            for (key, _) in iter.flatten() {
-                if key[..PublicKey::LEN] != *coinbase_receiver.0.as_bytes() {
-                    break;
-                }
-
-                // avoid deserializing PCB if possible
-                let state_hash = state_hash_suffix(&key)?;
-                if let Some(query_canonicity) = query.as_ref().and_then(|q| q.canonical.or(q.in_best_chain)) {
-                    if get_block_canonicity(db, &state_hash) != query_canonicity {
-                        continue;
-                    }
-                }
-
-                let pcb = get_block(db, &state_hash);
-                if let Some(block) = precomputed_matches_query(db, &query, &pcb, counts) {
-                    blocks.push(block);
-
-                    if blocks.len() >= limit {
-                        break;
-                    }
-                }
-            }
-
-            return Ok(blocks);
-        }
-
-        // creator account query
-        if let Some(creator) = query.as_ref().and_then(|q| {
-            q.creator_account
-                .as_ref()
-                .and_then(|cb| cb.public_key.as_ref())
-        }) {
-            // validate creator
-            let creator = match PublicKey::new(creator) {
-                Ok(creator) => creator,
-                Err(_) => {
-                    return Err(async_graphql::Error::new(format!(
-                        "Invalid creator public key: {}",
-                        creator
-                    )))
-                }
-            };
-
-            // properly set the upper bound for block height
-            let upper_bound = match (
-                query.as_ref().and_then(|q| q.block_height_lt),
-                query.as_ref().and_then(|q| q.block_height_lte),
-            ) {
-                (Some(lt), Some(lte)) => std::cmp::min(lte, lt - 1),
-                (Some(lt), None) => lt - 1,
-                (None, Some(lte)) => lte,
-                (None, None) => u32::MAX,
-            };
-
-            let start = creator.0.as_bytes();
-            let mut end = [0; PublicKey::LEN + U32_LEN];
-            end[..PublicKey::LEN].copy_from_slice(start);
-            end[PublicKey::LEN..].copy_from_slice(&upper_bound.to_be_bytes());
-
-            let iter = match sort_by {
-                BlockHeightAsc | GlobalSlotAsc => {
-                    db.block_creator_block_height_iterator(From(start, Forward))
-                }
-                BlockHeightDesc | GlobalSlotDesc => {
-                    db.block_creator_block_height_iterator(From(&end, Reverse))
-                }
-            };
-
-            for (key, _) in iter.flatten() {
-                if key[..PublicKey::LEN] != *creator.0.as_bytes() {
-                    break;
-                }
-
-                // avoid deserializing PCB if possible
-                let state_hash = state_hash_suffix(&key)?;
-                if let Some(query_canonicity) = query.as_ref().and_then(|q| q.canonical.or(q.in_best_chain)) {
-                    if get_block_canonicity(db, &state_hash) != query_canonicity {
-                        continue;
-                    }
-                }
-
-                let pcb = get_block(db, &state_hash);
-                if let Some(block) = precomputed_matches_query(db, &query, &pcb, counts) {
-                    blocks.push(block);
-
-                    if blocks.len() >= limit {
-                        break;
-                    }
-                }
-            }
-
-            return Ok(blocks);
-        }
-
-        // block height bounded query
-        if query.as_ref().is_some_and(|q| {
-            q.block_height_gt.is_some()
-                || q.block_height_gte.is_some()
-                || q.block_height_lt.is_some()
-                || q.block_height_lte.is_some()
-        }) {
-            let (min, max) = {
-                let BlockQueryInput {
-                    block_height_gt,
-                    block_height_gte,
-                    block_height_lt,
-                    block_height_lte,
-                    ..
-                } = query.as_ref().expect("query will contain a value");
-                let min_bound = match (*block_height_gte, *block_height_gt) {
-                    (Some(gte), Some(gt)) => std::cmp::max(gte, gt + 1),
-                    (Some(gte), None) => gte,
-                    (None, Some(gt)) => gt + 1,
-                    (None, None) => 1,
-                };
-
-                let max_bound = match (*block_height_lte, *block_height_lt) {
-                    (Some(lte), Some(lt)) => std::cmp::min(lte, lt - 1),
-                    (Some(lte), None) => lte,
-                    (None, Some(lt)) => lt - 1,
-                    (None, None) => db.get_best_block_height()?.unwrap(),
-                };
-                (min_bound, max_bound)
-            };
-
-            // min/max block height BE bytes & iterator mode
-            let start = min.to_be_bytes();
-            let end = (max + 1).to_be_bytes();
-            let mode = match sort_by {
-                BlockHeightAsc => From(&start, Forward),
-                _ => From(&end, Reverse),
-            };
-
-            for (key, _) in db.blocks_height_iterator(mode).flatten() {
-                let height = block_u32_prefix_from_key(&key)?;
-
-                // out of bounds
-                if height < min || height > max {
-                    break;
-                }
-
-                // avoid deserializing PCB if possible
-                let state_hash = state_hash_suffix(&key)?;
-                if let Some(query_canonicity) = query.as_ref().and_then(|q| q.canonical.or(q.in_best_chain)) {
-                    if get_block_canonicity(db, &state_hash) != query_canonicity {
-                        continue;
-                    }
-                }
-
-                let pcb = get_block(db, &state_hash);
-                if let Some(block_with_canonicity) =
-                    precomputed_matches_query(db, &query, &pcb, counts)
-                {
-                    blocks.push(block_with_canonicity);
-
-                    if blocks.len() >= limit {
-                        break;
-                    }
-                }
-            }
-
-            reorder(db, &mut blocks, sort_by);
-            return Ok(blocks);
-        }
-
-        // global slot bounded query
-        let consensus_state = query
-            .as_ref()
-            .and_then(|f| f.protocol_state.as_ref())
-            .and_then(|f| f.consensus_state.as_ref());
-        if consensus_state.is_some_and(|q| {
-            q.slot_since_genesis_gt.is_some()
-                || q.slot_since_genesis_gte.is_some()
-                || q.slot_since_genesis_lt.is_some()
-                || q.slot_since_genesis_lte.is_some()
-        }) {
-            let (min, max) = {
-                let BlockProtocolStateConsensusStateQueryInput {
-                    slot_since_genesis_lte,
-                    slot_since_genesis_lt,
-                    slot_since_genesis_gte,
-                    slot_since_genesis_gt,
-                    ..
-                } = consensus_state
-                    .as_ref()
-                    .expect("consensus will have a value");
-                let min_bound = match (*slot_since_genesis_gte, *slot_since_genesis_gt) {
-                    (Some(gte), Some(gt)) => std::cmp::max(gte, gt + 1),
-                    (Some(gte), None) => gte,
-                    (None, Some(gt)) => gt + 1,
-                    (None, None) => 0,
-                };
-
-                let max_bound = match (*slot_since_genesis_lte, *slot_since_genesis_lt) {
-                    (Some(lte), Some(lt)) => std::cmp::min(lte, lt - 1),
-                    (Some(lte), None) => lte,
-                    (None, Some(lt)) => lt - 1,
-                    (None, None) => db.get_best_block_global_slot()?.unwrap(),
-                };
-                (min_bound, max_bound)
-            };
-
-            // min/max global slot BE bytes & iterator mode
-            let start = min.to_be_bytes();
-            let end = (max + 1).to_be_bytes();
-            let mode = match sort_by {
-                GlobalSlotAsc => From(&start, Forward),
-                _ => From(&end, Reverse),
-            };
-
-            for (key, _) in db.blocks_global_slot_iterator(mode).flatten() {
-                let slot = block_u32_prefix_from_key(&key)?;
-
-                // out of bounds
-                if slot < min || slot > max {
-                    break;
-                }
-
-                // avoid deserializing PCB if possible
-                let state_hash = state_hash_suffix(&key)?;
-                if let Some(query_canonicity) = query.as_ref().and_then(|q| q.canonical.or(q.in_best_chain)) {
-                    if get_block_canonicity(db, &state_hash) != query_canonicity {
-                        continue;
-                    }
-                }
-
-                let pcb = get_block(db, &state_hash);
-                if let Some(block_with_canonicity) =
-                    precomputed_matches_query(db, &query, &pcb, counts)
-                {
-                    blocks.push(block_with_canonicity);
-
-                    if blocks.len() >= limit {
-                        break;
-                    }
-                }
-            }
-
-            reorder(db, &mut blocks, sort_by);
-            return Ok(blocks);
-        }
-
-        // default query handler
-        let start = 0u32.to_be_bytes();
-        let end = u32::MAX.to_be_bytes();
-        let iter = match sort_by {
-            BlockHeightAsc => db.blocks_height_iterator(From(&start, Forward)),
-            BlockHeightDesc => db.blocks_height_iterator(From(&end, Reverse)),
-            GlobalSlotAsc => db.blocks_global_slot_iterator(From(&start, Forward)),
-            GlobalSlotDesc => db.blocks_global_slot_iterator(From(&end, Reverse)),
         };
 
+        let block = db.get_block(&state_hash)?;
+        return Ok(block
+            .iter()
+            .filter_map(|(b, _)| precomputed_matches_query(db, &query, b, counts))
+            .collect());
+    }
+
+    // block height query
+    if let Some(block_height) = query.as_ref().and_then(|q| q.block_height) {
+        let mut skipped = 0;
+        for state_hash in db.get_blocks_at_height(block_height)?.iter() {
+            let pcb = get_block(db, state_hash);
+
+            if let Some(block) = precomputed_matches_query(db, &query, &pcb, counts) {
+                if skipped < offset {
+                    skipped += 1;
+                } else {
+                    blocks.push(block);
+                    if blocks.len() >= limit {
+                        break;
+                    }
+                }
+            }
+        }
+
+        return Ok(blocks);
+    }
+
+    // global slot query
+    if let Some(global_slot) = query
+        .as_ref()
+        .and_then(|q| q.protocol_state.as_ref())
+        .and_then(|protocol_state| protocol_state.consensus_state.as_ref())
+        .and_then(|consensus_state| consensus_state.slot_since_genesis)
+        .or(query.as_ref().and_then(|q| q.global_slot_since_genesis))
+    {
+        let mut skipped = 0;
+        for state_hash in db.get_blocks_at_slot(global_slot)?.iter() {
+            let pcb = get_block(db, state_hash);
+
+            if let Some(block) = precomputed_matches_query(db, &query, &pcb, counts) {
+                if skipped < offset {
+                    skipped += 1;
+                } else {
+                    blocks.push(block);
+                    if blocks.len() >= limit {
+                        break;
+                    }
+                }
+            }
+        }
+
+        return Ok(blocks);
+    }
+
+    // coinbase receiver query
+    if let Some(coinbase_receiver) = query.as_ref().and_then(|q| {
+        q.coinbase_receiver
+            .as_ref()
+            .and_then(|cb| cb.public_key.as_ref())
+    }) {
+        // validate coinbase receiver
+        let coinbase_receiver = match PublicKey::new(coinbase_receiver) {
+            Ok(coinbase_receiver) => coinbase_receiver,
+            Err(_) => {
+                return Err(async_graphql::Error::new(format!(
+                    "Invalid coinbase receiver public key: {}",
+                    coinbase_receiver
+                )))
+            }
+        };
+
+        let start = coinbase_receiver.0.as_bytes();
+        let mut end = [0; PublicKey::LEN + U32_LEN];
+        end[..PublicKey::LEN].copy_from_slice(start);
+        end[PublicKey::LEN..].copy_from_slice(&u32::MAX.to_be_bytes());
+
+        let iter = match sort_by {
+            BlockHeightAsc | GlobalSlotAsc => {
+                db.coinbase_receiver_block_height_iterator(From(start, Forward))
+            }
+            BlockHeightDesc | GlobalSlotDesc => {
+                db.coinbase_receiver_block_height_iterator(From(&end, Reverse))
+            }
+        };
+
+        let mut skipped = 0;
         for (key, _) in iter.flatten() {
+            if key[..PublicKey::LEN] != *coinbase_receiver.0.as_bytes() {
+                break;
+            }
+
             // avoid deserializing PCB if possible
             let state_hash = state_hash_suffix(&key)?;
-            if let Some(query_canonicity) = query.as_ref().and_then(|q| q.canonical.or(q.in_best_chain)) {
+            if let Some(query_canonicity) =
+                query.as_ref().and_then(|q| q.canonical.or(q.in_best_chain))
+            {
+                if get_block_canonicity(db, &state_hash) != query_canonicity {
+                    continue;
+                }
+            }
+
+            let pcb = get_block(db, &state_hash);
+            if let Some(block) = precomputed_matches_query(db, &query, &pcb, counts) {
+                if skipped < offset {
+                    skipped += 1;
+                } else {
+                    blocks.push(block);
+                    if blocks.len() >= limit {
+                        break;
+                    }
+                }
+            }
+        }
+
+        return Ok(blocks);
+    }
+
+    // creator account query
+    if let Some(creator) = query.as_ref().and_then(|q| {
+        q.creator_account
+            .as_ref()
+            .and_then(|cb| cb.public_key.as_ref())
+    }) {
+        // validate creator
+        let creator = match PublicKey::new(creator) {
+            Ok(creator) => creator,
+            Err(_) => {
+                return Err(async_graphql::Error::new(format!(
+                    "Invalid creator public key: {}",
+                    creator
+                )))
+            }
+        };
+
+        // properly set the upper bound for block height
+        let upper_bound = match (
+            query.as_ref().and_then(|q| q.block_height_lt),
+            query.as_ref().and_then(|q| q.block_height_lte),
+        ) {
+            (Some(lt), Some(lte)) => std::cmp::min(lte, lt - 1),
+            (Some(lt), None) => lt - 1,
+            (None, Some(lte)) => lte,
+            (None, None) => u32::MAX,
+        };
+
+        let start = creator.0.as_bytes();
+        let mut end = [0; PublicKey::LEN + U32_LEN];
+        end[..PublicKey::LEN].copy_from_slice(start);
+        end[PublicKey::LEN..].copy_from_slice(&upper_bound.to_be_bytes());
+
+        let iter = match sort_by {
+            BlockHeightAsc | GlobalSlotAsc => {
+                db.block_creator_block_height_iterator(From(start, Forward))
+            }
+            BlockHeightDesc | GlobalSlotDesc => {
+                db.block_creator_block_height_iterator(From(&end, Reverse))
+            }
+        };
+
+        let mut skipped = 0;
+        for (key, _) in iter.flatten() {
+            if key[..PublicKey::LEN] != *creator.0.as_bytes() {
+                break;
+            }
+
+            // avoid deserializing PCB if possible
+            let state_hash = state_hash_suffix(&key)?;
+            if let Some(query_canonicity) =
+                query.as_ref().and_then(|q| q.canonical.or(q.in_best_chain))
+            {
+                if get_block_canonicity(db, &state_hash) != query_canonicity {
+                    continue;
+                }
+            }
+
+            let pcb = get_block(db, &state_hash);
+            if let Some(block) = precomputed_matches_query(db, &query, &pcb, counts) {
+                if skipped < offset {
+                    skipped += 1;
+                } else {
+                    blocks.push(block);
+                    if blocks.len() >= limit {
+                        break;
+                    }
+                }
+            }
+        }
+
+        return Ok(blocks);
+    }
+
+    // block height bounded query
+    if query.as_ref().is_some_and(|q| {
+        q.block_height_gt.is_some()
+            || q.block_height_gte.is_some()
+            || q.block_height_lt.is_some()
+            || q.block_height_lte.is_some()
+    }) {
+        let (min, max) = {
+            let BlockQueryInput {
+                block_height_gt,
+                block_height_gte,
+                block_height_lt,
+                block_height_lte,
+                ..
+            } = query.as_ref().expect("query will contain a value");
+            let min_bound = match (*block_height_gte, *block_height_gt) {
+                (Some(gte), Some(gt)) => std::cmp::max(gte, gt + 1),
+                (Some(gte), None) => gte,
+                (None, Some(gt)) => gt + 1,
+                (None, None) => 1,
+            };
+
+            let max_bound = match (*block_height_lte, *block_height_lt) {
+                (Some(lte), Some(lt)) => std::cmp::min(lte, lt - 1),
+                (Some(lte), None) => lte,
+                (None, Some(lt)) => lt - 1,
+                (None, None) => db.get_best_block_height()?.unwrap(),
+            };
+            (min_bound, max_bound)
+        };
+
+        // min/max block height BE bytes & iterator mode
+        let start = min.to_be_bytes();
+        let end = (max + 1).to_be_bytes();
+        let mode = match sort_by {
+            BlockHeightAsc => From(&start, Forward),
+            _ => From(&end, Reverse),
+        };
+
+        let mut skipped = 0;
+        for (key, _) in db.blocks_height_iterator(mode).flatten() {
+            let height = block_u32_prefix_from_key(&key)?;
+
+            // out of bounds
+            if height < min || height > max {
+                break;
+            }
+
+            // avoid deserializing PCB if possible
+            let state_hash = state_hash_suffix(&key)?;
+            if let Some(query_canonicity) =
+                query.as_ref().and_then(|q| q.canonical.or(q.in_best_chain))
+            {
                 if get_block_canonicity(db, &state_hash) != query_canonicity {
                     continue;
                 }
@@ -506,15 +461,138 @@ impl BlocksQueryRoot {
             let pcb = get_block(db, &state_hash);
             if let Some(block_with_canonicity) = precomputed_matches_query(db, &query, &pcb, counts)
             {
+                if skipped < offset {
+                    skipped += 1;
+                } else {
+                    blocks.push(block_with_canonicity);
+                    if blocks.len() >= limit {
+                        break;
+                    }
+                }
+            }
+        }
+
+        reorder(db, &mut blocks, sort_by);
+        return Ok(blocks);
+    }
+
+    // global slot bounded query
+    let consensus_state = query
+        .as_ref()
+        .and_then(|f| f.protocol_state.as_ref())
+        .and_then(|f| f.consensus_state.as_ref());
+    if consensus_state.is_some_and(|q| {
+        q.slot_since_genesis_gt.is_some()
+            || q.slot_since_genesis_gte.is_some()
+            || q.slot_since_genesis_lt.is_some()
+            || q.slot_since_genesis_lte.is_some()
+    }) {
+        let (min, max) = {
+            let BlockProtocolStateConsensusStateQueryInput {
+                slot_since_genesis_lte,
+                slot_since_genesis_lt,
+                slot_since_genesis_gte,
+                slot_since_genesis_gt,
+                ..
+            } = consensus_state
+                .as_ref()
+                .expect("consensus will have a value");
+            let min_bound = match (*slot_since_genesis_gte, *slot_since_genesis_gt) {
+                (Some(gte), Some(gt)) => std::cmp::max(gte, gt + 1),
+                (Some(gte), None) => gte,
+                (None, Some(gt)) => gt + 1,
+                (None, None) => 0,
+            };
+
+            let max_bound = match (*slot_since_genesis_lte, *slot_since_genesis_lt) {
+                (Some(lte), Some(lt)) => std::cmp::min(lte, lt - 1),
+                (Some(lte), None) => lte,
+                (None, Some(lt)) => lt - 1,
+                (None, None) => db.get_best_block_global_slot()?.unwrap(),
+            };
+            (min_bound, max_bound)
+        };
+
+        // min/max global slot BE bytes & iterator mode
+        let start = min.to_be_bytes();
+        let end = (max + 1).to_be_bytes();
+        let mode = match sort_by {
+            GlobalSlotAsc => From(&start, Forward),
+            _ => From(&end, Reverse),
+        };
+
+        let mut skipped = 0;
+        for (key, _) in db.blocks_global_slot_iterator(mode).flatten() {
+            let slot = block_u32_prefix_from_key(&key)?;
+
+            // out of bounds
+            if slot < min || slot > max {
+                break;
+            }
+
+            // avoid deserializing PCB if possible
+            let state_hash = state_hash_suffix(&key)?;
+            if let Some(query_canonicity) =
+                query.as_ref().and_then(|q| q.canonical.or(q.in_best_chain))
+            {
+                if get_block_canonicity(db, &state_hash) != query_canonicity {
+                    continue;
+                }
+            }
+
+            let pcb = get_block(db, &state_hash);
+            if let Some(block_with_canonicity) = precomputed_matches_query(db, &query, &pcb, counts)
+            {
+                if skipped < offset {
+                    skipped += 1;
+                } else {
+                    blocks.push(block_with_canonicity);
+                    if blocks.len() >= limit {
+                        break;
+                    }
+                }
+            }
+        }
+
+        reorder(db, &mut blocks, sort_by);
+        return Ok(blocks);
+    }
+
+    // default query handler
+    let start = 0u32.to_be_bytes();
+    let end = u32::MAX.to_be_bytes();
+    let iter = match sort_by {
+        BlockHeightAsc => db.blocks_height_iterator(From(&start, Forward)),
+        BlockHeightDesc => db.blocks_height_iterator(From(&end, Reverse)),
+        GlobalSlotAsc => db.blocks_global_slot_iterator(From(&start, Forward)),
+        GlobalSlotDesc => db.blocks_global_slot_iterator(From(&end, Reverse)),
+    };
+
+    let mut skipped = 0;
+    for (key, _) in iter.flatten() {
+        // avoid deserializing PCB if possible
+        let state_hash = state_hash_suffix(&key)?;
+        if let Some(query_canonicity) = query.as_ref().and_then(|q| q.canonical.or(q.in_best_chain))
+        {
+            if get_block_canonicity(db, &state_hash) != query_canonicity {
+                continue;
+            }
+        }
+
+        let pcb = get_block(db, &state_hash);
+        if let Some(block_with_canonicity) = precomputed_matches_query(db, &query, &pcb, counts) {
+            if skipped < offset {
+                skipped += 1;
+            } else {
                 blocks.push(block_with_canonicity);
                 if blocks.len() >= limit {
                     break;
                 }
             }
         }
-
-        Ok(blocks)
     }
+
+    Ok(blocks)
 }
 
 impl BlockQueryInput {
