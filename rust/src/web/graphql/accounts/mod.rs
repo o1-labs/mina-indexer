@@ -192,6 +192,24 @@ pub struct AccountWithMeta {
     username: String,
 }
 
+/// Deserialize one stored ledger account and test it against `query`, returning
+/// the account when it matches (`None` otherwise). Single source of truth for the
+/// account filter, shared by the `accounts` list resolver and the `accountsCount`
+/// count resolver so a page and its total can never disagree. `query == None`
+/// matches every account. Errors on a corrupt stored record (propagated, as the
+/// list path did before).
+fn account_matches(
+    query: Option<&AccountQueryInput>,
+    db: &std::sync::Arc<IndexerStore>,
+    value: &[u8],
+) -> Result<Option<account::Account>> {
+    let account =
+        serde_json::from_slice::<account::Account>(value)?.deduct_mina_account_creation_fee();
+    let username = db.get_username(&account.public_key).ok().flatten().map(|u| u.0);
+    let matches = query.is_none_or(|q| q.matches(&account, username.as_ref()));
+    Ok(matches.then_some(account))
+}
+
 #[derive(Default)]
 pub struct AccountQueryRoot;
 
@@ -204,6 +222,9 @@ impl AccountQueryRoot {
         query: Option<AccountQueryInput>,
         sort_by: Option<AccountSortByInput>,
         #[graphql(default = 100)] limit: usize,
+        // `offset`: matching accounts to skip before `limit` -- pages the result
+        // set. Pair with `accountsCount(query)` for total-count / page math.
+        #[graphql(default = 0)] offset: usize,
     ) -> Result<Vec<AccountWithMeta>> {
         use AccountSortByInput::*;
 
@@ -252,7 +273,7 @@ impl AccountQueryRoot {
             return query
                 .as_ref()
                 .unwrap()
-                .token_query_handler(db, token as &str, sort_by, limit);
+                .token_query_handler(db, token as &str, sort_by, limit, offset);
         }
 
         let mode = match sort_by {
@@ -268,29 +289,85 @@ impl AccountQueryRoot {
                 .flatten(),
         };
         let mut accounts = Vec::with_capacity(limit);
+        let mut skipped = 0;
 
         for (_, value) in iter {
             if accounts.len() >= limit {
                 break;
             }
 
-            let account = serde_json::from_slice::<account::Account>(&value)?
-                .deduct_mina_account_creation_fee();
-            let username = match db.get_username(&account.public_key) {
-                Ok(None) | Err(_) => None,
-                Ok(Some(username)) => Some(username.0),
-            };
-
-            if query
-                .as_ref()
-                .is_none_or(|q| q.matches(&account, username.as_ref()))
-            {
-                let account_with_meta = AccountWithMeta::new(db, account);
-                accounts.push(account_with_meta);
+            // Same filter as `accountsCount` (shared `account_matches`), so the
+            // page and the total can't drift.
+            if let Some(account) = account_matches(query.as_ref(), db, &value)? {
+                if skipped < offset {
+                    skipped += 1;
+                    continue;
+                }
+                accounts.push(AccountWithMeta::new(db, account));
             }
         }
 
         Ok(accounts)
+    }
+
+    /// Total number of accounts matching `query` -- the count companion to
+    /// `accounts`, for a gateway to compute total pages. Uses the same filter as
+    /// `accounts` (shared `account_matches`) so the two can never disagree.
+    #[graphql(cache_control(max_age = 3600))]
+    async fn accounts_count(
+        &self,
+        ctx: &Context<'_>,
+        query: Option<AccountQueryInput>,
+    ) -> Result<u32> {
+        let db = db(ctx);
+
+        // public-key query: exactly the account, if it exists and matches (0 or 1).
+        if let Some(public_key) = query.as_ref().and_then(|q| q.public_key.as_ref()) {
+            let pk = PublicKey::new(public_key).map_err(|_| {
+                async_graphql::Error::new(format!("Invalid public key: {}", public_key))
+            })?;
+            let token = query.as_ref().and_then(|q| q.token.as_ref()).map_or_else(
+                || Ok(TokenAddress::default()),
+                |t| {
+                    TokenAddress::new(t)
+                        .ok_or_else(|| async_graphql::Error::new(format!("Invalid token: {t}")))
+                },
+            )?;
+            let username = db.get_username(&pk).ok().flatten().map(|u| u.0);
+            let count = db
+                .get_best_account_display(&pk, &token)?
+                .filter(|acct| {
+                    query
+                        .as_ref()
+                        .is_none_or(|q| q.matches(acct, username.as_ref()))
+                })
+                .is_some();
+            return Ok(count as u32);
+        }
+
+        // token query: count accounts on that token that match.
+        if let Some(token) = query.as_ref().and_then(|q| q.token.as_ref()) {
+            return query.as_ref().unwrap().token_count_handler(db, token);
+        }
+
+        // default: count all matching accounts across the ledger. Iteration order
+        // is irrelevant for a count, so scan from the start.
+        let iter = match query.as_ref().and_then(|q| q.zkapp) {
+            None | Some(false) => db
+                .best_ledger_account_balance_iterator(IteratorMode::Start)
+                .flatten(),
+            Some(true) => db
+                .zkapp_best_ledger_account_balance_iterator(IteratorMode::Start)
+                .flatten(),
+        };
+
+        let mut count = 0u32;
+        for (_, value) in iter {
+            if account_matches(query.as_ref(), db, &value)?.is_some() {
+                count += 1;
+            }
+        }
+        Ok(count)
     }
 }
 
@@ -394,6 +471,7 @@ impl AccountQueryInput {
         token: &str,
         sort_by: AccountSortByInput,
         limit: usize,
+        offset: usize,
     ) -> Result<Vec<AccountWithMeta>> {
         // validate token
         if TokenAddress::new(token).is_none() {
@@ -428,6 +506,7 @@ impl AccountQueryInput {
                 .flatten(),
         };
         let mut accounts = Vec::with_capacity(limit);
+        let mut skipped = 0;
 
         // iterate
         for (key, value) in iter {
@@ -436,22 +515,49 @@ impl AccountQueryInput {
                 break;
             }
 
-            let account = serde_json::from_slice::<account::Account>(&value)?
-                .deduct_mina_account_creation_fee();
-
-            let pk = &account.public_key;
-            let username = match db.get_username(pk) {
-                Ok(None) | Err(_) => None,
-                Ok(Some(username)) => Some(username.0),
-            };
-
-            if self.matches(&account, username.as_ref()) {
-                let account_with_meta = AccountWithMeta::new(db, account);
-                accounts.push(account_with_meta);
+            if let Some(account) = account_matches(Some(self), db, &value)? {
+                if skipped < offset {
+                    skipped += 1;
+                    continue;
+                }
+                accounts.push(AccountWithMeta::new(db, account));
             }
         }
 
         Ok(accounts)
+    }
+
+    /// Count of accounts on `token` matching this query -- the count companion to
+    /// `token_query_handler`, sharing `account_matches`.
+    fn token_count_handler(&self, db: &std::sync::Arc<IndexerStore>, token: &str) -> Result<u32> {
+        if TokenAddress::new(token).is_none() {
+            return Err(async_graphql::Error::new(format!(
+                "Invalid token address: {}",
+                token
+            )));
+        }
+
+        let mut start = [0u8; TokenAddress::LEN + U64_LEN + 1];
+        start[..TokenAddress::LEN].copy_from_slice(token.as_bytes());
+        let mode = IteratorMode::From(&start, speedb::Direction::Forward);
+
+        let iter = match self.zkapp {
+            None | Some(false) => db.best_ledger_account_balance_iterator(mode).flatten(),
+            Some(true) => db
+                .zkapp_best_ledger_account_balance_iterator(mode)
+                .flatten(),
+        };
+
+        let mut count = 0u32;
+        for (key, value) in iter {
+            if key[..TokenAddress::LEN] != *token.as_bytes() {
+                break;
+            }
+            if account_matches(Some(self), db, &value)?.is_some() {
+                count += 1;
+            }
+        }
+        Ok(count)
     }
 }
 
@@ -572,5 +678,93 @@ impl From<(Permission, String)> for PermissionVk {
             permission: value.0.to_string(),
             number: value.1,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        base::{amount::Amount, public_key::PublicKey},
+        ledger::{account::Account, store::best::BestLedgerStore, token::TokenAddress},
+        store::IndexerStore,
+        web::graphql::build_schema,
+    };
+    use quickcheck::{Arbitrary, Gen};
+    use std::{collections::HashSet, sync::Arc};
+    use tempfile::TempDir;
+
+    // Seed `n` best-ledger accounts with distinct balances (i * 1 MINA) and
+    // return their public keys.
+    fn seed_accounts(store: &Arc<IndexerStore>, n: u64) -> Vec<PublicKey> {
+        let g = &mut Gen::new(1000);
+        let token = TokenAddress::default();
+        (1..=n)
+            .map(|i| {
+                let pk = PublicKey::arbitrary(g);
+                let account = Account {
+                    public_key: pk.clone(),
+                    balance: Amount(i * 1_000_000_000),
+                    token: Some(token.clone()),
+                    // already paid, so the display balance == the seeded balance
+                    // (no creation-fee deduction) and the filters are predictable
+                    creation_fee_paid: true,
+                    ..Default::default()
+                };
+                store
+                    .update_best_account(&pk, &token, None, Some(account), true)
+                    .unwrap();
+                pk
+            })
+            .collect()
+    }
+
+    async fn count(
+        schema: &async_graphql::Schema<
+            crate::web::graphql::Root,
+            async_graphql::EmptyMutation,
+            async_graphql::EmptySubscription,
+        >,
+        query_arg: &str,
+    ) -> u64 {
+        let q = format!("{{ accountsCount{query_arg} }}");
+        let res = schema.execute(q).await;
+        assert!(res.errors.is_empty(), "accountsCount errored: {:?}", res.errors);
+        res.data.into_json().unwrap()["accountsCount"]
+            .as_u64()
+            .unwrap()
+    }
+
+    // `accountsCount` is the total-count companion to `accounts`, sharing the same
+    // `account_matches` filter so a page and its total can't drift. It doesn't
+    // build `AccountWithMeta` (which needs a seeded genesis/best block), so it is
+    // unit-testable directly; end-to-end offset paging of the `accounts` list is
+    // covered against a real seeded chain by the e2e/hurl integration tests.
+    #[tokio::test]
+    async fn accounts_count_totals_and_filters() {
+        let dir = TempDir::new().unwrap();
+        let store = Arc::new(IndexerStore::new(dir.path(), true).unwrap());
+        // balances 1..=5 MINA
+        let pks = seed_accounts(&store, 5);
+        assert_eq!(pks.iter().collect::<HashSet<_>>().len(), 5, "distinct pks");
+        let schema = build_schema(store, 0, 0, 0, false);
+
+        // no filter -> every account
+        assert_eq!(count(&schema, "").await, 5);
+
+        // balance filter narrows the count. balances are 1e9..=5e9; balance_gte 3e9
+        // keeps {3,4,5} MINA = 3 accounts. Uses the same predicate the list uses.
+        assert_eq!(count(&schema, "(query: { balance_gte: 3000000000 })").await, 3);
+        assert_eq!(count(&schema, "(query: { balance_gte: 6000000000 })").await, 0);
+        assert_eq!(count(&schema, "(query: { balance_lte: 2000000000 })").await, 2);
+
+        // a valid but unseeded public key -> zero (present-or-not, count is 0/1)
+        assert_eq!(
+            count(
+                &schema,
+                "(query: { publicKey: \"B62qmK2RecMoNXcqvt6K9k7yKG81qhyMoXhCfZ15SXNa5ikJaJr3urk\" })"
+            )
+            .await,
+            0
+        );
     }
 }
