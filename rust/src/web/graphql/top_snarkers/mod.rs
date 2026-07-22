@@ -5,7 +5,7 @@ use crate::{
     base::{public_key::PublicKey, state_hash::StateHash, username::Username},
     block::store::BlockStore,
     snark_work::store::SnarkStore,
-    store::IndexerStore,
+    store::{username::UsernameStore, IndexerStore},
     utility::store::common::{u64_from_be_bytes, U32_LEN, U64_LEN},
 };
 use async_graphql::{Context, Enum, InputObject, Object, Result, SimpleObject};
@@ -107,6 +107,9 @@ impl TopSnarkersQueryRoot {
         query: Option<TopSnarkersQueryInput>,
         sort_by: Option<TopSnarkersSortByInput>,
         #[graphql(default = 100)] limit: usize,
+        // `offset`: matching snarkers to skip before `limit`. Pair with
+        // `topSnarkersCount(query)` for total-count / page math.
+        #[graphql(default = 0)] offset: usize,
     ) -> Result<Vec<TopSnarker>> {
         let limit = limit.min(crate::constants::GRAPHQL_MAX_PAGE_SIZE);
         let db = db(ctx);
@@ -136,7 +139,36 @@ impl TopSnarkersQueryRoot {
             &genesis_state_hash,
             sort_by.unwrap_or_default(),
             limit,
+            offset,
         )
+    }
+
+    /// Total snarkers matching `query` in the epoch -- the count companion to
+    /// `topSnarkers`. Counts the same epoch-region rows (with the same pk/username
+    /// filter) without building each `TopSnarker`, so it stays cheap.
+    #[graphql(cache_control(max_age = 3600))]
+    async fn top_snarkers_count(
+        &self,
+        ctx: &Context<'_>,
+        query: Option<TopSnarkersQueryInput>,
+    ) -> Result<u32> {
+        let db = db(ctx);
+        let epoch = query
+            .as_ref()
+            .and_then(|q| q.epoch)
+            .unwrap_or_else(|| db.get_current_epoch().expect("current epoch"));
+        let genesis_state_hash = query
+            .as_ref()
+            .and_then(|q| q.genesis_state_hash.clone())
+            .or_else(|| {
+                db.get_best_block_genesis_hash()
+                    .expect("best block genesis state hash")
+                    .map(|g| g.0)
+            });
+        let genesis_state_hash = StateHash::new(genesis_state_hash.unwrap())?;
+
+        TopSnarkersQueryInput::verify_inputs(query.as_ref())?;
+        TopSnarkersQueryInput::count_handler(db, query.as_ref(), epoch, &genesis_state_hash)
     }
 }
 
@@ -148,10 +180,12 @@ impl TopSnarkersQueryInput {
         genesis_state_hash: &StateHash,
         sort_by: TopSnarkersSortByInput,
         limit: usize,
+        offset: usize,
     ) -> Result<Vec<TopSnarker>> {
         use TopSnarkersSortByInput::*;
 
         let mut snarkers = vec![];
+        let mut skipped = 0;
         let iter = make_iterator(db, epoch, genesis_state_hash, sort_by);
 
         for (key, _) in iter.flatten() {
@@ -217,11 +251,60 @@ impl TopSnarkersQueryInput {
             };
 
             if TopSnarkersQueryInput::matches(query, &top_snarker) {
+                if skipped < offset {
+                    skipped += 1;
+                    continue;
+                }
                 snarkers.push(top_snarker);
             }
         }
 
         Ok(snarkers)
+    }
+
+    /// Count of snarkers matching `query` in the epoch region. Derives the pk from
+    /// the key bytes and only looks up a username when the query filters on one, so
+    /// it never builds a `TopSnarker`.
+    fn count_handler(
+        db: &Arc<IndexerStore>,
+        query: Option<&Self>,
+        epoch: u32,
+        genesis_state_hash: &StateHash,
+    ) -> Result<u32> {
+        let want_pk = query.and_then(|q| q.public_key.as_ref());
+        let want_username = query.and_then(|q| q.username.as_ref());
+
+        // Any epoch-scoped iterator covers the same pk set; use total-fees.
+        let iter = make_iterator(
+            db,
+            epoch,
+            genesis_state_hash,
+            TopSnarkersSortByInput::TotalFeesDesc,
+        );
+
+        let mut count = 0u32;
+        for (key, _) in iter.flatten() {
+            if key[..StateHash::LEN] != *genesis_state_hash.0.as_bytes()
+                || key[StateHash::LEN..][..U32_LEN] != epoch.to_be_bytes()
+            {
+                break;
+            }
+
+            let pk = PublicKey::from_bytes(&key[StateHash::LEN..][U32_LEN..][U64_LEN..])?;
+            if let Some(want) = want_pk {
+                if pk.0 != *want {
+                    continue;
+                }
+            }
+            if let Some(want) = want_username {
+                match db.get_username(&pk)? {
+                    Some(u) if u.0 == *want => {}
+                    _ => continue,
+                }
+            }
+            count += 1;
+        }
+        Ok(count)
     }
 
     fn verify_inputs(query: Option<&Self>) -> Result<()> {
