@@ -1,4 +1,6 @@
 [toolchain]
 channel = "1.85.1"
-components = ["rust-src", "rust-analyzer"]
+# llvm-tools-preview provides llvm-cov / llvm-profdata for `cargo llvm-cov`
+# (coverage). rust-src / rust-analyzer are for editor tooling.
+components = ["rust-src", "rust-analyzer", "llvm-tools-preview"]
 profile = "default"
