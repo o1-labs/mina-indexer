@@ -9,7 +9,7 @@ use crate::{
     base::{amount::Amount, public_key::PublicKey, state_hash::StateHash, username::Username},
     block::store::BlockStore,
     ledger::store::staking::StakingLedgerStore,
-    store::IndexerStore,
+    store::{username::UsernameStore, IndexerStore},
     utility::store::common::{u32_from_be_bytes, U32_LEN},
 };
 use async_graphql::{Context, Enum, InputObject, Object, Result, SimpleObject};
@@ -85,6 +85,9 @@ impl TopStakersQueryRoot {
         query: Option<TopStakersQueryInput>,
         sort_by: Option<TopStakersSortByInput>,
         #[graphql(default = 100)] limit: usize,
+        // `offset`: matching stakers to skip before `limit`. Pair with
+        // `topStakersCount(query)` for total-count / page math.
+        #[graphql(default = 0)] offset: usize,
     ) -> Result<Vec<TopStakerAccount>> {
         let limit = limit.min(crate::constants::GRAPHQL_MAX_PAGE_SIZE);
         let db = db(ctx);
@@ -127,11 +130,42 @@ impl TopStakersQueryRoot {
             sort_by.unwrap_or_default(),
             total_currency,
             limit,
+            offset,
         )
+    }
+
+    /// Total stakers matching `query` in the epoch -- the count companion to
+    /// `topStakers`, for a gateway to compute total pages. Counts the same rows
+    /// `topStakers` would return (same epoch region + `matches` filter), but
+    /// without building each `TopStakerAccount`, so it stays cheap.
+    #[graphql(cache_control(max_age = 3600))]
+    async fn top_stakers_count(
+        &self,
+        ctx: &Context<'_>,
+        query: Option<TopStakersQueryInput>,
+    ) -> Result<u32> {
+        let db = db(ctx);
+        let epoch = query.as_ref().map_or_else(
+            || db.get_current_epoch().expect("current epoch"),
+            |q| q.epoch,
+        );
+        let genesis_state_hash = query
+            .as_ref()
+            .and_then(|q| q.genesis_state_hash.clone())
+            .or_else(|| {
+                db.get_best_block_genesis_hash()
+                    .expect("best block genesis state hash")
+                    .map(|g| g.0)
+            });
+        let genesis_state_hash = StateHash::new(genesis_state_hash.unwrap())?;
+
+        TopStakersQueryInput::verify_inputs(query.as_ref())?;
+        TopStakersQueryInput::count_handler(db, query.as_ref(), epoch, &genesis_state_hash)
     }
 }
 
 impl TopStakersQueryInput {
+    #[allow(clippy::too_many_arguments)]
     fn handler(
         db: &Arc<IndexerStore>,
         query: Option<&Self>,
@@ -140,6 +174,7 @@ impl TopStakersQueryInput {
         sort_by: TopStakersSortByInput,
         total_currency: u64,
         limit: usize,
+        offset: usize,
     ) -> Result<Vec<TopStakerAccount>> {
         use TopStakersSortByInput::*;
 
@@ -160,6 +195,7 @@ impl TopStakersQueryInput {
         };
 
         let mut top_stakers = Vec::new();
+        let mut skipped = 0;
         for (key, _) in iter.flatten() {
             if key[..StateHash::LEN] != *genesis_state_hash.0.as_bytes()
                 || key[StateHash::LEN..][..U32_LEN] != epoch.to_be_bytes()
@@ -224,11 +260,62 @@ impl TopStakersQueryInput {
             );
 
             if TopStakersQueryInput::matches(query, &top_staker) {
+                if skipped < offset {
+                    skipped += 1;
+                    continue;
+                }
                 top_stakers.push(top_staker);
             }
         }
 
         Ok(top_stakers)
+    }
+
+    /// Count of stakers matching `query` in the epoch region. Applies the same
+    /// pk/username filter as `matches`, but derives the pk from the key bytes and
+    /// only looks up a username when the query filters on one -- so it never builds
+    /// a `TopStakerAccount`.
+    fn count_handler(
+        db: &Arc<IndexerStore>,
+        query: Option<&Self>,
+        epoch: u32,
+        genesis_state_hash: &StateHash,
+    ) -> Result<u32> {
+        let want_pk = query.and_then(|q| q.public_key.as_ref());
+        let want_username = query.and_then(|q| q.username.as_ref());
+
+        // Iterate the canonical-blocks-produced index for this epoch region; the
+        // set of pks is the same regardless of sort direction.
+        let iter = db.canonical_epoch_blocks_produced_iterator(
+            Some(epoch),
+            Some(genesis_state_hash),
+            Direction::Reverse,
+        );
+
+        let mut count = 0u32;
+        for (key, _) in iter.flatten() {
+            if key[..StateHash::LEN] != *genesis_state_hash.0.as_bytes()
+                || key[StateHash::LEN..][..U32_LEN] != epoch.to_be_bytes()
+            {
+                break;
+            }
+
+            let pk = PublicKey::from_bytes(&key[StateHash::LEN..][U32_LEN..][U32_LEN..])?;
+
+            if let Some(want) = want_pk {
+                if pk.0 != *want {
+                    continue;
+                }
+            }
+            if let Some(want) = want_username {
+                match db.get_username(&pk)? {
+                    Some(u) if u.0 == *want => {}
+                    _ => continue,
+                }
+            }
+            count += 1;
+        }
+        Ok(count)
     }
 
     fn verify_inputs(query: Option<&Self>) -> Result<()> {
