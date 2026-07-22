@@ -204,93 +204,111 @@ impl InternalCommandQueryRoot {
         query: Option<InternalCommandQueryInput>,
         sort_by: Option<InternalCommandSortByInput>,
         #[graphql(default = 100)] limit: usize,
+        #[graphql(default = 0)] offset: usize,
     ) -> Result<Vec<InternalCommandWithMeta>> {
         let limit = limit.min(crate::constants::GRAPHQL_MAX_PAGE_SIZE);
         let db = db(ctx);
-        let sort_by = sort_by.unwrap_or_default();
+        dispatch(db, query, sort_by.unwrap_or_default(), limit, offset)
+    }
 
-        let epoch_num_internal_commands = db.get_internal_commands_epoch_count(None, None)?;
-        let total_num_internal_commands = db.get_internal_commands_total_count()?;
+    /// Total internal commands matching `query` -- the count companion to
+    /// `internalCommands`, for total-page math. Runs the same dispatch (same
+    /// filters), uncapped and unpaged, and counts the result so the count can
+    /// never disagree with the list.
+    #[graphql(cache_control(max_age = 3600))]
+    async fn internal_commands_count(
+        &self,
+        ctx: &Context<'_>,
+        query: Option<InternalCommandQueryInput>,
+        sort_by: Option<InternalCommandSortByInput>,
+    ) -> Result<u32> {
+        let db = db(ctx);
+        let all = dispatch(db, query, sort_by.unwrap_or_default(), usize::MAX, 0)?;
+        Ok(all.len() as u32)
+    }
+}
 
-        // state_hash query
-        if let Some(state_hash) = query
-            .as_ref()
-            .and_then(|q| q.block_state_hash.as_ref())
-            .and_then(|q| q.state_hash.as_ref())
-        {
-            // validate state hash
-            let state_hash = match StateHash::new(state_hash) {
-                Ok(state_hash) => state_hash,
-                Err(_) => {
-                    return Err(async_graphql::Error::new(format!(
-                        "Invalid state hash: {}",
-                        state_hash
-                    )))
-                }
-            };
+/// Shared query dispatch for `internalCommands` / `internalCommandsCount`: routes
+/// to the state-hash / block-height / recipient / default handler by the query
+/// shape, so the list and the count always apply the same filters. `limit` and
+/// `offset` page the result (the count passes `usize::MAX` / `0`).
+fn dispatch(
+    db: &Arc<IndexerStore>,
+    query: Option<InternalCommandQueryInput>,
+    sort_by: InternalCommandSortByInput,
+    limit: usize,
+    offset: usize,
+) -> Result<Vec<InternalCommandWithMeta>> {
+    let epoch_num_internal_commands = db.get_internal_commands_epoch_count(None, None)?;
+    let total_num_internal_commands = db.get_internal_commands_total_count()?;
 
-            return Ok(get_internal_commands_for_state_hash(
-                db,
-                &query,
-                &state_hash,
-                sort_by,
-                limit,
-                epoch_num_internal_commands,
-                total_num_internal_commands,
-            ));
-        }
+    // state_hash query
+    if let Some(state_hash) = query
+        .as_ref()
+        .and_then(|q| q.block_state_hash.as_ref())
+        .and_then(|q| q.state_hash.as_ref())
+    {
+        let state_hash = StateHash::new(state_hash)
+            .map_err(|_| async_graphql::Error::new(format!("Invalid state hash: {}", state_hash)))?;
 
-        // block height bounded query
-        if query.as_ref().is_some_and(|q| {
-            q.block_height.is_some()
-                || q.block_height_gt.is_some()
-                || q.block_height_gte.is_some()
-                || q.block_height_lt.is_some()
-                || q.block_height_lte.is_some()
-        }) {
-            return Ok(block_height_bound_query_handler(
-                db,
-                query.as_ref(),
-                sort_by,
-                limit,
-                epoch_num_internal_commands,
-                total_num_internal_commands,
-            )?);
-        }
-
-        // recipient query
-        if let Some(recipient) = query.as_ref().and_then(|q| q.recipient.as_ref()) {
-            // validate recipient
-            let recipient = match PublicKey::new(recipient) {
-                Ok(recipient) => recipient,
-                Err(_) => {
-                    return Err(async_graphql::Error::new(format!(
-                        "Invalid recipient public key: {}",
-                        recipient
-                    )))
-                }
-            };
-
-            return Ok(recipient_query_handler(
-                db,
-                query.as_ref(),
-                recipient,
-                sort_by,
-                limit,
-                epoch_num_internal_commands,
-                total_num_internal_commands,
-            )?);
-        }
-
-        default_query_handler(
+        return Ok(get_internal_commands_for_state_hash(
             db,
-            query,
+            &query,
+            &state_hash,
             sort_by,
             limit,
+            offset,
             epoch_num_internal_commands,
             total_num_internal_commands,
-        )
+        ));
     }
+
+    // block height bounded query
+    if query.as_ref().is_some_and(|q| {
+        q.block_height.is_some()
+            || q.block_height_gt.is_some()
+            || q.block_height_gte.is_some()
+            || q.block_height_lt.is_some()
+            || q.block_height_lte.is_some()
+    }) {
+        return Ok(block_height_bound_query_handler(
+            db,
+            query.as_ref(),
+            sort_by,
+            limit,
+            offset,
+            epoch_num_internal_commands,
+            total_num_internal_commands,
+        )?);
+    }
+
+    // recipient query
+    if let Some(recipient) = query.as_ref().and_then(|q| q.recipient.as_ref()) {
+        let recipient = PublicKey::new(recipient).map_err(|_| {
+            async_graphql::Error::new(format!("Invalid recipient public key: {}", recipient))
+        })?;
+
+        return Ok(recipient_query_handler(
+            db,
+            query.as_ref(),
+            recipient,
+            sort_by,
+            limit,
+            offset,
+            epoch_num_internal_commands,
+            total_num_internal_commands,
+        )?);
+    }
+
+    default_query_handler(
+        db,
+        query,
+        sort_by,
+        limit,
+        offset,
+        epoch_num_internal_commands,
+        total_num_internal_commands,
+    )
 }
 
 impl InternalCommandQueryInput {
@@ -424,15 +442,18 @@ impl InternalCommand {
 // helpers //
 /////////////
 
+#[allow(clippy::too_many_arguments)]
 fn default_query_handler(
     db: &Arc<IndexerStore>,
     query: Option<InternalCommandQueryInput>,
     sort_by: InternalCommandSortByInput,
     limit: usize,
+    offset: usize,
     epoch_num_internal_commands: u32,
     total_num_internal_commands: u32,
 ) -> Result<Vec<InternalCommandWithMeta>> {
     let mut internal_commands = vec![];
+    let mut skipped = 0;
     let mode = match sort_by {
         InternalCommandSortByInput::BlockHeightAsc => IteratorMode::Start,
         InternalCommandSortByInput::BlockHeightDesc => IteratorMode::End,
@@ -476,6 +497,10 @@ fn default_query_handler(
             .as_ref()
             .is_none_or(|q| q.matches(&internal_command_with_meta))
         {
+            if skipped < offset {
+                skipped += 1;
+                continue;
+            }
             internal_commands.push(internal_command_with_meta);
         }
     }
@@ -483,12 +508,14 @@ fn default_query_handler(
     Ok(internal_commands)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn get_internal_commands_for_state_hash(
     db: &Arc<IndexerStore>,
     query: &Option<InternalCommandQueryInput>,
     state_hash: &StateHash,
     sort_by: InternalCommandSortByInput,
     limit: usize,
+    offset: usize,
     epoch_num_internal_commands: u32,
     total_num_internal_commands: u32,
 ) -> Vec<InternalCommandWithMeta> {
@@ -538,18 +565,23 @@ fn get_internal_commands_for_state_hash(
                 }
             }
 
-            internal_commands.truncate(limit);
             internal_commands
+                .into_iter()
+                .skip(offset)
+                .take(limit)
+                .collect()
         }
         Err(_) => vec![],
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn block_height_bound_query_handler(
     db: &Arc<IndexerStore>,
     query: Option<&InternalCommandQueryInput>,
     sort_by: InternalCommandSortByInput,
     limit: usize,
+    offset: usize,
     epoch_num_internal_commands: u32,
     total_num_internal_commands: u32,
 ) -> anyhow::Result<Vec<InternalCommandWithMeta>> {
@@ -597,6 +629,7 @@ fn block_height_bound_query_handler(
 
     // iterate
     let mut internal_commands = vec![];
+    let mut skipped = 0;
     for (key, value) in iter.flatten() {
         if internal_commands.len() >= limit {
             break;
@@ -633,6 +666,10 @@ fn block_height_bound_query_handler(
             .as_ref()
             .is_none_or(|q| q.matches(&internal_command_with_meta))
         {
+            if skipped < offset {
+                skipped += 1;
+                continue;
+            }
             internal_commands.push(internal_command_with_meta);
         }
     }
@@ -640,12 +677,14 @@ fn block_height_bound_query_handler(
     Ok(internal_commands)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn recipient_query_handler(
     db: &Arc<IndexerStore>,
     query: Option<&InternalCommandQueryInput>,
     recipient: PublicKey,
     sort_by: InternalCommandSortByInput,
     limit: usize,
+    offset: usize,
     epoch_num_internal_commands: u32,
     total_num_internal_commands: u32,
 ) -> anyhow::Result<Vec<InternalCommandWithMeta>> {
@@ -663,6 +702,7 @@ fn recipient_query_handler(
 
     // iterate
     let mut internal_commands = vec![];
+    let mut skipped = 0;
     for (key, value) in iter.flatten() {
         if key[..PublicKey::LEN] != pk_bytes || internal_commands.len() >= limit {
             // we've gone beyond our recipient or limit
@@ -698,6 +738,10 @@ fn recipient_query_handler(
         };
 
         if query.as_ref().is_none_or(|q| q.matches(&cmd)) {
+            if skipped < offset {
+                skipped += 1;
+                continue;
+            }
             internal_commands.push(cmd);
         }
     }
