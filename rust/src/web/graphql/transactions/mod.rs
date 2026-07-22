@@ -231,231 +231,287 @@ impl TransactionsQueryRoot {
         query: Option<TransactionQueryInput>,
         #[graphql(default = 100)] limit: usize,
         sort_by: Option<TransactionSortByInput>,
+        // `offset`: matching transactions to skip before `limit`. Pair with
+        // `transactionsCount(query)` for total-count / page math.
+        #[graphql(default = 0)] offset: usize,
     ) -> Result<Vec<Transaction>> {
         let limit = limit.min(crate::constants::GRAPHQL_MAX_PAGE_SIZE);
-        let db = db(ctx);
-        let num_commands = [
-            db.get_user_commands_epoch_count(None, None)?,
-            db.get_user_commands_total_count()?,
-            db.get_zkapp_commands_epoch_count(None, None)?,
-            db.get_zkapp_commands_total_count()?,
-        ];
+        transactions_dispatch(
+            db(ctx),
+            query,
+            sort_by.unwrap_or(TransactionSortByInput::BlockHeightDesc),
+            limit,
+            offset,
+        )
+    }
 
-        let sort_by = sort_by.unwrap_or(TransactionSortByInput::BlockHeightDesc);
-        let mut transactions = vec![];
+    /// Total transactions matching `query` -- the count companion to
+    /// `transactions`, for total-page math. Runs the same dispatch (same
+    /// filters), uncapped and unpaged, and counts the result so the count
+    /// can never disagree with the list.
+    #[graphql(cache_control(max_age = 3600))]
+    async fn transactions_count(
+        &self,
+        ctx: &Context<'_>,
+        query: Option<TransactionQueryInput>,
+        sort_by: Option<TransactionSortByInput>,
+    ) -> Result<u32> {
+        let all = transactions_dispatch(
+            db(ctx),
+            query,
+            sort_by.unwrap_or(TransactionSortByInput::BlockHeightDesc),
+            usize::MAX,
+            0,
+        )?;
+        Ok(all.len() as u32)
+    }
+}
 
-        ////////////////////
-        // txn hash query //
-        ////////////////////
+/// Shared query dispatch for `transactions` / `transactionsCount`: routes to
+/// one of the query paths (txn-hash, state-hash, block-height, sender/receiver,
+/// height-bounded, date/slot-bounded, token, default) by the query shape, so
+/// the list and count always apply the same filters. `limit` and `offset` page
+/// the result (the count passes `usize::MAX` / `0`).
+#[allow(clippy::too_many_lines)]
+fn transactions_dispatch(
+    db: &Arc<IndexerStore>,
+    query: Option<TransactionQueryInput>,
+    sort_by: TransactionSortByInput,
+    limit: usize,
+    offset: usize,
+) -> Result<Vec<Transaction>> {
+    let num_commands = [
+        db.get_user_commands_epoch_count(None, None)?,
+        db.get_user_commands_total_count()?,
+        db.get_zkapp_commands_epoch_count(None, None)?,
+        db.get_zkapp_commands_total_count()?,
+    ];
 
-        if let Some(txn_hash) = query.as_ref().and_then(|input| input.hash.as_ref()) {
-            let txn_hash = match TxnHash::new(txn_hash) {
-                Ok(txn_hash) => txn_hash,
-                Err(_) => {
-                    return Err(async_graphql::Error::new(format!(
-                        "Invalid txn hash: {}",
-                        txn_hash
-                    )))
+    let mut transactions = vec![];
+
+    ////////////////////
+    // txn hash query //
+    ////////////////////
+
+    if let Some(txn_hash) = query.as_ref().and_then(|input| input.hash.as_ref()) {
+        let txn_hash = match TxnHash::new(txn_hash) {
+            Ok(txn_hash) => txn_hash,
+            Err(_) => {
+                return Err(async_graphql::Error::new(format!(
+                    "Invalid txn hash: {}",
+                    txn_hash
+                )))
+            }
+        };
+
+        let query = query.expect("query input");
+        let mut skipped = 0;
+        if let Some(state_hashes) = db.get_user_command_state_hashes(&txn_hash)? {
+            for state_hash in state_hashes.iter() {
+                if transactions.len() >= limit {
+                    break;
                 }
-            };
 
-            let query = query.expect("query input");
-            if let Some(state_hashes) = db.get_user_command_state_hashes(&txn_hash)? {
-                for state_hash in state_hashes.iter() {
-                    if transactions.len() >= limit {
-                        break;
-                    }
+                if let Some(cmd) = db.get_user_command_state_hash(&txn_hash, state_hash)? {
+                    let txn = Transaction::new(cmd, db, num_commands);
 
-                    if let Some(cmd) = db.get_user_command_state_hash(&txn_hash, state_hash)? {
-                        let txn = Transaction::new(cmd, db, num_commands);
-
-                        if query.matches(&txn) {
+                    if query.matches(&txn) {
+                        if skipped < offset {
+                            skipped += 1;
+                        } else {
                             transactions.push(txn);
                         }
                     }
                 }
             }
-
-            return Ok(transactions);
         }
 
-        //////////////////////
-        // state hash query //
-        //////////////////////
+        return Ok(transactions);
+    }
 
-        if let Some(state_hash) = query
-            .as_ref()
-            .and_then(|input| input.block.as_ref())
-            .and_then(|block| block.state_hash.as_ref())
-        {
-            let state_hash = match StateHash::new(state_hash) {
-                Ok(state_hash) => state_hash,
-                Err(_) => {
-                    return Err(async_graphql::Error::new(format!(
-                        "Invalid state hash: {}",
-                        state_hash
-                    )))
-                }
-            };
+    //////////////////////
+    // state hash query //
+    //////////////////////
 
-            TransactionQueryInput::state_hash_query_handler(
-                &mut transactions,
-                db,
-                query.as_ref(),
-                sort_by,
-                &state_hash,
-                num_commands,
-                limit,
-            )?;
-
-            return Ok(transactions);
-        }
-
-        ////////////////////////
-        // block height query //
-        ////////////////////////
-
-        if query
-            .as_ref()
-            .and_then(|input| input.block_height)
-            .is_some()
-        {
-            TransactionQueryInput::block_height_query_handler(
-                &mut transactions,
-                db,
-                query.as_ref(),
-                sort_by,
-                num_commands,
-                limit,
-            )?;
-
-            return Ok(transactions);
-        }
-
-        ///////////////////////////
-        // sender/receiver query //
-        ///////////////////////////
-
-        if let Some((from, to)) = query.as_ref().map(|q| (q.from.as_ref(), q.to.as_ref())) {
-            if from.or(to).is_some() {
-                if from.map(|pk| !PublicKey::is_valid(pk)).unwrap_or_default() {
-                    return Err(async_graphql::Error::new(format!(
-                        "Invalid receiver public key: {}",
-                        from.unwrap()
-                    )));
-                }
-
-                if to.map(|pk| !PublicKey::is_valid(pk)).unwrap_or_default() {
-                    return Err(async_graphql::Error::new(format!(
-                        "Invalid sender public key: {}",
-                        to.unwrap()
-                    )));
-                }
-
-                TransactionQueryInput::from_to_query_handler(
-                    &mut transactions,
-                    db,
-                    query.as_ref(),
-                    sort_by,
-                    num_commands,
-                    limit,
-                )?;
-
-                return Ok(transactions);
+    if let Some(state_hash) = query
+        .as_ref()
+        .and_then(|input| input.block.as_ref())
+        .and_then(|block| block.state_hash.as_ref())
+    {
+        let state_hash = match StateHash::new(state_hash) {
+            Ok(state_hash) => state_hash,
+            Err(_) => {
+                return Err(async_graphql::Error::new(format!(
+                    "Invalid state hash: {}",
+                    state_hash
+                )))
             }
-        }
+        };
 
-        //////////////////////////////
-        // block height bound query //
-        //////////////////////////////
+        TransactionQueryInput::state_hash_query_handler(
+            &mut transactions,
+            db,
+            query.as_ref(),
+            sort_by,
+            &state_hash,
+            num_commands,
+            limit,
+            offset,
+        )?;
 
-        if query.as_ref().is_some_and(|q| {
-            q.block_height_gt.is_some()
-                || q.block_height_gte.is_some()
-                || q.block_height_lt.is_some()
-                || q.block_height_lte.is_some()
-        }) {
-            TransactionQueryInput::block_height_bound_query_handler(
-                &mut transactions,
-                db,
-                query.as_ref(),
-                sort_by,
-                num_commands,
-                limit,
-            )?;
+        return Ok(transactions);
+    }
 
-            return Ok(transactions);
-        }
+    ////////////////////////
+    // block height query //
+    ////////////////////////
 
-        ///////////////////////////////////////
-        // date time/global slot bound query //
-        ///////////////////////////////////////
-
-        if query.as_ref().is_some_and(|q| {
-            q.global_slot_gt.is_some()
-                || q.global_slot_gte.is_some()
-                || q.global_slot_lt.is_some()
-                || q.global_slot_lte.is_some()
-                || q.date_time_gt.is_some()
-                || q.date_time_gte.is_some()
-                || q.date_time_lt.is_some()
-                || q.date_time_lte.is_some()
-        }) {
-            TransactionQueryInput::date_time_or_slot_bound_query_handler(
-                &mut transactions,
-                db,
-                query.as_ref(),
-                sort_by,
-                num_commands,
-                limit,
-            )?;
-
-            return Ok(transactions);
-        }
-
-        /////////////////
-        // token query //
-        /////////////////
-
-        if let Some(token) = query.as_ref().and_then(|q| q.token.as_ref()) {
-            let token = match TokenAddress::new(token) {
-                Some(token) => token,
-                None => {
-                    return Err(async_graphql::Error::new(format!(
-                        "Invalid token address: {}",
-                        token
-                    )))
-                }
-            };
-
-            TransactionQueryInput::token_query_handler(
-                &mut transactions,
-                db,
-                query.as_ref(),
-                sort_by,
-                &token,
-                num_commands,
-                limit,
-            )?;
-
-            return Ok(transactions);
-        }
-
-        ///////////////////
-        // default query //
-        ///////////////////
-
-        TransactionQueryInput::default_query_handler(
+    if query
+        .as_ref()
+        .and_then(|input| input.block_height)
+        .is_some()
+    {
+        TransactionQueryInput::block_height_query_handler(
             &mut transactions,
             db,
             query.as_ref(),
             sort_by,
             num_commands,
             limit,
+            offset,
         )?;
 
-        Ok(transactions)
+        return Ok(transactions);
     }
+
+    ///////////////////////////
+    // sender/receiver query //
+    ///////////////////////////
+
+    if let Some((from, to)) = query.as_ref().map(|q| (q.from.as_ref(), q.to.as_ref())) {
+        if from.or(to).is_some() {
+            if from.map(|pk| !PublicKey::is_valid(pk)).unwrap_or_default() {
+                return Err(async_graphql::Error::new(format!(
+                    "Invalid receiver public key: {}",
+                    from.unwrap()
+                )));
+            }
+
+            if to.map(|pk| !PublicKey::is_valid(pk)).unwrap_or_default() {
+                return Err(async_graphql::Error::new(format!(
+                    "Invalid sender public key: {}",
+                    to.unwrap()
+                )));
+            }
+
+            TransactionQueryInput::from_to_query_handler(
+                &mut transactions,
+                db,
+                query.as_ref(),
+                sort_by,
+                num_commands,
+                limit,
+                offset,
+            )?;
+
+            return Ok(transactions);
+        }
+    }
+
+    //////////////////////////////
+    // block height bound query //
+    //////////////////////////////
+
+    if query.as_ref().is_some_and(|q| {
+        q.block_height_gt.is_some()
+            || q.block_height_gte.is_some()
+            || q.block_height_lt.is_some()
+            || q.block_height_lte.is_some()
+    }) {
+        TransactionQueryInput::block_height_bound_query_handler(
+            &mut transactions,
+            db,
+            query.as_ref(),
+            sort_by,
+            num_commands,
+            limit,
+            offset,
+        )?;
+
+        return Ok(transactions);
+    }
+
+    ///////////////////////////////////////
+    // date time/global slot bound query //
+    ///////////////////////////////////////
+
+    if query.as_ref().is_some_and(|q| {
+        q.global_slot_gt.is_some()
+            || q.global_slot_gte.is_some()
+            || q.global_slot_lt.is_some()
+            || q.global_slot_lte.is_some()
+            || q.date_time_gt.is_some()
+            || q.date_time_gte.is_some()
+            || q.date_time_lt.is_some()
+            || q.date_time_lte.is_some()
+    }) {
+        TransactionQueryInput::date_time_or_slot_bound_query_handler(
+            &mut transactions,
+            db,
+            query.as_ref(),
+            sort_by,
+            num_commands,
+            limit,
+            offset,
+        )?;
+
+        return Ok(transactions);
+    }
+
+    /////////////////
+    // token query //
+    /////////////////
+
+    if let Some(token) = query.as_ref().and_then(|q| q.token.as_ref()) {
+        let token = match TokenAddress::new(token) {
+            Some(token) => token,
+            None => {
+                return Err(async_graphql::Error::new(format!(
+                    "Invalid token address: {}",
+                    token
+                )))
+            }
+        };
+
+        TransactionQueryInput::token_query_handler(
+            &mut transactions,
+            db,
+            query.as_ref(),
+            sort_by,
+            &token,
+            num_commands,
+            limit,
+            offset,
+        )?;
+
+        return Ok(transactions);
+    }
+
+    ///////////////////
+    // default query //
+    ///////////////////
+
+    TransactionQueryInput::default_query_handler(
+        &mut transactions,
+        db,
+        query.as_ref(),
+        sort_by,
+        num_commands,
+        limit,
+        offset,
+    )?;
+
+    Ok(transactions)
 }
 
 impl Transaction {
@@ -948,6 +1004,7 @@ impl TransactionQueryInput {
         sort_by: TransactionSortByInput,
         num_commands: [u32; 4],
         limit: usize,
+        offset: usize,
     ) -> anyhow::Result<()> {
         use TransactionSortByInput::*;
 
@@ -974,6 +1031,7 @@ impl TransactionQueryInput {
             }
         };
 
+        let mut skipped = 0;
         for (key, value) in iter.flatten() {
             if txns.len() >= limit {
                 // exit if the limit has been reached
@@ -1002,7 +1060,11 @@ impl TransactionQueryInput {
 
             let txn = Transaction::new(serde_json::from_slice(&value)?, db, num_commands);
             if query.as_ref().is_none_or(|q| q.matches(&txn)) {
-                txns.push(txn);
+                if skipped < offset {
+                    skipped += 1;
+                } else {
+                    txns.push(txn);
+                }
             };
         }
 
@@ -1017,6 +1079,7 @@ impl TransactionQueryInput {
         sort_by: TransactionSortByInput,
         num_commands: [u32; 4],
         limit: usize,
+        offset: usize,
     ) -> anyhow::Result<()> {
         use TransactionSortByInput::*;
 
@@ -1044,6 +1107,7 @@ impl TransactionQueryInput {
         };
 
         let iter = Self::zkapp_or_not_height_or_slot_iterator(db, &sort_by, min, max, query.zkapp)?;
+        let mut skipped = 0;
         for (key, value) in iter.flatten() {
             if check_height && key[..U32_LEN] != block_height.to_be_bytes() || txns.len() >= limit {
                 // beyond the desired block height or limit
@@ -1061,7 +1125,11 @@ impl TransactionQueryInput {
 
             let txn = Transaction::new(serde_json::from_slice(&value)?, db, num_commands);
             if query.matches(&txn) {
-                txns.push(txn);
+                if skipped < offset {
+                    skipped += 1;
+                } else {
+                    txns.push(txn);
+                }
             }
         }
 
@@ -1076,6 +1144,7 @@ impl TransactionQueryInput {
         sort_by: TransactionSortByInput,
         num_commands: [u32; 4],
         limit: usize,
+        offset: usize,
     ) -> anyhow::Result<()> {
         use TransactionSortByInput::*;
 
@@ -1100,6 +1169,7 @@ impl TransactionQueryInput {
         };
 
         let iter = Self::zkapp_or_not_height_or_slot_iterator(db, &sort_by, min, max, query.zkapp)?;
+        let mut skipped = 0;
         for (key, value) in iter.flatten() {
             // keys have format: {u32 prefix}{txn hash}{state hash}
             if key[..U32_LEN] > *max.to_be_bytes().as_slice()
@@ -1121,7 +1191,11 @@ impl TransactionQueryInput {
 
             let txn = Transaction::new(serde_json::from_slice(&value)?, db, num_commands);
             if query.matches(&txn) {
-                txns.push(txn);
+                if skipped < offset {
+                    skipped += 1;
+                } else {
+                    txns.push(txn);
+                }
             }
         }
 
@@ -1136,6 +1210,7 @@ impl TransactionQueryInput {
         sort_by: TransactionSortByInput,
         num_commands: [u32; 4],
         limit: usize,
+        offset: usize,
     ) -> anyhow::Result<()> {
         use TransactionSortByInput::*;
 
@@ -1183,6 +1258,7 @@ impl TransactionQueryInput {
         let max = max.saturating_add(1);
 
         let iter = Self::zkapp_or_not_height_or_slot_iterator(db, &sort_by, min, max, query.zkapp)?;
+        let mut skipped = 0;
         for (key, value) in iter.flatten() {
             if key[..U32_LEN] > *max.to_be_bytes().as_slice()
                 || key[..U32_LEN] < *min.to_be_bytes().as_slice()
@@ -1203,7 +1279,11 @@ impl TransactionQueryInput {
 
             let txn = Transaction::new(serde_json::from_slice(&value)?, db, num_commands);
             if query.matches(&txn) {
-                txns.push(txn);
+                if skipped < offset {
+                    skipped += 1;
+                } else {
+                    txns.push(txn);
+                }
             }
         }
 
@@ -1211,6 +1291,7 @@ impl TransactionQueryInput {
     }
 
     /// Handler for state hash query
+    #[allow(clippy::too_many_arguments)]
     fn state_hash_query_handler(
         txns: &mut Vec<Transaction>,
         db: &Arc<IndexerStore>,
@@ -1219,6 +1300,7 @@ impl TransactionQueryInput {
         state_hash: &StateHash,
         num_commands: [u32; 4],
         limit: usize,
+        offset: usize,
     ) -> anyhow::Result<()> {
         use TransactionSortByInput::*;
 
@@ -1242,6 +1324,7 @@ impl TransactionQueryInput {
         };
 
         let iter = Self::zkapp_or_not_height_or_slot_iterator(db, &sort_by, min, max, query.zkapp)?;
+        let mut skipped = 0;
         for (key, value) in iter.flatten() {
             if key[..U32_LEN] < *min.to_be_bytes().as_slice()
                 || key[..U32_LEN] > *max.to_be_bytes().as_slice()
@@ -1253,7 +1336,11 @@ impl TransactionQueryInput {
 
             let txn = Transaction::new(serde_json::from_slice(&value)?, db, num_commands);
             if query.matches(&txn) {
-                txns.push(txn);
+                if skipped < offset {
+                    skipped += 1;
+                } else {
+                    txns.push(txn);
+                }
             }
         }
 
@@ -1261,6 +1348,7 @@ impl TransactionQueryInput {
     }
 
     /// Handler for token query
+    #[allow(clippy::too_many_arguments)]
     fn token_query_handler(
         txns: &mut Vec<Transaction>,
         db: &Arc<IndexerStore>,
@@ -1269,6 +1357,7 @@ impl TransactionQueryInput {
         token: &TokenAddress,
         num_commands: [u32; 4],
         limit: usize,
+        offset: usize,
     ) -> anyhow::Result<()> {
         use TransactionSortByInput::*;
 
@@ -1288,6 +1377,7 @@ impl TransactionQueryInput {
         };
 
         // only iterate over specified token
+        let mut skipped = 0;
         for (key, value) in iter.flatten() {
             if *token.0.as_bytes() != key[..TokenAddress::LEN] || txns.len() >= limit {
                 // beyond the desired token or limit
@@ -1305,7 +1395,11 @@ impl TransactionQueryInput {
 
             let txn = Transaction::new(serde_json::from_slice(&value)?, db, num_commands);
             if query.as_ref().is_some_and(|q| q.matches(&txn)) {
-                txns.push(txn);
+                if skipped < offset {
+                    skipped += 1;
+                } else {
+                    txns.push(txn);
+                }
             };
         }
 
@@ -1320,6 +1414,7 @@ impl TransactionQueryInput {
         sort_by: TransactionSortByInput,
         num_commands: [u32; 4],
         limit: usize,
+        offset: usize,
     ) -> anyhow::Result<()> {
         use TransactionSortByInput::*;
 
@@ -1355,6 +1450,7 @@ impl TransactionQueryInput {
         };
 
         // iterate
+        let mut skipped = 0;
         for (key, value) in iter.flatten() {
             if key[..PublicKey::LEN] != *pk.0.as_bytes() || txns.len() >= limit {
                 // beyond the desired public key or limit
@@ -1372,7 +1468,11 @@ impl TransactionQueryInput {
 
             let txn = Transaction::new(serde_json::from_slice(&value)?, db, num_commands);
             if query.matches(&txn) {
-                txns.push(txn);
+                if skipped < offset {
+                    skipped += 1;
+                } else {
+                    txns.push(txn);
+                }
             }
         }
 
