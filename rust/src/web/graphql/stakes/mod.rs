@@ -248,9 +248,13 @@ impl StakesQueryRoot {
         query: Option<StakesQueryInput>,
         sort_by: Option<StakesSortByInput>,
         #[graphql(default = 100)] limit: usize,
+        // `offset`: matching staking accounts to skip before `limit`. Pair with
+        // `stakesCount(query)` for total-count / page math.
+        #[graphql(default = 0)] offset: usize,
     ) -> Result<Vec<StakesLedgerAccountWithMeta>> {
         let limit = limit.min(crate::constants::GRAPHQL_MAX_PAGE_SIZE);
         let db = db(ctx);
+        let mut skipped = 0;
 
         // default to current epoch
         let epoch = query
@@ -362,6 +366,10 @@ impl StakesQueryRoot {
                         );
 
                         if StakesQueryInput::matches(query.as_ref(), &account) {
+                            if skipped < offset {
+                                skipped += 1;
+                                continue;
+                            }
                             accounts.push(account);
                         }
                     }
@@ -431,12 +439,127 @@ impl StakesQueryRoot {
                 );
 
                 if StakesQueryInput::matches(query.as_ref(), &account) {
+                    if skipped < offset {
+                        skipped += 1;
+                        continue;
+                    }
                     accounts.push(account);
                 }
             }
         }
 
         Ok(accounts)
+    }
+
+    /// Total staking accounts matching `query` in the epoch's ledger -- the count
+    /// companion to `stakes`. Applies the same two filters (`matches_staking_account`
+    /// then the `stake_lte` bound on total delegated) without building each
+    /// `StakesLedgerAccountWithMeta`, so it stays cheap.
+    #[graphql(cache_control(max_age = 3600))]
+    async fn stakes_count(
+        &self,
+        ctx: &Context<'_>,
+        query: Option<StakesQueryInput>,
+    ) -> Result<u32> {
+        let db = db(ctx);
+        let epoch = query
+            .as_ref()
+            .and_then(|q| q.epoch)
+            .unwrap_or_else(|| db.get_current_epoch().expect("epoch"));
+
+        let genesis_state_hash = match query.as_ref().and_then(|q| q.genesis_state_hash.as_ref()) {
+            Some(genesis) => StateHash::new(genesis).map_err(|_| {
+                async_graphql::Error::new(format!("Invalid genesis state hash: {}", genesis))
+            })?,
+            None => db
+                .get_best_block_genesis_hash()
+                .ok()
+                .flatten()
+                .expect("genesis state hash"),
+        };
+
+        let (ledger_hash, epoch) = match query.as_ref().and_then(|q| q.ledger_hash.as_ref()) {
+            Some(ledger_hash) => {
+                let ledger_hash = LedgerHash::new(ledger_hash).map_err(|_| {
+                    async_graphql::Error::new(format!("Invalid ledger hash: {}", ledger_hash))
+                })?;
+                let epoch = query.as_ref().and_then(|q| q.epoch).unwrap_or_else(|| {
+                    db.get_epoch(&ledger_hash).expect("epoch").unwrap_or_default()
+                });
+                (ledger_hash, epoch)
+            }
+            None => match db.get_staking_ledger_hash_by_epoch(epoch, &genesis_state_hash)? {
+                Some(ledger_hash) => (ledger_hash, epoch),
+                None => return Ok(0),
+            },
+        };
+
+        // Applies the same two filters `stakes` uses. `total_delegated` (the field
+        // the post-build `matches` bounds via `stake_lte`) is
+        // `Amount(delegation.total_delegated).to_f64()`, so it is computed here
+        // directly rather than by building the account -- keeping the two in step.
+        let stake_lte = query
+            .as_ref()
+            .and_then(|q| q.stake_lte.as_ref())
+            .and_then(|s| s.parse::<f64>().ok());
+        let passes = |account: &StakingAccount, total_delegated: u64| -> bool {
+            if !StakesQueryInput::matches_staking_account(
+                query.as_ref(),
+                account,
+                &ledger_hash,
+                &genesis_state_hash,
+                epoch,
+            ) {
+                return false;
+            }
+            if let Some(stake_lte) = stake_lte {
+                if crate::base::amount::Amount(total_delegated).to_f64() > stake_lte {
+                    return false;
+                }
+            }
+            true
+        };
+
+        // username query counts only that username's pks
+        if let Some(username) = query.as_ref().and_then(|q| q.username.as_ref()) {
+            let mut count = 0u32;
+            for pk in db.get_username_pks(username)?.unwrap_or_default() {
+                if let Some(mut account) = db.get_staking_account(&pk, epoch, &genesis_state_hash)? {
+                    account.username = db.get_username(&pk)?.map(|u| u.0);
+                    let total = db
+                        .get_epoch_delegations(&pk, epoch, &genesis_state_hash)?
+                        .map_or(0, |d| d.total_delegated);
+                    if passes(&account, total) {
+                        count += 1;
+                    }
+                }
+            }
+            return Ok(count);
+        }
+
+        // default: the whole staking ledger for the epoch
+        let iter = db.staking_ledger_account_balance_iterator(
+            epoch,
+            &genesis_state_hash,
+            Direction::Reverse,
+        );
+        let mut count = 0u32;
+        for (key, value) in iter.flatten() {
+            if key[..StateHash::LEN] != *genesis_state_hash.0.as_bytes()
+                || key[StateHash::LEN..][..U32_LEN] != epoch.to_be_bytes()
+            {
+                break;
+            }
+            let StakingAccountWithEpochDelegation {
+                account,
+                delegation,
+            } = serde_json::from_slice(&value)?;
+            let total = delegation.map_or(0, |d| d.total_delegated);
+            if passes(&account, total) {
+                count += 1;
+            }
+        }
+        Ok(count)
     }
 }
 
