@@ -226,6 +226,35 @@ impl TokensQueryRoot {
         Ok(tokens)
     }
 
+    /// Total tokens matching `query` -- the count companion to `tokens`, for a
+    /// gateway to compute total pages. Applies the same `matches` filter over
+    /// the same iterator without building each `Token`, so it stays cheap.
+    #[graphql(cache_control(max_age = 3600))]
+    async fn tokens_count(
+        &self,
+        ctx: &Context<'_>,
+        query: Option<TokensQueryInput>,
+    ) -> Result<u32> {
+        let db = db(ctx);
+
+        // specific-token query is 0 or 1
+        if let Some(addr) = query.as_ref().and_then(|q| q.token.as_ref()) {
+            let addr = TokenAddress::new(addr).ok_or_else(|| {
+                async_graphql::Error::new(format!("Invalid token address: {addr}"))
+            })?;
+            return Ok(db.get_token(&addr)?.is_some() as u32);
+        }
+
+        let mut count = 0u32;
+        for (_, value) in db.token_iterator().flatten() {
+            let token = serde_json::from_slice(&value)?;
+            if TokensQueryInput::matches(query.as_ref(), &token) {
+                count += 1;
+            }
+        }
+        Ok(count)
+    }
+
     #[graphql(cache_control(max_age = 3600))]
     async fn token_holders(
         &self,
@@ -332,6 +361,62 @@ impl TokensQueryRoot {
         }
 
         Ok(holders)
+    }
+
+    /// Total token holders matching `query` -- the count companion to
+    /// `tokenHolders`. Applies the same `matches` filter over the same iterator
+    /// (by token, or by holder) without building each `TokenHolder`, so it
+    /// stays cheap.
+    #[graphql(cache_control(max_age = 3600))]
+    async fn token_holders_count(
+        &self,
+        ctx: &Context<'_>,
+        query: Option<TokenHoldersQueryInput>,
+    ) -> Result<u32> {
+        let db = db(ctx);
+        let mut count = 0u32;
+
+        // holders of a specific token
+        if let Some(token) = query.as_ref().and_then(|q| q.token.as_ref()) {
+            let token = TokenAddress::new(token).ok_or_else(|| {
+                async_graphql::Error::new(format!("Invalid token address: {token}"))
+            })?;
+
+            let mut start = [0u8; TokenAddress::LEN + U64_LEN + PublicKey::LEN];
+            start[..TokenAddress::LEN].copy_from_slice(token.0.as_bytes());
+            let mode = speedb::IteratorMode::From(&start, speedb::Direction::Forward);
+
+            for (key, value) in db.best_ledger_account_balance_iterator(mode).flatten() {
+                if key[..TokenAddress::LEN] != *token.0.as_bytes() {
+                    break;
+                }
+                let account = serde_json::from_slice::<account::Account>(&value)?
+                    .deduct_mina_account_creation_fee();
+                if TokenHoldersQueryInput::matches(query.as_ref(), &account) {
+                    count += 1;
+                }
+            }
+            return Ok(count);
+        }
+
+        // a specific holder's token accounts
+        if let Some(holder) = query.as_ref().and_then(|q| q.holder.as_ref()) {
+            let holder = PublicKey::new(holder).map_err(|_| {
+                async_graphql::Error::new(format!("Invalid holder public key: {holder}"))
+            })?;
+
+            for (key, value) in db.tokens_pk_iterator(&holder).flatten() {
+                if key[..PublicKey::LEN] != *holder.0.as_bytes() {
+                    break;
+                }
+                let account: account::Account = serde_json::from_slice(&value)?;
+                if TokenHoldersQueryInput::matches(query.as_ref(), &account) {
+                    count += 1;
+                }
+            }
+        }
+
+        Ok(count)
     }
 }
 
@@ -509,7 +594,91 @@ mod tests {
     use crate::{
         base::public_key::PublicKey,
         ledger::token::{Token, TokenAddress, TokenSymbol},
+        store::{zkapp::tokens::ZkappTokenStore, IndexerStore},
+        web::graphql::build_schema,
     };
+    use std::{collections::HashSet, sync::Arc};
+    use tempfile::TempDir;
+
+    /// Pagination regression for #95: page a >1000-row result set to completion
+    /// with no gaps or duplicates, and confirm `tokensCount` agrees with the
+    /// list (unfiltered and filtered). `limit` is capped at
+    /// GRAPHQL_MAX_PAGE_SIZE (1000), so the only way to read a larger set
+    /// is by paging with `offset`.
+    #[tokio::test]
+    async fn tokens_offset_pages_past_the_page_cap_and_count_agrees() {
+        let dir = TempDir::new().unwrap();
+        let store = Arc::new(IndexerStore::new(dir.path(), true).unwrap());
+
+        // 1050 distinct tokens; the first 50 share a known owner so we can filter.
+        let n = 1050usize;
+        let owned = 50usize;
+        let owner =
+            PublicKey::new("B62qkPg6P2We1SZhCq84ZvDKknrWy8P3Moi99Baz8KFpYsMoFJKHHqF").unwrap();
+        for i in 0..n {
+            // a valid 50-char token address, distinct per i
+            let addr = TokenAddress::new(format!("t{:049}", i)).unwrap();
+            let token = Token {
+                token: addr,
+                owner: (i < owned).then(|| owner.clone()),
+                symbol: TokenSymbol::new(""),
+                supply: (i as u64).into(),
+            };
+            store.set_token(&token).unwrap();
+        }
+
+        let schema = build_schema(store, 0, 0, 0, false);
+
+        let count = |q: &str| {
+            let schema = &schema;
+            let q = format!("{{ tokensCount{q} }}");
+            async move {
+                let res = schema.execute(q).await;
+                assert!(
+                    res.errors.is_empty(),
+                    "tokensCount errored: {:?}",
+                    res.errors
+                );
+                res.data.into_json().unwrap()["tokensCount"]
+                    .as_u64()
+                    .unwrap() as usize
+            }
+        };
+
+        // count agrees with the number seeded, unfiltered and filtered by owner
+        assert_eq!(count("").await, n);
+        assert_eq!(
+            count(&format!("(query: {{ owner: \"{owner}\" }})")).await,
+            owned
+        );
+
+        // page the whole set in chunks of 400 and collect the token addresses
+        let page_size = 400usize;
+        let mut seen = HashSet::new();
+        let mut offset = 0usize;
+        loop {
+            let q = format!("{{ tokens(limit: {page_size}, offset: {offset}) {{ token }} }}");
+            let res = schema.execute(q).await;
+            assert!(res.errors.is_empty(), "tokens errored: {:?}", res.errors);
+            let page: Vec<String> = res.data.into_json().unwrap()["tokens"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| t["token"].as_str().unwrap().to_string())
+                .collect();
+            if page.is_empty() {
+                break;
+            }
+            for addr in page {
+                assert!(seen.insert(addr), "duplicate token across pages");
+            }
+            offset += page_size;
+            assert!(offset < n + page_size, "paging did not terminate");
+        }
+
+        // every token seen exactly once -> no gaps, no duplicates, past the cap
+        assert_eq!(seen.len(), n, "pages should cover every token once");
+    }
 
     #[test]
     fn matches() {
