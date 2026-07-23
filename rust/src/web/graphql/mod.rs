@@ -16,6 +16,7 @@ pub mod internal_commands;
 pub mod snarks;
 pub mod staged_ledgers;
 pub mod stakes;
+pub mod time_locks;
 pub mod tokens;
 pub mod top_snarkers;
 pub mod top_stakers;
@@ -54,6 +55,7 @@ pub struct Root(
     tokens::TokensQueryRoot,
     top_stakers::TopStakersQueryRoot,
     top_snarkers::TopSnarkersQueryRoot,
+    time_locks::TimeLocksQueryRoot,
     version::VersionQueryRoot,
 );
 
