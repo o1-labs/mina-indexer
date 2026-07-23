@@ -1,6 +1,6 @@
 //! GraphQL `accounts` endpoint
 
-mod zkapp;
+pub mod zkapp;
 
 use super::{
     db,

@@ -510,6 +510,23 @@ impl ColumnFamilyHelpers for IndexerStore {
             .expect("zkapp-verification-key-num column family exists")
     }
 
+    /// #### CF for the height-ordered zkapp verification-key change history
+    ///
+    /// Key-value pairs
+    /// ```
+    /// key: {pk}{block_height}{state_hash}
+    /// val: [VerificationKeyChange] bytes
+    /// where:
+    /// - pk:           [PublicKey] bytes
+    /// - block_height: [u32] BE bytes
+    /// - state_hash:   [StateHash] bytes
+    /// ```
+    fn zkapp_verification_key_history_cf(&self) -> &ColumnFamily {
+        self.database
+            .cf_handle("zkapp-verification-key-history")
+            .expect("zkapp-verification-key-history column family exists")
+    }
+
     /// #### CF for storing zkapp uris
     ///
     /// Key-value pairs

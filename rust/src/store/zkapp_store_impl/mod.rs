@@ -1,8 +1,11 @@
 //! Zkapp store trait implementation
 
-use super::{zkapp::ZkappStore, IndexerStore, Result};
+use super::{
+    zkapp::{VerificationKeyChange, ZkappStore},
+    IndexerStore, Result,
+};
 use crate::{
-    base::public_key::PublicKey,
+    base::{public_key::PublicKey, state_hash::StateHash},
     ledger::{
         account::{Permissions, Timing},
         token::{TokenAddress, TokenSymbol},
@@ -10,16 +13,17 @@ use crate::{
     mina_blocks::v2::{VerificationKey, ZkappState, ZkappUri},
     store::column_families::ColumnFamilyHelpers,
     utility::store::{
-        common::from_be_bytes,
+        common::{from_be_bytes, state_hash_suffix, U32_LEN},
         zkapp::{
             zkapp_permissions_key, zkapp_permissions_num_key, zkapp_state_key, zkapp_state_num_key,
             zkapp_timing_key, zkapp_timing_num_key, zkapp_token_symbol_key,
             zkapp_token_symbol_num_key, zkapp_uri_key, zkapp_uri_num_key,
-            zkapp_verification_key_key, zkapp_verification_key_num_key,
+            zkapp_verification_key_key, zkapp_verification_key_num_key, zkapp_vk_history_key,
         },
     },
 };
 use log::trace;
+use speedb::{DBIterator, Direction, IteratorMode};
 
 pub mod action_store_impl;
 pub mod event_store_impl;
@@ -342,6 +346,88 @@ impl ZkappStore for IndexerStore {
         Ok(verification_key)
     }
 
+    fn add_zkapp_verification_key_change(
+        &self,
+        pk: &PublicKey,
+        block_height: u32,
+        state_hash: &StateHash,
+        change: &VerificationKeyChange,
+    ) -> Result<()> {
+        trace!(
+            "Adding zkapp verification key change for pk {} at height {} block {}",
+            pk,
+            block_height,
+            state_hash
+        );
+
+        Ok(self.database.put_cf(
+            self.zkapp_verification_key_history_cf(),
+            zkapp_vk_history_key(pk, block_height, state_hash),
+            serde_json::to_vec(change)?,
+        )?)
+    }
+
+    fn remove_zkapp_verification_key_change(
+        &self,
+        pk: &PublicKey,
+        block_height: u32,
+        state_hash: &StateHash,
+    ) -> Result<()> {
+        trace!(
+            "Removing zkapp verification key change for pk {} at height {} block {}",
+            pk,
+            block_height,
+            state_hash
+        );
+
+        Ok(self.database.delete_cf(
+            self.zkapp_verification_key_history_cf(),
+            zkapp_vk_history_key(pk, block_height, state_hash),
+        )?)
+    }
+
+    fn get_last_zkapp_verification_key_change(
+        &self,
+        pk: &PublicKey,
+    ) -> Result<Option<(u32, StateHash, VerificationKeyChange)>> {
+        // Reverse-scan this pk's prefix; the first row is the highest block
+        // height (== the most recent change).
+        let next = self
+            .zkapp_verification_key_history_iterator(pk, Direction::Reverse)
+            .flatten()
+            .next();
+        if let Some((key, value)) = next {
+            // guard against landing on another pk's row (empty history)
+            if key.len() >= PublicKey::LEN && key[..PublicKey::LEN] == *pk.0.as_bytes() {
+                let block_height = from_be_bytes(key[PublicKey::LEN..][..U32_LEN].to_vec());
+                let state_hash = state_hash_suffix(&key)?;
+                let change: VerificationKeyChange = serde_json::from_slice(&value)?;
+                return Ok(Some((block_height, state_hash, change)));
+            }
+        }
+        Ok(None)
+    }
+
+    fn zkapp_verification_key_history_iterator(
+        &self,
+        pk: &PublicKey,
+        direction: Direction,
+    ) -> DBIterator<'_> {
+        // Seek to this pk's rows. Reverse starts just past the pk's last possible
+        // key (max height + max state hash) so iteration yields newest-first.
+        let mut start = [0u8; PublicKey::LEN + U32_LEN + StateHash::LEN];
+        start[..PublicKey::LEN].copy_from_slice(pk.0.as_bytes());
+        if let Direction::Reverse = direction {
+            start[PublicKey::LEN..][..U32_LEN].copy_from_slice(&u32::MAX.to_be_bytes());
+            start[PublicKey::LEN..][U32_LEN..].fill(u8::MAX);
+        }
+
+        self.database.iterator_cf(
+            self.zkapp_verification_key_history_cf(),
+            IteratorMode::From(&start, direction),
+        )
+    }
+
     ///////////////
     // zkapp uri //
     ///////////////
@@ -635,18 +721,23 @@ impl ZkappStore for IndexerStore {
 mod tests {
     use super::ZkappStore;
     use crate::{
-        base::public_key::PublicKey,
+        base::{public_key::PublicKey, state_hash::StateHash},
+        command::TxnHash,
         ledger::{
             account::{Permissions, Timing},
             token::{TokenAddress, TokenSymbol},
         },
         mina_blocks::v2::{
-            zkapp::{app_state::ZkappState, verification_key::VerificationKey},
+            zkapp::{
+                app_state::ZkappState,
+                verification_key::{VerificationKey, VerificationKeyData, VerificationKeyHash},
+            },
             ZkappUri,
         },
-        store::IndexerStore,
+        store::{zkapp::VerificationKeyChange, IndexerStore},
     };
     use quickcheck::{Arbitrary, Gen};
+    use speedb::Direction;
     use tempfile::TempDir;
 
     const GEN_SIZE: usize = 1000;
@@ -654,6 +745,75 @@ mod tests {
     fn create_indexer_store() -> anyhow::Result<IndexerStore> {
         let temp_dir = TempDir::with_prefix(std::env::current_dir()?)?;
         IndexerStore::new(temp_dir.path(), true)
+    }
+
+    #[test]
+    fn zkapp_verification_key_history() -> anyhow::Result<()> {
+        let g = &mut Gen::new(GEN_SIZE);
+        let store = create_indexer_store()?;
+
+        let pk = PublicKey::arbitrary(g);
+        let token = TokenAddress::arbitrary(g);
+
+        let vk = |h: &str| VerificationKey {
+            data: VerificationKeyData(format!("data-{h}")),
+            hash: VerificationKeyHash(h.to_string()),
+        };
+        let sh1 = StateHash::new("3NK2tkzqqK5spR2sZ7tujjqPksL45M3UUrcA4WhCkeiPtnugyE2x")?;
+        let sh2 = StateHash::new("3NK4BpDSekaqsG6tx8Nse2zJchRft2JpnbvMiog55WCr5xJZaKeP")?;
+        let txn = TxnHash::new("5JuJ1eRNWdE8jSMmCDoHnAdBGhLyBnCk2gkcvkfCZ7WvrKtGuWHB")?;
+
+        // no history yet
+        assert!(store.get_last_zkapp_verification_key_change(&pk)?.is_none());
+
+        // first key set (creation, old = None) at height 10
+        let create = VerificationKeyChange {
+            token: token.clone(),
+            txn_hash: txn.clone(),
+            old_vk_hash: None,
+            verification_key: vk("0xAAA"),
+        };
+        store.add_zkapp_verification_key_change(&pk, 10, &sh1, &create)?;
+
+        // an actual change A -> B at height 20
+        let change = VerificationKeyChange {
+            token: token.clone(),
+            txn_hash: txn.clone(),
+            old_vk_hash: Some(VerificationKeyHash("0xAAA".to_string())),
+            verification_key: vk("0xBBB"),
+        };
+        store.add_zkapp_verification_key_change(&pk, 20, &sh2, &change)?;
+
+        // last change is the highest height (20), newest-first
+        let (h, sh, last) = store
+            .get_last_zkapp_verification_key_change(&pk)?
+            .expect("last change");
+        assert_eq!(h, 20);
+        assert_eq!(sh, sh2);
+        assert_eq!(last, change);
+
+        // reverse iterator yields both, newest first
+        let heights: Vec<_> = store
+            .zkapp_verification_key_history_iterator(&pk, Direction::Reverse)
+            .flatten()
+            .take_while(|(key, _)| key[..PublicKey::LEN] == *pk.0.as_bytes())
+            .map(|(key, _)| u32::from_be_bytes(key[PublicKey::LEN..][..4].try_into().unwrap()))
+            .collect();
+        assert_eq!(heights, vec![20, 10]);
+
+        // rollback (unapply) removes the height-20 record; last falls back to 10
+        store.remove_zkapp_verification_key_change(&pk, 20, &sh2)?;
+        let (h, sh, last) = store
+            .get_last_zkapp_verification_key_change(&pk)?
+            .expect("change after rollback");
+        assert_eq!(h, 10);
+        assert_eq!(sh, sh1);
+        assert_eq!(last, create);
+
+        // remove is idempotent (no record -> no error)
+        store.remove_zkapp_verification_key_change(&pk, 20, &sh2)?;
+
+        Ok(())
     }
 
     #[test]

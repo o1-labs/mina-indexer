@@ -176,6 +176,10 @@ pub trait ColumnFamilyHelpers {
     /// CF for storing zkapp verification key counts
     fn zkapp_verification_key_num_cf(&self) -> &ColumnFamily;
 
+    /// CF for the height-ordered zkapp verification-key change history
+    /// (key `{pk}{block_height}{state_hash}`)
+    fn zkapp_verification_key_history_cf(&self) -> &ColumnFamily;
+
     /// CF for storing zkapp uris
     fn zkapp_uri_cf(&self) -> &ColumnFamily;
 

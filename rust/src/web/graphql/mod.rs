@@ -19,6 +19,7 @@ pub mod staged_ledgers;
 pub mod stakes;
 pub mod time_locks;
 pub mod tokens;
+pub mod verification_key;
 pub mod top_snarkers;
 pub mod top_stakers;
 pub mod transactions;
@@ -58,6 +59,7 @@ pub struct Root(
     top_snarkers::TopSnarkersQueryRoot,
     time_locks::TimeLocksQueryRoot,
     charts::ChartsQueryRoot,
+    verification_key::VerificationKeyQueryRoot,
     version::VersionQueryRoot,
 );
 
