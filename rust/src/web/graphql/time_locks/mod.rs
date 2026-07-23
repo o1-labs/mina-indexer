@@ -307,7 +307,7 @@ mod tests {
         // vests). The all-time `unlocked` equals the sum of any granularity's.
         let year = run("YEAR").await;
         let month = run("MONTH").await;
-        assert!(year.len() >= 1 && month.len() >= year.len());
+        assert!(!year.is_empty() && month.len() >= year.len());
 
         let total_unlocked = all[0]["unlocked"].as_u64().unwrap();
         let mut prev_slot = None;
