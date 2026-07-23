@@ -18,9 +18,14 @@
 //! mainnet genesis timestamp.
 
 use crate::{
+    base::public_key::PublicKey,
     block::store::BlockStore,
     command::store::UserCommandStore,
-    constants::{from_timestamp_millis, MAINNET_BLOCK_SLOT_TIME_MILLIS, MAINNET_GENESIS_TIMESTAMP},
+    constants::{
+        from_timestamp_millis, MAINNET_BLOCK_SLOT_TIME_MILLIS, MAINNET_EPOCH_SLOT_COUNT,
+        MAINNET_GENESIS_TIMESTAMP,
+    },
+    ledger::store::staking::StakingLedgerStore,
     utility::store::common::{block_u32_prefix_from_key, state_hash_suffix},
     web::graphql::{db, get_block_canonicity},
 };
@@ -44,6 +49,23 @@ pub struct ChartPoint {
 
     /// Number of matching commands in the bucket's canonical blocks.
     pub count: u64,
+}
+
+#[derive(SimpleObject)]
+pub struct DelegationPoint {
+    /// Staking epoch.
+    pub epoch: u32,
+
+    /// UTC date the epoch begins (`YYYY-MM-DD`), for plotting on a time axis.
+    pub date: String,
+
+    /// Total stake delegated to the address in this epoch, in nanomina.
+    #[graphql(name = "total_delegated")]
+    pub total_delegated: u64,
+
+    /// Number of accounts delegating to the address in this epoch.
+    #[graphql(name = "delegate_count")]
+    pub delegate_count: u32,
 }
 
 /// Which per-block command count a chart sums.
@@ -133,6 +155,48 @@ impl ChartsQueryRoot {
     ) -> Result<Vec<ChartPoint>> {
         command_count_chart(db(ctx), bucket, CommandKind::Zkapp)
     }
+
+    /// Stake delegated to `address` per staking epoch, oldest first. Backs
+    /// Blockberry's `getDelegationAmountChart`.
+    ///
+    /// One point per epoch that has a staking ledger delegating to `address`;
+    /// `date` is the epoch's start (for a time axis). Cheap -- staking ledgers
+    /// are per-epoch and few (~one lookup per epoch), so it is not scanned like
+    /// the block-count charts.
+    #[graphql(cache_control(max_age = 3600))]
+    async fn delegation_amount_chart(
+        &self,
+        ctx: &Context<'_>,
+        address: String,
+    ) -> Result<Vec<DelegationPoint>> {
+        let db = db(ctx);
+        let pk = PublicKey::new(&address)
+            .map_err(|_| async_graphql::Error::new(format!("Invalid public key: {address}")))?;
+
+        // No chain yet (empty store) -> empty series rather than an error, so a
+        // dashboard renders an empty chart instead of a failure.
+        let Some(genesis) = db.get_best_block_genesis_hash()? else {
+            return Ok(vec![]);
+        };
+        let current_epoch = db.get_current_epoch()?;
+
+        let mut points = Vec::new();
+        for epoch in 0..=current_epoch {
+            if let Some(delegation) = db.get_epoch_delegations(&pk, epoch, &genesis)? {
+                points.push(DelegationPoint {
+                    epoch,
+                    // epoch start slot -> UTC date
+                    date: bucket_key(
+                        epoch.saturating_mul(MAINNET_EPOCH_SLOT_COUNT),
+                        ChartBucket::Day,
+                    ),
+                    total_delegated: delegation.total_delegated,
+                    delegate_count: delegation.count_delegates,
+                });
+            }
+        }
+        Ok(points)
+    }
 }
 
 #[cfg(test)]
@@ -181,5 +245,41 @@ mod tests {
                 .len();
             assert_eq!(arr, 0, "{field} should be empty on an empty store");
         }
+    }
+
+    // Empty store => empty delegation series (no genesis yet), and a malformed
+    // address is rejected. The populated path (per-epoch delegation sums) needs a
+    // seeded staking ledger, covered by integration.
+    #[tokio::test]
+    async fn delegation_chart_empty_store_and_bad_address() {
+        use crate::{store::IndexerStore, web::graphql::build_schema};
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let store = Arc::new(IndexerStore::new(dir.path(), true).unwrap());
+        let schema = build_schema(store, 0, 0, 0, false);
+
+        // valid pk, empty store -> empty series, no error
+        let ok = schema
+            .execute(
+                "{ delegationAmountChart(address: \
+                 \"B62qmK2RecMoNXcqvt6K9k7yKG81qhyMoXhCfZ15SXNa5ikJaJr3urk\") \
+                 { epoch date total_delegated delegate_count } }",
+            )
+            .await;
+        assert!(ok.errors.is_empty(), "unexpected error: {:?}", ok.errors);
+        assert_eq!(
+            ok.data.into_json().unwrap()["delegationAmountChart"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+
+        // malformed address -> error
+        let bad = schema
+            .execute("{ delegationAmountChart(address: \"not-a-key\") { epoch } }")
+            .await;
+        assert!(!bad.errors.is_empty(), "bad address should error");
     }
 }
