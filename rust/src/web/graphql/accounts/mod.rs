@@ -142,6 +142,31 @@ pub enum AccountSortByInput {
 
     #[default]
     BalanceDesc,
+
+    #[graphql(name = "NONCE_ASC")]
+    NonceAsc,
+
+    #[graphql(name = "NONCE_DESC")]
+    NonceDesc,
+}
+
+/// In-memory nonce ordering for the `NonceAsc`/`NonceDesc` paths. The
+/// best-ledger is *balance*-sorted (there is no nonce index), so a nonce
+/// ordering can't stream off the iterator -- the matching accounts are
+/// collected and sorted here. Ties are broken by public key so the ordering is
+/// total and a given `offset` window is stable/gap-free across calls (for one
+/// database state).
+fn sort_accounts_by_nonce(accounts: &mut [account::Account], sort_by: AccountSortByInput) {
+    accounts.sort_by(|a, b| {
+        let (na, nb) = (a.nonce.map_or(0, |n| n.0), b.nonce.map_or(0, |n| n.0));
+        let ord = na
+            .cmp(&nb)
+            .then_with(|| a.public_key.0.cmp(&b.public_key.0));
+        match sort_by {
+            AccountSortByInput::NonceAsc => ord,
+            _ => ord.reverse(),
+        }
+    });
 }
 
 #[derive(SimpleObject)]
@@ -193,11 +218,11 @@ pub struct AccountWithMeta {
 }
 
 /// Deserialize one stored ledger account and test it against `query`, returning
-/// the account when it matches (`None` otherwise). Single source of truth for the
-/// account filter, shared by the `accounts` list resolver and the `accountsCount`
-/// count resolver so a page and its total can never disagree. `query == None`
-/// matches every account. Errors on a corrupt stored record (propagated, as the
-/// list path did before).
+/// the account when it matches (`None` otherwise). Single source of truth for
+/// the account filter, shared by the `accounts` list resolver and the
+/// `accountsCount` count resolver so a page and its total can never disagree.
+/// `query == None` matches every account. Errors on a corrupt stored record
+/// (propagated, as the list path did before).
 fn account_matches(
     query: Option<&AccountQueryInput>,
     db: &std::sync::Arc<IndexerStore>,
@@ -205,7 +230,11 @@ fn account_matches(
 ) -> Result<Option<account::Account>> {
     let account =
         serde_json::from_slice::<account::Account>(value)?.deduct_mina_account_creation_fee();
-    let username = db.get_username(&account.public_key).ok().flatten().map(|u| u.0);
+    let username = db
+        .get_username(&account.public_key)
+        .ok()
+        .flatten()
+        .map(|u| u.0);
     let matches = query.is_none_or(|q| q.matches(&account, username.as_ref()));
     Ok(matches.then_some(account))
 }
@@ -270,14 +299,19 @@ impl AccountQueryRoot {
 
         // token query handler
         if let Some(token) = query.as_ref().and_then(|q| q.token.as_ref()) {
-            return query
-                .as_ref()
-                .unwrap()
-                .token_query_handler(db, token as &str, sort_by, limit, offset);
+            return query.as_ref().unwrap().token_query_handler(
+                db,
+                token as &str,
+                sort_by,
+                limit,
+                offset,
+            );
         }
 
+        // Nonce sort can't stream off the balance-sorted iterator, so scan from
+        // the start; ordering + paging happen in memory below.
         let mode = match sort_by {
-            BalanceAsc => IteratorMode::Start,
+            BalanceAsc | NonceAsc | NonceDesc => IteratorMode::Start,
             BalanceDesc => IteratorMode::End,
         };
 
@@ -288,6 +322,26 @@ impl AccountQueryRoot {
                 .zkapp_best_ledger_account_balance_iterator(mode)
                 .flatten(),
         };
+
+        // Nonce sort: no nonce index, so collect every matching account, order by
+        // nonce, then page. O(matches) memory -- heavier than the streamed balance
+        // path, acceptable for the nonce ordering (filter to bound it).
+        if matches!(sort_by, NonceAsc | NonceDesc) {
+            let mut matched = Vec::new();
+            for (_, value) in iter {
+                if let Some(account) = account_matches(query.as_ref(), db, &value)? {
+                    matched.push(account);
+                }
+            }
+            sort_accounts_by_nonce(&mut matched, sort_by);
+            return Ok(matched
+                .into_iter()
+                .skip(offset)
+                .take(limit)
+                .map(|account| AccountWithMeta::new(db, account))
+                .collect());
+        }
+
         let mut accounts = Vec::with_capacity(limit);
         let mut skipped = 0;
 
@@ -311,8 +365,9 @@ impl AccountQueryRoot {
     }
 
     /// Total number of accounts matching `query` -- the count companion to
-    /// `accounts`, for a gateway to compute total pages. Uses the same filter as
-    /// `accounts` (shared `account_matches`) so the two can never disagree.
+    /// `accounts`, for a gateway to compute total pages. Uses the same filter
+    /// as `accounts` (shared `account_matches`) so the two can never
+    /// disagree.
     #[graphql(cache_control(max_age = 3600))]
     async fn accounts_count(
         &self,
@@ -486,7 +541,11 @@ impl AccountQueryInput {
         start[..TokenAddress::LEN].copy_from_slice(token.as_bytes());
 
         let mode = match sort_by {
-            AccountSortByInput::BalanceAsc => {
+            // Nonce sort scans this token's accounts forward (order comes from the
+            // in-memory sort below), same start as BalanceAsc.
+            AccountSortByInput::BalanceAsc
+            | AccountSortByInput::NonceAsc
+            | AccountSortByInput::NonceDesc => {
                 IteratorMode::From(&start, speedb::Direction::Forward)
             }
             AccountSortByInput::BalanceDesc => {
@@ -505,6 +564,30 @@ impl AccountQueryInput {
                 .zkapp_best_ledger_account_balance_iterator(mode)
                 .flatten(),
         };
+
+        // Nonce sort: collect this token's matching accounts, order by nonce, page.
+        if matches!(
+            sort_by,
+            AccountSortByInput::NonceAsc | AccountSortByInput::NonceDesc
+        ) {
+            let mut matched = Vec::new();
+            for (key, value) in iter {
+                if key[..TokenAddress::LEN] != *token.as_bytes() {
+                    break;
+                }
+                if let Some(account) = account_matches(Some(self), db, &value)? {
+                    matched.push(account);
+                }
+            }
+            sort_accounts_by_nonce(&mut matched, sort_by);
+            return Ok(matched
+                .into_iter()
+                .skip(offset)
+                .take(limit)
+                .map(|account| AccountWithMeta::new(db, account))
+                .collect());
+        }
+
         let mut accounts = Vec::with_capacity(limit);
         let mut skipped = 0;
 
@@ -527,8 +610,8 @@ impl AccountQueryInput {
         Ok(accounts)
     }
 
-    /// Count of accounts on `token` matching this query -- the count companion to
-    /// `token_query_handler`, sharing `account_matches`.
+    /// Count of accounts on `token` matching this query -- the count companion
+    /// to `token_query_handler`, sharing `account_matches`.
     fn token_count_handler(&self, db: &std::sync::Arc<IndexerStore>, token: &str) -> Result<u32> {
         if TokenAddress::new(token).is_none() {
             return Err(async_graphql::Error::new(format!(
@@ -683,8 +766,9 @@ impl From<(Permission, String)> for PermissionVk {
 
 #[cfg(test)]
 mod tests {
+    use super::{sort_accounts_by_nonce, AccountSortByInput};
     use crate::{
-        base::{amount::Amount, public_key::PublicKey},
+        base::{amount::Amount, nonce::Nonce, public_key::PublicKey},
         ledger::{account::Account, store::best::BestLedgerStore, token::TokenAddress},
         store::IndexerStore,
         web::graphql::build_schema,
@@ -728,7 +812,11 @@ mod tests {
     ) -> u64 {
         let q = format!("{{ accountsCount{query_arg} }}");
         let res = schema.execute(q).await;
-        assert!(res.errors.is_empty(), "accountsCount errored: {:?}", res.errors);
+        assert!(
+            res.errors.is_empty(),
+            "accountsCount errored: {:?}",
+            res.errors
+        );
         res.data.into_json().unwrap()["accountsCount"]
             .as_u64()
             .unwrap()
@@ -753,9 +841,18 @@ mod tests {
 
         // balance filter narrows the count. balances are 1e9..=5e9; balance_gte 3e9
         // keeps {3,4,5} MINA = 3 accounts. Uses the same predicate the list uses.
-        assert_eq!(count(&schema, "(query: { balance_gte: 3000000000 })").await, 3);
-        assert_eq!(count(&schema, "(query: { balance_gte: 6000000000 })").await, 0);
-        assert_eq!(count(&schema, "(query: { balance_lte: 2000000000 })").await, 2);
+        assert_eq!(
+            count(&schema, "(query: { balance_gte: 3000000000 })").await,
+            3
+        );
+        assert_eq!(
+            count(&schema, "(query: { balance_gte: 6000000000 })").await,
+            0
+        );
+        assert_eq!(
+            count(&schema, "(query: { balance_lte: 2000000000 })").await,
+            2
+        );
 
         // a valid but unseeded public key -> zero (present-or-not, count is 0/1)
         assert_eq!(
@@ -766,5 +863,61 @@ mod tests {
             .await,
             0
         );
+    }
+
+    // `sort_accounts_by_nonce` backs the `NONCE_ASC`/`NONCE_DESC` sort options
+    // (there is no nonce index, so the ordering is done in memory). Verify it
+    // orders by nonce in both directions and breaks ties by public key so a paged
+    // `offset` window is stable and gap-free. `Account` construction here is cheap
+    // (no store), unlike the `AccountWithMeta` list path.
+    #[test]
+    fn sort_accounts_by_nonce_orders_and_breaks_ties() {
+        let g = &mut Gen::new(1000);
+        // two accounts share nonce 5 -> tie broken by public key
+        let (pk_a, pk_b) = {
+            let (x, y) = (PublicKey::arbitrary(g), PublicKey::arbitrary(g));
+            if x.0 < y.0 {
+                (x, y)
+            } else {
+                (y, x)
+            }
+        };
+        let acct = |pk: &PublicKey, nonce: Option<u32>| Account {
+            public_key: pk.clone(),
+            nonce: nonce.map(Nonce),
+            ..Default::default()
+        };
+        // nonces: none(->0), 5 (pk_a), 5 (pk_b), 2
+        let pk_zero = PublicKey::arbitrary(g);
+        let pk_two = PublicKey::arbitrary(g);
+        let mut accts = vec![
+            acct(&pk_a, Some(5)),
+            acct(&pk_zero, None),
+            acct(&pk_two, Some(2)),
+            acct(&pk_b, Some(5)),
+        ];
+
+        sort_accounts_by_nonce(&mut accts, AccountSortByInput::NonceAsc);
+        let asc: Vec<_> = accts
+            .iter()
+            .map(|a| (a.nonce.map_or(0, |n| n.0), a.public_key.clone()))
+            .collect();
+        assert_eq!(
+            asc,
+            vec![
+                (0, pk_zero.clone()),
+                (2, pk_two.clone()),
+                (5, pk_a.clone()), // pk_a < pk_b, so it comes first on the tie
+                (5, pk_b.clone()),
+            ]
+        );
+
+        // desc is the exact reverse (total order, so no ambiguity)
+        sort_accounts_by_nonce(&mut accts, AccountSortByInput::NonceDesc);
+        let desc: Vec<_> = accts
+            .iter()
+            .map(|a| (a.nonce.map_or(0, |n| n.0), a.public_key.clone()))
+            .collect();
+        assert_eq!(desc, vec![(5, pk_b), (5, pk_a), (2, pk_two), (0, pk_zero),]);
     }
 }
