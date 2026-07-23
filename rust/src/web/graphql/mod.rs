@@ -10,6 +10,7 @@ mod txn;
 pub mod accounts;
 pub mod actions;
 pub mod blocks;
+pub mod charts;
 pub mod events;
 pub mod gen;
 pub mod internal_commands;
@@ -56,6 +57,7 @@ pub struct Root(
     top_stakers::TopStakersQueryRoot,
     top_snarkers::TopSnarkersQueryRoot,
     time_locks::TimeLocksQueryRoot,
+    charts::ChartsQueryRoot,
     version::VersionQueryRoot,
 );
 
