@@ -1,11 +1,30 @@
 //! Zkapp store helpers
 
 use super::common::U32_LEN;
-use crate::{base::public_key::PublicKey, ledger::token::TokenAddress};
+use crate::{
+    base::{public_key::PublicKey, state_hash::StateHash},
+    ledger::token::TokenAddress,
+};
 
 pub mod actions;
 pub mod events;
 pub mod tokens;
+
+/// Key for the height-ordered VK-history index. Layout `{pk}{block_height BE}
+/// {state_hash}` -- pk-prefixed so a single public key's changes scan as a
+/// contiguous range, height big-endian so the range is chronological (reverse
+/// it for newest-first).
+pub fn zkapp_vk_history_key(
+    pk: &PublicKey,
+    block_height: u32,
+    state_hash: &StateHash,
+) -> [u8; PublicKey::LEN + U32_LEN + StateHash::LEN] {
+    let mut key = [0u8; PublicKey::LEN + U32_LEN + StateHash::LEN];
+    key[..PublicKey::LEN].copy_from_slice(pk.0.as_bytes());
+    key[PublicKey::LEN..][..U32_LEN].copy_from_slice(&block_height.to_be_bytes());
+    key[PublicKey::LEN..][U32_LEN..].copy_from_slice(state_hash.0.as_bytes());
+    key
+}
 
 /// Use with [zkapp_state_cf]
 pub fn zkapp_state_key(

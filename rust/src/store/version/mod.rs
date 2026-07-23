@@ -30,7 +30,11 @@ impl IndexerStoreVersion {
     // block version column family reads `{"V2":"Nanomina"}` where it used to
     // read `"V2"`. Databases built before this also hold devnet balances that
     // were a billionth of their real size, and have to be rebuilt regardless.
-    pub const MINOR: u32 = 18;
+    // 19: adds the `zkapp-verification-key-history` column family (per-account
+    // VK change log, keyed by block height + state hash). Databases built before
+    // this have no VK-history index and must be rebuilt to serve
+    // `verificationKeyHistory` / `lastVerificationKeyChange`.
+    pub const MINOR: u32 = 19;
     pub const PATCH: u32 = 0;
 
     /// Output as `MAJOR`.`MINOR`.`PATCH`

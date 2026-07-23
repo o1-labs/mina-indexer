@@ -13,7 +13,8 @@ use crate::{
     },
     store::{
         zkapp::{
-            actions::ZkappActionStore, events::ZkappEventStore, tokens::ZkappTokenStore, ZkappStore,
+            actions::ZkappActionStore, events::ZkappEventStore, tokens::ZkappTokenStore,
+            VerificationKeyChange, ZkappStore,
         },
         DbUpdate, IndexerStore, Result,
     },
@@ -31,9 +32,9 @@ pub struct AccountUpdate {
     /// can derive. Empty for V1 blocks.
     pub accounts_accessed: Vec<AccountAccessed>,
 
-    /// The block these diffs came from. Needed on unapply: the block-stated fields
-    /// are not reversible from a diff, so they are restored from the parent block's
-    /// staged account instead.
+    /// The block these diffs came from. Needed on unapply: the block-stated
+    /// fields are not reversible from a diff, so they are restored from the
+    /// parent block's staged account instead.
     pub state_hash: StateHash,
 }
 
@@ -52,17 +53,18 @@ fn block_stated_account<'a>(
         })
 }
 
-/// Lay the block-stated fields over `account`. No ledger diff can derive them --
-/// `receipt_chain_hash` in particular is a Poseidon chain over the account's
-/// transactions and the indexer has no hasher -- so they are only ever correct if
-/// taken from the block that states them.
+/// Lay the block-stated fields over `account`. No ledger diff can derive them
+/// -- `receipt_chain_hash` in particular is a Poseidon chain over the account's
+/// transactions and the indexer has no hasher -- so they are only ever correct
+/// if taken from the block that states them.
 ///
-/// The zkApp account is here for a different reason: a diff only carries the app-state
-/// fields it *changes*, and rebuilding the account from diffs starts from an 8-wide
-/// default ([`ZKAPP_STATE_FIELD_ELEMENTS_NUM`]) that grows only to the highest index a
-/// diff touches. On mesa, whose app state is 32 fields wide, a zkApp that writes its
-/// first few fields ends up stored 8 wide, with the remaining fields simply absent. The
-/// block states the account's zkApp in full, at the protocol's width, so take it.
+/// The zkApp account is here for a different reason: a diff only carries the
+/// app-state fields it *changes*, and rebuilding the account from diffs starts
+/// from an 8-wide default ([`ZKAPP_STATE_FIELD_ELEMENTS_NUM`]) that grows only
+/// to the highest index a diff touches. On mesa, whose app state is 32 fields
+/// wide, a zkApp that writes its first few fields ends up stored 8 wide, with
+/// the remaining fields simply absent. The block states the account's zkApp in
+/// full, at the protocol's width, so take it.
 ///
 /// [`ZKAPP_STATE_FIELD_ELEMENTS_NUM`]: crate::constants::ZKAPP_STATE_FIELD_ELEMENTS_NUM
 fn set_block_stated_fields(account: &mut Account, stated: Option<&Account>) {
@@ -70,19 +72,20 @@ fn set_block_stated_fields(account: &mut Account, stated: Option<&Account>) {
     account.voting_for = stated.and_then(|a| a.voting_for.to_owned());
     account.permissions = stated.and_then(|a| a.permissions.to_owned());
 
-    // Set the zkApp account, but never *clear* it. An account cannot stop being a zkApp
-    // on chain, and `stated` is the parent block's account on unapply -- which may be
-    // absent. Assigning `None` there would destroy the account's zkApp and leave the
-    // store's zkApp-account counter one ahead of reality, since the delete path only
-    // decrements it for an account it still sees as a zkApp.
+    // Set the zkApp account, but never *clear* it. An account cannot stop being a
+    // zkApp on chain, and `stated` is the parent block's account on unapply --
+    // which may be absent. Assigning `None` there would destroy the account's
+    // zkApp and leave the store's zkApp-account counter one ahead of reality,
+    // since the delete path only decrements it for an account it still sees as
+    // a zkApp.
     if let Some(zkapp) = stated.and_then(|a| a.zkapp.as_ref()) {
         account.zkapp = Some(zkapp.to_owned());
     }
 }
 
-/// The account as the *parent* block left it. Used on unapply: the block-stated fields
-/// are not reversible from a diff, so they are rolled back to what the parent said.
-/// Without this an orphaned block's values stick.
+/// The account as the *parent* block left it. Used on unapply: the block-stated
+/// fields are not reversible from a diff, so they are rolled back to what the
+/// parent said. Without this an orphaned block's values stick.
 fn parent_stated_account(
     db: &IndexerStore,
     parent: Option<&StateHash>,
@@ -92,8 +95,8 @@ fn parent_stated_account(
     parent.and_then(|parent| db.get_staged_account(pk, token, parent).ok().flatten())
 }
 
-/// Roll the block-stated fields back for accounts the unapplied block merely *accessed* --
-/// ones it touched without producing any ledger diff for them.
+/// Roll the block-stated fields back for accounts the unapplied block merely
+/// *accessed* -- ones it touched without producing any ledger diff for them.
 fn unapply_accessed_only(
     db: &IndexerStore,
     accounts_accessed: &[AccountAccessed],
@@ -147,6 +150,12 @@ impl DbAccountUpdate {
             // apply account diffs
             for ((pk, token), diffs) in token_account_diffs {
                 let before = db.get_best_account(&pk, &token)?;
+                // VK hash on the account before this block's diffs, to detect an
+                // actual VK change (vs a no-op re-set) at the hook below.
+                let old_vk_hash = before
+                    .as_ref()
+                    .and_then(|a| a.zkapp.as_ref())
+                    .map(|z| z.verification_key.hash.clone());
                 let (before_values, mut after) = (
                     before.as_ref().map(|a| (a.is_zkapp_account(), a.balance.0)),
                     before.unwrap_or_else(|| {
@@ -199,6 +208,21 @@ impl DbAccountUpdate {
                                 &diff.public_key,
                                 &diff.verification_key,
                             )?;
+                            // record an actual VK change (skip no-op re-sets to
+                            // the same hash) in the height-ordered history index
+                            if old_vk_hash.as_ref() != Some(&diff.verification_key.hash) {
+                                db.add_zkapp_verification_key_change(
+                                    &diff.public_key,
+                                    block_height,
+                                    state_hash,
+                                    &VerificationKeyChange {
+                                        token: diff.token.clone(),
+                                        txn_hash: diff.txn_hash.clone(),
+                                        old_vk_hash: old_vk_hash.clone(),
+                                        verification_key: diff.verification_key.clone(),
+                                    },
+                                )?;
+                            }
                             after.zkapp_verification_key(diff, state_hash)
                         }
                         ZkappUri(diff) => {
@@ -391,6 +415,15 @@ impl DbAccountUpdate {
                             }
                         }
                         ZkappVerificationKey(diff) => {
+                            // roll back the history record for this change (no-op
+                            // when none was written, i.e. the apply saw no change)
+                            db.remove_zkapp_verification_key_change(
+                                &diff.public_key,
+                                block_height,
+                                state_hash,
+                            )
+                            .ok();
+
                             let vk = db
                                 .remove_last_zkapp_verification_key(&diff.token, &diff.public_key)
                                 .ok();
@@ -472,7 +505,9 @@ impl DbAccountUpdate {
                     .as_ref()
                     .and_then(|a| a.receipt_chain_hash.to_owned());
                 after.voting_for = stated_before.as_ref().and_then(|a| a.voting_for.to_owned());
-                after.permissions = stated_before.as_ref().and_then(|a| a.permissions.to_owned());
+                after.permissions = stated_before
+                    .as_ref()
+                    .and_then(|a| a.permissions.to_owned());
 
                 // roll the block-stated fields back to what the parent block said
                 let stated = parent_stated_account(db, parent.as_ref(), &pk, &token);
@@ -535,10 +570,11 @@ use std::collections::HashMap;
 /// Aggregate diffs per token account.
 ///
 /// `debits_first` sets the intra-account fold order. These diffs are not in the
-/// order the protocol applied them and an unsigned balance saturates at zero, so
-/// the order matters and is opposite for apply vs unapply:
+/// order the protocol applied them and an unsigned balance saturates at zero,
+/// so the order matters and is opposite for apply vs unapply:
 /// - **apply** adds credits before subtracting debits (`debits_first = false`),
-///   or a debit that a same-block payment funds underflows to zero (see PR #85).
+///   or a debit that a same-block payment funds underflows to zero (see PR
+///   #85).
 /// - **unapply** is the exact inverse: it must reverse the debits (adding them
 ///   back) before reversing the credits (subtracting them) (`debits_first =
 ///   true`). Subtracting a large credit first saturates at zero and permanently
@@ -614,11 +650,12 @@ mod tests {
     /// Regression for issue #86.
     ///
     /// An account's diffs are folded into an unsigned balance that saturates at
-    /// zero, so the fold order must be opposite for apply and unapply. Apply adds
-    /// the credit before subtracting the debits; unapply is the exact inverse and
-    /// must add the debits back before subtracting the credit. Sharing apply's
-    /// credits-first order on unapply subtracted a large credit first, underflowed
-    /// to zero, and permanently lost the balance above it (the +61.1 MINA bug).
+    /// zero, so the fold order must be opposite for apply and unapply. Apply
+    /// adds the credit before subtracting the debits; unapply is the exact
+    /// inverse and must add the debits back before subtracting the credit.
+    /// Sharing apply's credits-first order on unapply subtracted a large
+    /// credit first, underflowed to zero, and permanently lost the balance
+    /// above it (the +61.1 MINA bug).
     #[test]
     fn unapply_orders_debits_before_credits() {
         // the 531095 shape: one large incoming credit and two smaller debits

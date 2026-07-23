@@ -8,18 +8,43 @@
 //! - events
 
 use crate::{
-    base::public_key::PublicKey,
+    base::{public_key::PublicKey, state_hash::StateHash},
+    command::TxnHash,
     ledger::{
         account::{Permissions, Timing},
         token::{TokenAddress, TokenSymbol},
     },
-    mina_blocks::v2::{VerificationKey, ZkappState, ZkappUri},
+    mina_blocks::v2::{
+        zkapp::verification_key::VerificationKeyHash, VerificationKey, ZkappState, ZkappUri,
+    },
     store::Result,
 };
+use serde::{Deserialize, Serialize};
+use speedb::{DBIterator, Direction};
 
 pub mod actions;
 pub mod events;
 pub mod tokens;
+
+/// One verification-key change on a zkApp account, recorded in the
+/// height-ordered VK-history index (`getVerificationKeyHistory` /
+/// `getLastVerificationKeyChange`, issue #95 item 5). Only *actual* changes are
+/// recorded: `old_vk_hash` is `None` for the first-ever key (the VK's creation)
+/// and `Some(prev)` thereafter; a re-set to the same hash is not recorded. The
+/// block height & state hash live in the index key, so they are not duplicated
+/// here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerificationKeyChange {
+    pub token: TokenAddress,
+    pub txn_hash: TxnHash,
+
+    /// Hash of the previous verification key, or `None` when this is the first
+    /// key set on the account.
+    pub old_vk_hash: Option<VerificationKeyHash>,
+
+    /// The verification key set by this change (full key + hash).
+    pub verification_key: VerificationKey,
+}
 
 pub trait ZkappStore {
     ///////////////
@@ -121,6 +146,48 @@ pub trait ZkappStore {
         token: &TokenAddress,
         pk: &PublicKey,
     ) -> Result<VerificationKey>;
+
+    ////////////////////////////////
+    // zkapp verification-key history //
+    ////////////////////////////////
+
+    /// Record a verification-key change for `pk` at `(block_height,
+    /// state_hash)` in the height-ordered VK-history index. Only actual
+    /// changes are passed (the caller skips no-op re-sets).
+    fn add_zkapp_verification_key_change(
+        &self,
+        pk: &PublicKey,
+        block_height: u32,
+        state_hash: &StateHash,
+        change: &VerificationKeyChange,
+    ) -> Result<()>;
+
+    /// Remove the VK-history record for `pk` at `(block_height, state_hash)`.
+    /// Idempotent: a no-op when no record exists (the apply side only writes on
+    /// an actual change), so the unapply path can call it unconditionally.
+    fn remove_zkapp_verification_key_change(
+        &self,
+        pk: &PublicKey,
+        block_height: u32,
+        state_hash: &StateHash,
+    ) -> Result<()>;
+
+    /// The most recent VK change for `pk`, with its block height & state hash,
+    /// or `None` if the key never changed. Backs
+    /// `getLastVerificationKeyChange`.
+    fn get_last_zkapp_verification_key_change(
+        &self,
+        pk: &PublicKey,
+    ) -> Result<Option<(u32, StateHash, VerificationKeyChange)>>;
+
+    /// Iterate `pk`'s VK-history records. Key layout `{pk}{block_height BE}
+    /// {state_hash}`; `Direction::Reverse` yields newest-first. Backs
+    /// `getVerificationKeyHistory`.
+    fn zkapp_verification_key_history_iterator(
+        &self,
+        pk: &PublicKey,
+        direction: Direction,
+    ) -> DBIterator<'_>;
 
     ///////////////
     // zkapp uri //
