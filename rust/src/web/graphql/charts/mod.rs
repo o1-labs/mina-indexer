@@ -30,8 +30,11 @@ use crate::{
     web::graphql::{db, get_block_canonicity},
 };
 use async_graphql::{Context, Enum, Object, Result, SimpleObject};
-use speedb::IteratorMode;
-use std::{collections::BTreeMap, sync::Arc};
+use speedb::{Direction, IteratorMode};
+use std::{
+    collections::{BTreeMap, HashSet},
+    sync::Arc,
+};
 
 /// Bucket granularity for a time-series chart.
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
@@ -129,6 +132,54 @@ fn command_count_chart(
         .collect())
 }
 
+/// User-transaction count for a single `pk`, bucketed by `bucket` -- the
+/// address-filtered form of the transactions chart. Counts every canonical
+/// command the address is a party to (sender via the `from` index, receiver via
+/// the `to` index). Cheap: it seeks only this pk's rows in each index, not the
+/// whole chain.
+///
+/// A self-payment appears in both indices for the same pk, so entries are
+/// deduped by their key suffix (the bytes after the pk prefix -- identical for
+/// the two sides of one command) to avoid double-counting.
+fn address_txn_count_chart(
+    db: &Arc<crate::store::IndexerStore>,
+    bucket: ChartBucket,
+    pk: &PublicKey,
+) -> Result<Vec<ChartPoint>> {
+    let mut buckets: BTreeMap<String, u64> = BTreeMap::new();
+    let mut seen: HashSet<Vec<u8>> = HashSet::new();
+
+    for iter in [
+        db.txn_from_height_iterator(pk, Direction::Forward),
+        db.txn_to_height_iterator(pk, Direction::Forward),
+    ] {
+        for (key, _) in iter.flatten() {
+            // rows are prefixed by pk; stop once we walk past this pk's block.
+            if key.len() < PublicKey::LEN || key[..PublicKey::LEN] != *pk.0.as_bytes() {
+                break;
+            }
+            // dedup the self-payment overlap between the from/to indices.
+            if !seen.insert(key[PublicKey::LEN..].to_vec()) {
+                continue;
+            }
+
+            let state_hash = state_hash_suffix(&key)?;
+            if !get_block_canonicity(db, &state_hash) {
+                continue;
+            }
+            let Some(slot) = db.get_block_global_slot(&state_hash)? else {
+                continue;
+            };
+            *buckets.entry(bucket_key(slot, bucket)).or_insert(0) += 1;
+        }
+    }
+
+    Ok(buckets
+        .into_iter()
+        .map(|(date, count)| ChartPoint { date, count })
+        .collect())
+}
+
 #[derive(Default)]
 pub struct ChartsQueryRoot;
 
@@ -136,17 +187,31 @@ pub struct ChartsQueryRoot;
 impl ChartsQueryRoot {
     /// User-transaction count per `bucket` over the canonical chain, oldest
     /// first. Backs Blockberry's `getTransactionsCountChart`.
+    ///
+    /// With `address`, counts only transactions that public key is a party to
+    /// (sent or received); without it, the network-wide total.
     #[graphql(cache_control(max_age = 3600))]
     async fn transactions_count_chart(
         &self,
         ctx: &Context<'_>,
         bucket: ChartBucket,
+        address: Option<String>,
     ) -> Result<Vec<ChartPoint>> {
-        command_count_chart(db(ctx), bucket, CommandKind::User)
+        let db = db(ctx);
+        match address {
+            None => command_count_chart(db, bucket, CommandKind::User),
+            Some(address) => {
+                let pk = PublicKey::new(&address).map_err(|_| {
+                    async_graphql::Error::new(format!("Invalid public key: {address}"))
+                })?;
+                address_txn_count_chart(db, bucket, &pk)
+            }
+        }
     }
 
     /// zkApp-command count per `bucket` over the canonical chain, oldest first.
-    /// Backs Blockberry's `getZkAppTransactionsCountChart`.
+    /// Backs Blockberry's `getZkAppTransactionsCountChart`. Network-wide only
+    /// -- the store has no per-address zkApp-command index to filter on.
     #[graphql(cache_control(max_age = 3600))]
     async fn zkapp_transactions_count_chart(
         &self,
@@ -245,6 +310,41 @@ mod tests {
                 .len();
             assert_eq!(arr, 0, "{field} should be empty on an empty store");
         }
+    }
+
+    // The address-filtered transactions chart: empty store => empty series for a
+    // valid key, and a malformed address is rejected. The populated per-address
+    // count (from/to indices + self-payment dedup) needs a seeded chain, covered
+    // by integration.
+    #[tokio::test]
+    async fn transactions_chart_by_address_empty_and_bad_address() {
+        use crate::{store::IndexerStore, web::graphql::build_schema};
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let store = Arc::new(IndexerStore::new(dir.path(), true).unwrap());
+        let schema = build_schema(store, 0, 0, 0, false);
+
+        let ok = schema
+            .execute(
+                "{ transactionsCountChart(bucket: MONTH, address: \
+                 \"B62qmK2RecMoNXcqvt6K9k7yKG81qhyMoXhCfZ15SXNa5ikJaJr3urk\") \
+                 { date count } }",
+            )
+            .await;
+        assert!(ok.errors.is_empty(), "unexpected error: {:?}", ok.errors);
+        assert_eq!(
+            ok.data.into_json().unwrap()["transactionsCountChart"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+
+        let bad = schema
+            .execute("{ transactionsCountChart(bucket: DAY, address: \"nope\") { count } }")
+            .await;
+        assert!(!bad.errors.is_empty(), "bad address should error");
     }
 
     // Empty store => empty delegation series (no genesis yet), and a malformed
