@@ -354,9 +354,10 @@ impl IndexerConfiguration {
 }
 
 /// Spawn a background task that writes a rolling speedb checkpoint of the DB to
-/// `<dir>/latest` every `MINA_CHECKPOINT_INTERVAL_SECS` (default 3600 = hourly).
-/// On an ungraceful crash, restart from the checkpoint instead of replaying a
-/// large WAL. The checkpoint is hard-link based (cheap) and consistent.
+/// `<dir>/latest` every `MINA_CHECKPOINT_INTERVAL_SECS` (default 3600 =
+/// hourly). On an ungraceful crash, restart from the checkpoint instead of
+/// replaying a large WAL. The checkpoint is hard-link based (cheap) and
+/// consistent.
 fn spawn_periodic_checkpoints(store: Arc<IndexerStore>, dir: PathBuf) {
     let secs: u64 = std::env::var("MINA_CHECKPOINT_INTERVAL_SECS")
         .ok()
@@ -383,7 +384,8 @@ fn spawn_periodic_checkpoints(store: Arc<IndexerStore>, dir: PathBuf) {
     });
 }
 
-/// Write a consistent speedb checkpoint to `<dir>/latest`, atomically (tmp + rename).
+/// Write a consistent speedb checkpoint to `<dir>/latest`, atomically (tmp +
+/// rename).
 pub(crate) fn write_db_checkpoint(store: &IndexerStore, dir: &Path) -> anyhow::Result<PathBuf> {
     fs::create_dir_all(dir)?;
     let tmp = dir.join(".tmp-checkpoint");
@@ -628,11 +630,11 @@ async fn retry_parse_staking_ledger(path: &Path) -> anyhow::Result<StakingLedger
 ///
 /// `block_pipeline` is synchronous. Without this guard a panic in it propagates
 /// out of the watcher/reconcile task; `tokio_graceful_shutdown` treats a
-/// subsystem panic as fatal, so the process exits — and on restart it re-ingests
-/// the very same block and panics again: a crash loop that takes the indexer
-/// permanently offline. Catching converts that into a logged, counted, skipped
-/// block (via the callers' existing `Err` arms) while every other block stays
-/// consistent and the service keeps serving reads.
+/// subsystem panic as fatal, so the process exits — and on restart it
+/// re-ingests the very same block and panics again: a crash loop that takes the
+/// indexer permanently offline. Catching converts that into a logged, counted,
+/// skipped block (via the callers' existing `Err` arms) while every other block
+/// stays consistent and the service keeps serving reads.
 ///
 /// Trade-off: after a caught panic the in-memory state for *that* block may be
 /// partially applied. That is strictly better than a total outage — a
@@ -648,8 +650,8 @@ fn apply_block_catching_panic(
 
 /// Run a synchronous block-apply closure, converting a panic into an `Err`
 /// rather than letting it unwind out of the ingestion task. Split out from
-/// [`apply_block_catching_panic`] so the catch behavior is unit-testable without
-/// constructing a full `IndexerState`.
+/// [`apply_block_catching_panic`] so the catch behavior is unit-testable
+/// without constructing a full `IndexerState`.
 fn catch_block_apply<F>(apply: F) -> anyhow::Result<bool>
 where
     F: FnOnce() -> anyhow::Result<bool>,
@@ -878,10 +880,13 @@ async fn prune_blocks_dir(
     let retention = retention.max(MAINNET_TRANSITION_FRONTIER_K);
     let floor = {
         let st = state.read().await;
-        st.best_tip_block().blockchain_length.saturating_sub(retention)
+        st.best_tip_block()
+            .blockchain_length
+            .saturating_sub(retention)
     };
     if floor == 0 {
-        return Ok(()); // tip not yet deep enough for anything to fall out of the window
+        return Ok(()); // tip not yet deep enough for anything to fall out of
+                       // the window
     }
 
     let mut pruned = 0u64;
@@ -907,8 +912,8 @@ async fn prune_blocks_dir(
     Ok(())
 }
 
-/// Block files in `blocks_dir` strictly below `floor` (height < floor) — the set
-/// safe to delete once their height has fallen out of the retention window.
+/// Block files in `blocks_dir` strictly below `floor` (height < floor) — the
+/// set safe to delete once their height has fallen out of the retention window.
 /// Non-block files and unreadable dirs yield nothing. Pure I/O selection, split
 /// out from [`prune_blocks_dir`] so the height gating is unit-testable.
 fn prunable_block_files(blocks_dir: &Path, floor: u32) -> Vec<PathBuf> {
@@ -1245,6 +1250,22 @@ impl GenesisVersion {
             global_slot: DEVNET_GENESIS_GLOBAL_SLOT,
         }
     }
+
+    /// Derive the genesis version from a supplied genesis block, for a
+    /// **custom** network (a lightnet or any network the indexer doesn't
+    /// embed). Everything is taken from the block itself rather than a
+    /// hardcoded constant, so the indexer roots canonicity at exactly the
+    /// genesis the block declares.
+    pub fn from_block(block: &crate::block::precomputed::PrecomputedBlock) -> anyhow::Result<Self> {
+        use std::str::FromStr;
+        Ok(Self {
+            state_hash: block.state_hash(),
+            prev_hash: block.previous_state_hash(),
+            last_vrf_output: VrfOutput::from_str(&block.last_vrf_output())?,
+            blockchain_lenth: block.blockchain_length(),
+            global_slot: block.global_slot_since_genesis(),
+        })
+    }
 }
 
 impl IndexerVersion {
@@ -1362,6 +1383,25 @@ mod tests {
         assert!(catch_block_apply(|| anyhow::bail!("pipeline error")).is_err());
     }
 
+    // Deriving the genesis version from a block must reproduce the embedded
+    // constants for a known network -- so a custom network gets exactly the same
+    // treatment the hardfork one does, just data-driven. Uses the hardfork
+    // genesis block (a real V2 genesis) as the stand-in for a supplied one.
+    #[test]
+    fn genesis_version_from_block_matches_embedded() -> anyhow::Result<()> {
+        use crate::{block::genesis::GenesisBlock, server::GenesisVersion};
+        let block = GenesisBlock::new_v2()?.to_precomputed();
+        let derived = GenesisVersion::from_block(&block)?;
+        let embedded = GenesisVersion::v2();
+
+        assert_eq!(derived.state_hash, embedded.state_hash);
+        assert_eq!(derived.prev_hash, embedded.prev_hash);
+        assert_eq!(derived.blockchain_lenth, embedded.blockchain_lenth);
+        assert_eq!(derived.global_slot, embedded.global_slot);
+        assert_eq!(derived.last_vrf_output, embedded.last_vrf_output);
+        Ok(())
+    }
+
     #[test]
     fn catch_block_apply_converts_panic_to_err() {
         // The whole point: a panic in the sync pipeline must become an `Err`
@@ -1432,8 +1472,8 @@ mod tests {
     // recovery path (`maybe_restore_from_checkpoint`) gates on `latest/CURRENT`.
     // These tests pin those guarantees.
 
-    use crate::store::IndexerStore;
     use super::write_db_checkpoint;
+    use crate::store::IndexerStore;
 
     #[test]
     fn checkpoint_is_complete_and_reopenable() {
