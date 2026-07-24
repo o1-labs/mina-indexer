@@ -240,4 +240,30 @@ mod tests {
             "introspection disabled should hide __schema, got: {off_data}"
         );
     }
+
+    /// Keeps the published GraphQL SDL (`docs/schema.graphql`) in lock-step with
+    /// the schema, so clients can codegen against a committed contract. On drift
+    /// this fails; regenerate with:
+    ///
+    /// ```text
+    /// UPDATE_SCHEMA=1 cargo test --lib web::graphql::tests::published_sdl_is_current
+    /// ```
+    #[test]
+    fn published_sdl_is_current() {
+        let dir = TempDir::new().unwrap();
+        let store = Arc::new(IndexerStore::new(dir.path(), true).unwrap());
+        let sdl = build_schema(store, 0, 0, 0, false).sdl();
+
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/schema.graphql");
+        if std::env::var("UPDATE_SCHEMA").is_ok() {
+            std::fs::write(path, &sdl).expect("write docs/schema.graphql");
+        } else {
+            let on_disk = std::fs::read_to_string(path).unwrap_or_default();
+            assert_eq!(
+                sdl, on_disk,
+                "GraphQL SDL drifted from docs/schema.graphql; regenerate with \
+                 UPDATE_SCHEMA=1 cargo test --lib published_sdl_is_current"
+            );
+        }
+    }
 }

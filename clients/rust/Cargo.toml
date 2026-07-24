@@ -1,0 +1,19 @@
+[package]
+name = "mina-indexer-client"
+version = "0.1.0"
+edition = "2021"
+description = "Async Rust client for the Mina Indexer REST + GraphQL API, with sync-aware health checks."
+license = "Apache-2.0"
+repository = "https://github.com/o1-labs/mina-indexer"
+readme = "README.md"
+keywords = ["mina", "indexer", "blockchain", "graphql", "client"]
+
+[dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+wiremock = "0.6"
