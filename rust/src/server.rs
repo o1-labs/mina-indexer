@@ -6,6 +6,7 @@ use crate::{
         self,
         parser::BlockParser,
         precomputed::{CurrencyEncoding, PcbVersion, PrecomputedBlock},
+        store::BlockStore,
         vrf_output::VrfOutput,
     },
     chain::{ChainId, Network},
@@ -354,9 +355,10 @@ impl IndexerConfiguration {
 }
 
 /// Spawn a background task that writes a rolling speedb checkpoint of the DB to
-/// `<dir>/latest` every `MINA_CHECKPOINT_INTERVAL_SECS` (default 3600 = hourly).
-/// On an ungraceful crash, restart from the checkpoint instead of replaying a
-/// large WAL. The checkpoint is hard-link based (cheap) and consistent.
+/// `<dir>/latest` every `MINA_CHECKPOINT_INTERVAL_SECS` (default 3600 =
+/// hourly). On an ungraceful crash, restart from the checkpoint instead of
+/// replaying a large WAL. The checkpoint is hard-link based (cheap) and
+/// consistent.
 fn spawn_periodic_checkpoints(store: Arc<IndexerStore>, dir: PathBuf) {
     let secs: u64 = std::env::var("MINA_CHECKPOINT_INTERVAL_SECS")
         .ok()
@@ -383,7 +385,8 @@ fn spawn_periodic_checkpoints(store: Arc<IndexerStore>, dir: PathBuf) {
     });
 }
 
-/// Write a consistent speedb checkpoint to `<dir>/latest`, atomically (tmp + rename).
+/// Write a consistent speedb checkpoint to `<dir>/latest`, atomically (tmp +
+/// rename).
 pub(crate) fn write_db_checkpoint(store: &IndexerStore, dir: &Path) -> anyhow::Result<PathBuf> {
     fs::create_dir_all(dir)?;
     let tmp = dir.join(".tmp-checkpoint");
@@ -628,11 +631,11 @@ async fn retry_parse_staking_ledger(path: &Path) -> anyhow::Result<StakingLedger
 ///
 /// `block_pipeline` is synchronous. Without this guard a panic in it propagates
 /// out of the watcher/reconcile task; `tokio_graceful_shutdown` treats a
-/// subsystem panic as fatal, so the process exits — and on restart it re-ingests
-/// the very same block and panics again: a crash loop that takes the indexer
-/// permanently offline. Catching converts that into a logged, counted, skipped
-/// block (via the callers' existing `Err` arms) while every other block stays
-/// consistent and the service keeps serving reads.
+/// subsystem panic as fatal, so the process exits — and on restart it
+/// re-ingests the very same block and panics again: a crash loop that takes the
+/// indexer permanently offline. Catching converts that into a logged, counted,
+/// skipped block (via the callers' existing `Err` arms) while every other block
+/// stays consistent and the service keeps serving reads.
 ///
 /// Trade-off: after a caught panic the in-memory state for *that* block may be
 /// partially applied. That is strictly better than a total outage — a
@@ -648,8 +651,8 @@ fn apply_block_catching_panic(
 
 /// Run a synchronous block-apply closure, converting a panic into an `Err`
 /// rather than letting it unwind out of the ingestion task. Split out from
-/// [`apply_block_catching_panic`] so the catch behavior is unit-testable without
-/// constructing a full `IndexerState`.
+/// [`apply_block_catching_panic`] so the catch behavior is unit-testable
+/// without constructing a full `IndexerState`.
 fn catch_block_apply<F>(apply: F) -> anyhow::Result<bool>
 where
     F: FnOnce() -> anyhow::Result<bool>,
@@ -805,8 +808,25 @@ async fn reconcile_blocks_dir(
         // quiet presence check (unlike check_block, which logs per block)
         let (_, _, state_hash) = extract_network_height_hash(&path);
         let state_hash: StateHash = state_hash.into();
-        if state.read().await.diffs_map.contains_key(&state_hash) {
-            continue;
+        // Skip blocks already ingested. The witness tree (`diffs_map`) only holds
+        // the recent working set and prunes below the tip, so a block that has
+        // aged out of the tree but is still on disk within the reconcile window
+        // (`>= tip - k`) and in the store must ALSO be checked against the store
+        // -- otherwise it is re-parsed and re-applied on every reconcile cycle.
+        // That re-application (observed at ~7-12x per block per catch-up cycle)
+        // is the dominant cost that starves forward progress during bootstrap.
+        // `get_block_height` is a cheap point lookup (no PCB deserialize).
+        {
+            let st = state.read().await;
+            let ingested = st.diffs_map.contains_key(&state_hash)
+                || st
+                    .indexer_store
+                    .as_ref()
+                    .and_then(|store| store.get_block_height(&state_hash).ok().flatten())
+                    .is_some();
+            if ingested {
+                continue;
+            }
         }
 
         // trustless gate: only ingest blocks whose proof verifies
@@ -878,10 +898,13 @@ async fn prune_blocks_dir(
     let retention = retention.max(MAINNET_TRANSITION_FRONTIER_K);
     let floor = {
         let st = state.read().await;
-        st.best_tip_block().blockchain_length.saturating_sub(retention)
+        st.best_tip_block()
+            .blockchain_length
+            .saturating_sub(retention)
     };
     if floor == 0 {
-        return Ok(()); // tip not yet deep enough for anything to fall out of the window
+        return Ok(()); // tip not yet deep enough for anything to fall out of
+                       // the window
     }
 
     let mut pruned = 0u64;
@@ -907,8 +930,8 @@ async fn prune_blocks_dir(
     Ok(())
 }
 
-/// Block files in `blocks_dir` strictly below `floor` (height < floor) — the set
-/// safe to delete once their height has fallen out of the retention window.
+/// Block files in `blocks_dir` strictly below `floor` (height < floor) — the
+/// set safe to delete once their height has fallen out of the retention window.
 /// Non-block files and unreadable dirs yield nothing. Pure I/O selection, split
 /// out from [`prune_blocks_dir`] so the height gating is unit-testable.
 fn prunable_block_files(blocks_dir: &Path, floor: u32) -> Vec<PathBuf> {
@@ -1432,8 +1455,8 @@ mod tests {
     // recovery path (`maybe_restore_from_checkpoint`) gates on `latest/CURRENT`.
     // These tests pin those guarantees.
 
-    use crate::store::IndexerStore;
     use super::write_db_checkpoint;
+    use crate::store::IndexerStore;
 
     #[test]
     fn checkpoint_is_complete_and_reopenable() {
