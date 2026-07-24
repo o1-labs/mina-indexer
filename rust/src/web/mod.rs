@@ -203,6 +203,8 @@ pub async fn start_web_server<A: net::ToSocketAddrs>(
             .service(accounts::get_account)
             .service(blockchain::get_blockchain_summary)
             .service(blockchain::get_health)
+            .service(blockchain::get_healthz)
+            .service(blockchain::get_readyz)
             .service(metrics::get_metrics)
             .service(
                 web::resource(ENDPOINT_GRAPHQL)
