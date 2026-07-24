@@ -370,6 +370,106 @@ pub async fn get_health(store: Data<Arc<IndexerStore>>) -> HttpResponse {
     }
 }
 
+/// Readiness lag budget (seconds): `/readyz` reports ready only while the best
+/// tip is at most this old. Override with `MINA_READY_MAX_LAG_SECS`; the
+/// default (600s = 10 min) tolerates a few slots of normal lag / a brief reorg
+/// without flapping, while still catching a genuinely-behind or stalled
+/// indexer.
+static READY_MAX_LAG_SECS: std::sync::LazyLock<u64> = std::sync::LazyLock::new(|| {
+    std::env::var("MINA_READY_MAX_LAG_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(600)
+});
+
+/// Kubernetes **liveness** probe: 200 while the process is up and the store
+/// answers. Deliberately independent of sync state -- a catching-up indexer is
+/// alive and must not be restarted.
+#[get("/healthz")]
+pub async fn get_healthz(store: Data<Arc<IndexerStore>>) -> HttpResponse {
+    match store.as_ref().get_best_block_height() {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({ "status": "ok" })),
+        Err(_) => HttpResponse::ServiceUnavailable()
+            .json(serde_json::json!({ "status": "store_unavailable" })),
+    }
+}
+
+/// Kubernetes **readiness** probe: 200 only when the best tip is fresh (within
+/// `MINA_READY_MAX_LAG_SECS` of now), else 503 -- so a bootstrapping or
+/// behind-the-tip indexer is pulled from the Service/load balancer and does not
+/// serve stale data. Clients can gate on this before trusting query results.
+#[get("/readyz")]
+pub async fn get_readyz(store: Data<Arc<IndexerStore>>) -> HttpResponse {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    match store.as_ref().get_best_block() {
+        Ok(Some(best_tip)) => {
+            let now_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or_default();
+            let tip_age_seconds = now_ms.saturating_sub(best_tip.timestamp()) / 1000;
+            let max_lag = *READY_MAX_LAG_SECS;
+            let ready = tip_age_seconds <= max_lag;
+
+            let body = serde_json::json!({
+                "status": if ready { "ready" } else { "catching_up" },
+                "ready": ready,
+                "tip_height": best_tip.blockchain_length(),
+                "tip_age_seconds": tip_age_seconds,
+                "max_lag_seconds": max_lag,
+            });
+            if ready {
+                HttpResponse::Ok().json(body)
+            } else {
+                HttpResponse::ServiceUnavailable().json(body)
+            }
+        }
+        // No best block yet: still bootstrapping the database.
+        Ok(None) => HttpResponse::ServiceUnavailable()
+            .json(serde_json::json!({ "status": "bootstrapping", "ready": false })),
+        Err(_) => HttpResponse::ServiceUnavailable()
+            .json(serde_json::json!({ "status": "store_unavailable", "ready": false })),
+    }
+}
+
+#[cfg(test)]
+mod health_tests {
+    use super::{get_healthz, get_readyz};
+    use crate::store::IndexerStore;
+    use actix_web::{test, web::Data, App};
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    // On a fresh/empty store: liveness is 200 (the process is up), but readiness
+    // is 503 (no best block yet == still bootstrapping) -- so k8s keeps the pod
+    // running while pulling it from the Service until it has data.
+    #[actix_web::test]
+    async fn healthz_live_readyz_not_ready_while_bootstrapping() {
+        let dir = TempDir::new().unwrap();
+        let store = Arc::new(IndexerStore::new(dir.path(), true).unwrap());
+        let app = test::init_service(
+            App::new()
+                .app_data(Data::new(store))
+                .service(get_healthz)
+                .service(get_readyz),
+        )
+        .await;
+
+        let live =
+            test::call_service(&app, test::TestRequest::get().uri("/healthz").to_request()).await;
+        assert_eq!(live.status().as_u16(), 200, "liveness must be up");
+
+        let ready =
+            test::call_service(&app, test::TestRequest::get().uri("/readyz").to_request()).await;
+        assert_eq!(
+            ready.status().as_u16(),
+            503,
+            "readiness must be 503 with no best block"
+        );
+    }
+}
+
 #[get("/summary")]
 pub async fn get_blockchain_summary(
     store: Data<Arc<IndexerStore>>,
