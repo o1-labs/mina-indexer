@@ -1,0 +1,2193 @@
+type Account {
+	publicKey: String!
+	username: String
+	delegate: String!
+	delegateUsername: String
+	"""
+	Value balance (nano)
+	"""
+	balance: Int!
+	"""
+	Value nonce
+	"""
+	nonce: Int!
+	"""
+	Value time locked
+	"""
+	timeLocked: Boolean!
+	"""
+	Value account timing
+	"""
+	timing: Timing
+	"""
+	Value account token address
+	"""
+	token: String!
+	"""
+	Value zkapp
+	"""
+	zkapp: ZkappAccount
+	"""
+	Value receipt chain hash
+	"""
+	receiptChainHash: String!
+	"""
+	Value voting for
+	"""
+	votingFor: String!
+	"""
+	Value permissions
+	"""
+	permissions: Permissions
+}
+
+input AccountQueryInput {
+	publicKey: String
+	delegate: String
+	username: String
+	balance: Int
+	token: String
+	zkapp: Boolean
+	balance_gt: Int
+	balance_gte: Int
+	balance_lt: Int
+	balance_lte: Int
+	balance_ne: Int
+}
+
+enum AccountSortByInput {
+	BALANCE_ASC
+	BALANCE_DESC
+	NONCE_ASC
+	NONCE_DESC
+}
+
+type AccountWithMeta {
+	publicKey: String!
+	username: String!
+	delegate: String!
+	delegateUsername: String
+	"""
+	Value balance (nano)
+	"""
+	balance: Int!
+	"""
+	Value nonce
+	"""
+	nonce: Int!
+	"""
+	Value time locked
+	"""
+	timeLocked: Boolean!
+	"""
+	Value account timing
+	"""
+	timing: Timing
+	"""
+	Value account token address
+	"""
+	token: String!
+	"""
+	Value zkapp
+	"""
+	zkapp: ZkappAccount
+	"""
+	Value receipt chain hash
+	"""
+	receiptChainHash: String!
+	"""
+	Value voting for
+	"""
+	votingFor: String!
+	"""
+	Value permissions
+	"""
+	permissions: Permissions
+	is_genesis_account: Boolean!
+	genesis_account: Int
+	pk_epoch_num_blocks: Int!
+	pk_total_num_blocks: Int!
+	pk_epoch_num_snarks: Int!
+	pk_total_num_snarks: Int!
+	pk_epoch_num_user_commands: Int!
+	pk_total_num_user_commands: Int!
+	pk_epoch_num_zkapp_commands: Int!
+	pk_total_num_zkapp_commands: Int!
+	pk_epoch_num_internal_commands: Int!
+	pk_total_num_internal_commands: Int!
+	block_height: Int!
+}
+
+type Action {
+	"""
+	Value action data
+	"""
+	action: String!
+	"""
+	Value action txn
+	"""
+	txn: TxnInfo!
+	"""
+	Value action block
+	"""
+	block: BlockInfo!
+}
+
+input ActionsQueryInput {
+	"""
+	Input public key
+	"""
+	publicKey: String!
+	"""
+	Input token address
+	"""
+	token: String
+	"""
+	Input start block height
+	"""
+	startBlockHeight: Int
+	"""
+	Input end block height
+	"""
+	endBlockHeight: Int
+	"""
+	Input start action index
+	"""
+	startActionIndex: Int
+	"""
+	Input end action index
+	"""
+	endActionIndex: Int
+}
+
+enum ActionsSortByInput {
+	BLOCK_HEIGHT_DESC
+	BLOCK_HEIGHT_ASC
+}
+
+type Block {
+	"""
+	Value canonical
+	"""
+	canonical: Boolean!
+	"""
+	Value epoch num blocks
+	"""
+	epoch_num_blocks: Int!
+	"""
+	Value epoch num canonical blocks
+	"""
+	epoch_num_canonical_blocks: Int!
+	"""
+	Value epoch num supercharged blocks
+	"""
+	epoch_num_supercharged_blocks: Int!
+	"""
+	Value total num blocks
+	"""
+	total_num_blocks: Int!
+	"""
+	Value total num supercharged blocks
+	"""
+	total_num_supercharged_blocks: Int!
+	"""
+	Value block num snarks
+	"""
+	block_num_snarks: Int!
+	"""
+	Value block num user commands
+	"""
+	block_num_user_commands: Int!
+	"""
+	Value block num zkapp commands
+	"""
+	block_num_zkapp_commands: Int!
+	"""
+	Value block num internal commands
+	"""
+	block_num_internal_commands: Int!
+	"""
+	Value epoch num slots produced
+	"""
+	epoch_num_slots_produced: Int!
+	"""
+	Value num unique block producers last n blocks
+	"""
+	num_unique_block_producers_last_n_blocks: Int
+	"""
+	Value state hash
+	"""
+	stateHash: String!
+	"""
+	Value block height
+	"""
+	blockHeight: Int!
+	"""
+	Value global slot since genesis
+	"""
+	globalSlotSinceGenesis: Int!
+	"""
+	Value genesis state hash
+	"""
+	genesisStateHash: String!
+	"""
+	Value winner public key/username
+	"""
+	winnerAccount: PublicKey! @deprecated(reason: "Use winner instead")
+	winner: String!
+	winnerUsername: String
+	"""
+	Value date time as ISO 8601 string
+	"""
+	dateTime: String!
+	"""
+	Value received time as ISO 8601 string
+	"""
+	receivedTime: String!
+	"""
+	Value creator public key/username
+	"""
+	creatorAccount: PublicKey! @deprecated(reason: "Use creator instead")
+	creator: String!
+	creatorUsername: String
+	coinbaseReceiver: String!
+	coinbaseReceiverUsername: String
+	"""
+	Value parent (previous) state hash. Archive-node-api compatible alias
+	for `protocol_state.previous_state_hash`.
+	"""
+	parentHash: String!
+	"""
+	Value protocol state
+	"""
+	protocolState: ProtocolState!
+	"""
+	Value transaction fees
+	"""
+	txFees: String!
+	"""
+	Value SNARK fees (MINA)
+	"""
+	snarkFees: String!
+	"""
+	Value transactions
+	"""
+	transactions: Transactions!
+	"""
+	Value snark jobs
+	"""
+	snarkJobs: [SnarkJob!]!
+}
+
+input BlockCoinbaseReceiverQueryInput {
+	or: [BlockCoinbaseReceiverQueryInput!]
+	and: [BlockCoinbaseReceiverQueryInput!]
+	public_key: String
+}
+
+input BlockCreatorAccountQueryInput {
+	or: [BlockCreatorAccountQueryInput!]
+	and: [BlockCreatorAccountQueryInput!]
+	publicKey: String
+}
+
+type BlockFeeTransfer {
+	"""
+	Value fee (MINA)
+	"""
+	fee: String!
+	recipient: String!
+	recipientUsername: String
+	type: String!
+}
+
+type BlockInfo {
+	"""
+	Value block height
+	"""
+	height: Int!
+	"""
+	Value block global slot since genesis
+	"""
+	globalSlot: Int!
+	"""
+	Value block state hash
+	"""
+	stateHash: String!
+	"""
+	Value block canonicity - canonical/orphaned
+	"""
+	canonicity: String!
+}
+
+input BlockProtocolStateBlockchainStateQueryInput {
+	stagedLedgerHash: String
+	snarkedLedgerHashLt: String
+	stagedLedgerHashLt: String
+	dateLte: Long
+	snarkedLedgerHashLte: String
+	utcDateExists: Boolean
+	stagedLedgerHashGt: String
+	utcDateLte: Long
+	snarkedLedgerHashGte: String
+	snarkedLedgerHashExists: Boolean
+	utcDateGte: Long
+	dateNe: Long
+	stagedLedgerHashIn: [String]
+	and: [BlockProtocolStateBlockchainStateQueryInput!]
+	stagedLedgerHashNe: String
+	utcDateNe: Long
+	snarkedLedgerHashIn: [String]
+	dateGte: Long
+	snarkedLedgerHash: String
+	stagedLedgerHashGte: String
+	utcDate: Long
+	utcDateNin: [Long]
+	stagedLedgerHashNin: [String]
+	snarkedLedgerHashNe: String
+	stagedLedgerHashExists: Boolean
+	snarkedLedgerHashNin: [String]
+	dateGt: Long
+	utcDateGt: Long
+	dateLt: Long
+	stagedLedgerHashLte: String
+	or: [BlockProtocolStateBlockchainStateQueryInput!]
+	date: Long
+	snarkedLedgerHashGt: String
+	dateNin: [Long]
+	dateIn: [Long]
+	dateExists: Boolean
+	utcDateLt: Long
+	utcDateIn: [Long]
+}
+
+input BlockProtocolStateConsensusStateNextEpochDatumLedgerQueryInput {
+	hashGt: String
+	totalCurrencyGt: Float
+	hash: String
+	totalCurrencyLt: Float
+	totalCurrencyExists: Boolean
+	hashExists: Boolean
+	hashNe: String
+	totalCurrencyIn: [Float]
+	totalCurrencyNin: [Float]
+	totalCurrencyLte: Float
+	totalCurrencyNe: Float
+	hashIn: [String]
+	and: [BlockProtocolStateConsensusStateNextEpochDatumLedgerQueryInput!]
+	totalCurrencyGte: Float
+	hashLt: String
+	hashGte: String
+	hashLte: String
+	or: [BlockProtocolStateConsensusStateNextEpochDatumLedgerQueryInput!]
+	hashNin: [String]
+	totalCurrency: Float
+}
+
+input BlockProtocolStateConsensusStateNextEpochDatumQueryInput {
+	lockCheckpoint: String
+	seedGte: String
+	ledger: BlockProtocolStateConsensusStateNextEpochDatumLedgerQueryInput
+	epochLengthNe: Int
+	lockCheckpointNin: [String]
+	seedExists: Boolean
+	lockCheckpointLt: String
+	seedNin: [String]
+	lockCheckpointExists: Boolean
+	seed: String
+	lockCheckpointIn: [String]
+	startCheckpointNin: [String]
+	lockCheckpointNe: String
+	epochLength: Int
+	startCheckpointLte: String
+	and: [BlockProtocolStateConsensusStateNextEpochDatumQueryInput!]
+	seedNe: String
+	seedLt: String
+	lockCheckpointLte: String
+	ledgerExists: Boolean
+	startCheckpointExists: Boolean
+	epochLengthExists: Boolean
+	lockCheckpointGt: String
+	epochLengthLte: Int
+	seedIn: [String]
+	lockCheckpointGte: String
+	startCheckpointNe: String
+	epochLengthGte: Int
+	startCheckpointGte: String
+	startCheckpointIn: [String]
+	seedLte: String
+	startCheckpoint: String
+	startCheckpointLt: String
+	epochLengthGt: Int
+	startCheckpointGt: String
+	epochLengthLt: Int
+	seedGt: String
+	or: [BlockProtocolStateConsensusStateNextEpochDatumQueryInput!]
+	epochLengthNin: [Int]
+	epochLengthIn: [Int]
+}
+
+input BlockProtocolStateConsensusStateQueryInput {
+	or: [BlockProtocolStateConsensusStateQueryInput!]
+	and: [BlockProtocolStateConsensusStateQueryInput!]
+	blockHeight: Int
+	blockHeightIn: [Int]
+	blockHeightNin: [Int]
+	blockHeightLte: Int
+	blockHeightGte: Int
+	blockHeightGt: Int
+	blockHeightLt: Int
+	blockHeightNe: Int
+	blockchainLengthIn: [Int]
+	blockchainLengthLt: Int
+	blockchainLength: Int
+	blockHeightExists: Boolean
+	blockchainLengthNe: Int
+	blockchainLengthGt: Int
+	blockchainLengthLte: Int
+	blockchainLengthNin: [Int]
+	blockchainLengthExists: Boolean
+	blockchainLengthGte: Int
+	epoch: Int
+	epochGte: Int
+	epochGt: Int
+	epochLte: Int
+	epochLt: Int
+	epochNe: Int
+	epochExists: Boolean
+	epochIn: [Int]
+	epochNin: [Int]
+	slot: Int
+	slotGte: Int
+	slotGt: Int
+	slotLte: Int
+	slotLt: Int
+	slotNe: Int
+	slotExists: Boolean
+	slotIn: [Int]
+	slotNin: [Int]
+	slotSinceGenesis: Int
+	slotSinceGenesisNe: Int
+	slotSinceGenesisExists: Boolean
+	slotSinceGenesisIn: [Int]
+	slotSinceGenesisNin: [Int]
+	slotSinceGenesis_gte: Int
+	slotSinceGenesis_gt: Int
+	slotSinceGenesis_lte: Int
+	slotSinceGenesis_lt: Int
+	totalCurrency: Float
+	totalCurrencyGte: Float
+	totalCurrencyGt: Float
+	totalCurrencyLte: Float
+	totalCurrencyLt: Float
+	totalCurrencyNe: Float
+	totalCurrencyExists: Boolean
+	totalCurrencyIn: [Float]
+	totalCurrencyNin: [Float]
+	nextEpochData: BlockProtocolStateConsensusStateNextEpochDatumQueryInput
+	nextEpochDataExists: Boolean
+	stakingEpochData: BlockProtocolStateConsensusStateStakingEpochDatumQueryInput
+	stakingEpochDataExists: Boolean
+	minWindowDensity: Int
+	minWindowDensityGte: Int
+	minWindowDensityGt: Int
+	minWindowDensityNe: Int
+	minWindowDensityLt: Int
+	minWindowDensityExists: Boolean
+	minWindowDensityLte: Int
+	minWindowDensityIn: [Int]
+	minWindowDensityNin: [Int]
+	hasAncestorInSameCheckpointWindowExists: Boolean
+	hasAncestorInSameCheckpointWindow: Boolean
+	hasAncestorInSameCheckpointWindowNe: Boolean
+	lastVrfOutput: String
+	lastVrfOutputGte: String
+	lastVrfOutputGt: String
+	lastVrfOutputLte: String
+	lastVrfOutputLt: String
+	lastVrfOutputNin: [String]
+	lastVrfOutputExists: Boolean
+	lastVrfOutputIn: [String]
+	lastVrfOutputNe: String
+}
+
+input BlockProtocolStateConsensusStateStakingEpochDatumLedgerQueryInput {
+	hashIn: [String]
+	hashExists: Boolean
+	totalCurrency: Float
+	hashGte: String
+	totalCurrencyLt: Float
+	totalCurrencyNin: [Float]
+	hash: String
+	hashLte: String
+	totalCurrencyExists: Boolean
+	totalCurrencyGt: Float
+	or: [BlockProtocolStateConsensusStateStakingEpochDatumLedgerQueryInput!]
+	hashGt: String
+	and: [BlockProtocolStateConsensusStateStakingEpochDatumLedgerQueryInput!]
+	hashNe: String
+	hashNin: [String]
+	totalCurrencyGte: Float
+	totalCurrencyIn: [Float]
+	totalCurrencyNe: Float
+	hashLt: String
+	totalCurrencyLte: Float
+}
+
+input BlockProtocolStateConsensusStateStakingEpochDatumQueryInput {
+	startCheckpointGt: String
+	epochLengthLte: Int
+	lockCheckpointNe: String
+	lockCheckpointGte: String
+	seed: String
+	startCheckpointNe: String
+	epochLengthExists: Boolean
+	lockCheckpointLt: String
+	startCheckpointLt: String
+	epochLengthGte: Int
+	epochLengthLt: Int
+	lockCheckpointGt: String
+	seedNin: [String]
+	epochLengthNe: Int
+	epochLengthGt: Int
+	epochLengthIn: [Int]
+	startCheckpointGte: String
+	or: [BlockProtocolStateConsensusStateStakingEpochDatumQueryInput!]
+	lockCheckpointIn: [String]
+	startCheckpointIn: [String]
+	ledgerExists: Boolean
+	seedIn: [String]
+	lockCheckpointExists: Boolean
+	ledger: BlockProtocolStateConsensusStateStakingEpochDatumLedgerQueryInput
+	lockCheckpointNin: [String]
+	startCheckpointExists: Boolean
+	seedExists: Boolean
+	lockCheckpointLte: String
+	and: [BlockProtocolStateConsensusStateStakingEpochDatumQueryInput!]
+	startCheckpoint: String
+	startCheckpointLte: String
+	seedLte: String
+	seedLt: String
+	seedGt: String
+	epochLength: Int
+	seedGte: String
+	epochLengthNin: [Int]
+	lockCheckpoint: String
+	seedNe: String
+	startCheckpointNin: [String]
+}
+
+input BlockProtocolStateQueryInput {
+	previousStateHashExists: Boolean
+	blockchainStateExists: Boolean
+	consensusState: BlockProtocolStateConsensusStateQueryInput
+	previousStateHashNe: String
+	consensusStateExists: Boolean
+	previousStateHashNin: [String]
+	previousStateHashLt: String
+	or: [BlockProtocolStateQueryInput!]
+	previousStateHashLte: String
+	blockchainState: BlockProtocolStateBlockchainStateQueryInput
+	previousStateHashGte: String
+	previousStateHashGt: String
+	previousStateHashIn: [String]
+	and: [BlockProtocolStateQueryInput!]
+	previousStateHash: String
+}
+
+input BlockQueryInput {
+	creatorAccount: BlockCreatorAccountQueryInput
+	coinbaseReceiver: BlockCoinbaseReceiverQueryInput
+	protocolState: BlockProtocolStateQueryInput
+	canonical: Boolean
+	"""
+	Archive-node-api compatible alias of `canonical`.
+	"""
+	inBestChain: Boolean
+	stateHash: String
+	blockHeight: Int
+	genesisStateHash: String
+	blockStakeWinner: String
+	dateTime_gte: DateTime
+	dateTime_lt: DateTime
+	unique_block_producers_last_n_blocks: Int
+	global_slot_since_genesis: Int
+	blockHeight_gt: Int
+	blockHeight_gte: Int
+	blockHeight_lt: Int
+	blockHeight_lte: Int
+	"""
+	Boolean or
+	"""
+	or: [BlockQueryInput!]
+	"""
+	Boolean and
+	"""
+	and: [BlockQueryInput!]
+}
+
+enum BlockSortByInput {
+	BLOCKHEIGHT_DESC
+	BLOCKHEIGHT_ASC
+	GLOBALSLOT_ASC
+	GLOBALSLOT_DESC
+}
+
+type BlockchainState {
+	"""
+	Value utc_date as numeric string
+	"""
+	utcDate: String!
+	"""
+	Value date as numeric string
+	"""
+	date: String!
+	"""
+	Value snarked ledger hash
+	"""
+	snarkedLedgerHash: String!
+	"""
+	Value staged ledger hash
+	"""
+	stagedLedgerHash: String!
+}
+
+
+"""
+Bucket granularity for a time-series chart.
+"""
+enum ChartBucket {
+	DAY
+	WEEK
+	MONTH
+}
+
+type ChartPoint {
+	"""
+	Bucket label: `YYYY-MM-DD` (day), `GGGG-Www` ISO week (week), or
+	`YYYY-MM` (month), UTC. Lexicographic order is chronological.
+	"""
+	date: String!
+	"""
+	Number of matching commands in the bucket's canonical blocks.
+	"""
+	count: Int!
+}
+
+type ConsensusState {
+	"""
+	Value total currency
+	"""
+	totalCurrency: Int!
+	"""
+	Value block height
+	"""
+	blockchainLength: Int!
+	"""
+	Value block height
+	"""
+	blockHeight: Int!
+	"""
+	Value epoch count
+	"""
+	epoch: Int!
+	"""
+	Value has ancestors the same checkpoint window
+	"""
+	hasAncestorInSameCheckpointWindow: Boolean!
+	"""
+	Value last VRF output
+	"""
+	lastVrfOutput: String!
+	"""
+	Value minimum window density
+	"""
+	minWindowDensity: Int!
+	"""
+	Value current slot
+	"""
+	slot: Int!
+	"""
+	Value global slot
+	"""
+	slotSinceGenesis: Int!
+	"""
+	Value next epoch data
+	"""
+	nextEpochData: NextEpochData!
+	"""
+	Value next epoch data
+	"""
+	stakingEpochData: StakingEpochData!
+}
+
+scalar DateTime
+
+type DelegationPoint {
+	"""
+	Staking epoch.
+	"""
+	epoch: Int!
+	"""
+	UTC date the epoch begins (`YYYY-MM-DD`), for plotting on a time axis.
+	"""
+	date: String!
+	"""
+	Total stake delegated to the address in this epoch, in nanomina.
+	"""
+	total_delegated: Int!
+	"""
+	Number of accounts delegating to the address in this epoch.
+	"""
+	delegate_count: Int!
+}
+
+"""
+Value event
+"""
+type Event {
+	"""
+	Value event data
+	"""
+	event: String!
+	"""
+	Value event txn
+	"""
+	txn: TxnInfo!
+	"""
+	Value event block
+	"""
+	block: BlockInfo!
+}
+
+input EventsQueryInput {
+	"""
+	Input public key
+	"""
+	publicKey: String!
+	"""
+	Input token address
+	"""
+	token: String
+	"""
+	Input start block height
+	"""
+	startBlockHeight: Int
+	"""
+	Input end block height
+	"""
+	endBlockHeight: Int
+	"""
+	Input start event index
+	"""
+	startEventIndex: Int
+	"""
+	Input end event index
+	"""
+	endEventIndex: Int
+}
+
+enum EventsSortByInput {
+	BLOCK_HEIGHT_DESC
+	BLOCK_HEIGHT_ASC
+}
+
+
+
+
+input InternalCommandQueryInput {
+	"""
+	Value block height
+	"""
+	blockHeight: Int
+	"""
+	Value block state hash
+	"""
+	blockStateHash: BlockQueryInput
+	"""
+	Value canonical
+	"""
+	canonical: Boolean
+	"""
+	Value recipient
+	"""
+	recipient: String
+	"""
+	Value block height greater than
+	"""
+	blockHeightGt: Int
+	"""
+	Value block height greater than or equal to
+	"""
+	blockHeightGte: Int
+	"""
+	Value block height less than
+	"""
+	blockHeightLt: Int
+	"""
+	Value block height less than or equal to
+	"""
+	blockHeightLte: Int
+	"""
+	Value and
+	"""
+	and: [InternalCommandQueryInput!]
+	"""
+	Value or
+	"""
+	or: [InternalCommandQueryInput!]
+}
+
+enum InternalCommandSortByInput {
+	BLOCK_HEIGHT_DESC
+	BLOCK_HEIGHT_ASC
+}
+
+type InternalCommandWithMeta {
+	canonical: Boolean!
+	"""
+	Value block state hash
+	"""
+	stateHash: String!
+	"""
+	Value fee (nanomina)
+	"""
+	fee: Int!
+	recipient: String!
+	recipientUsername: String
+	"""
+	Value block height
+	"""
+	blockHeight: Int!
+	"""
+	Value block date time
+	"""
+	dateTime: String!
+	"""
+	Value fee transfer kind
+	"""
+	type: String!
+	"""
+	Value epoch internal commands count
+	"""
+	epoch_num_internal_commands: Int!
+	"""
+	Value total internal commands count
+	"""
+	total_num_internal_commands: Int!
+	blockStateHash: Block
+}
+
+scalar Long
+
+type NextEpochData {
+	"""
+	Value next epoch seed
+	"""
+	seed: String!
+	"""
+	Value next epoch length
+	"""
+	epochLength: Int!
+	"""
+	Value next epoch start checkpoint
+	"""
+	startCheckpoint: String!
+	"""
+	Value next epoch lock checkpoint
+	"""
+	lockCheckpoint: String!
+	"""
+	Value next epoch staking ledger
+	"""
+	ledger: NextEpochDataLedger!
+}
+
+type NextEpochDataLedger {
+	"""
+	Value next epoch hash
+	"""
+	hash: String!
+	"""
+	Value next epoch total currency (nanomina)
+	"""
+	totalCurrency: Int!
+}
+
+type PermissionVk {
+	permission: String!
+	number: String!
+}
+
+type Permissions {
+	edit_state: String!
+	access: String!
+	send: String!
+	receive: String!
+	set_delegate: String!
+	set_permissions: String!
+	set_verification_key: PermissionVk!
+	set_zkapp_uri: String!
+	edit_action_state: String!
+	set_token_symbol: String!
+	increment_nonce: String!
+	set_voting_for: String!
+	set_timing: String!
+}
+
+type ProtocolState {
+	"""
+	Value parent state hash
+	"""
+	previousStateHash: String!
+	"""
+	Value blockchain state
+	"""
+	blockchainState: BlockchainState!
+	"""
+	Value consensus state
+	"""
+	consensusState: ConsensusState!
+}
+
+type PublicKey {
+	publicKey: String!
+	username: String
+}
+
+type Root {
+	block(query: BlockQueryInput): Block
+	blocks(query: BlockQueryInput, limit: Int! = 100, sortBy: BlockSortByInput, offset: Int! = 0): [Block!]!
+	"""
+	Total blocks matching `query` -- the count companion to `blocks`, for a
+	gateway to compute total pages. Runs the same dispatch (same filters),
+	uncapped and unpaged, and counts the result so the count can never
+	disagree with the list.
+	"""
+	blocksCount(query: BlockQueryInput, sortBy: BlockSortByInput): Int!
+	actions(query: ActionsQueryInput!, sortBy: ActionsSortByInput, limit: Int! = 100, offset: Int! = 0): [Action!]
+	"""
+	Total actions matching `query` -- the count companion to `actions`. Applies
+	the same `matches` filter over the same iterator, without building each
+	`Action` (which does per-action block/command lookups), so it stays cheap.
+	"""
+	actionsCount(query: ActionsQueryInput!): Int!
+	events(query: EventsQueryInput!, sortBy: EventsSortByInput, limit: Int! = 100, offset: Int! = 0): [Event!]
+	"""
+	Total events matching `query` -- the count companion to `events`, for a
+	gateway to compute total pages. Applies the same `matches` filter over the
+	same iterator, but does not build each `Event` (which does per-event
+	block/command lookups), so it stays cheap.
+	"""
+	eventsCount(query: EventsQueryInput!): Int!
+	stakes(query: StakesQueryInput, sortBy: StakesSortByInput, limit: Int! = 100, offset: Int! = 0): [StakesLedgerAccountWithMeta!]!
+	"""
+	Total staking accounts matching `query` in the epoch's ledger -- the count
+	companion to `stakes`. Applies the same two filters (`matches_staking_account`
+	then the `stake_lte` bound on total delegated) without building each
+	`StakesLedgerAccountWithMeta`, so it stays cheap.
+	"""
+	stakesCount(query: StakesQueryInput): Int!
+	accounts(query: AccountQueryInput, sortBy: AccountSortByInput, limit: Int! = 100, offset: Int! = 0): [AccountWithMeta!]!
+	"""
+	Total number of accounts matching `query` -- the count companion to
+	`accounts`, for a gateway to compute total pages. Uses the same filter
+	as `accounts` (shared `account_matches`) so the two can never
+	disagree.
+	"""
+	accountsCount(query: AccountQueryInput): Int!
+	transaction(query: TransactionQueryInput!): Transaction
+	transactions(query: TransactionQueryInput, limit: Int! = 100, sortBy: TransactionSortByInput, offset: Int! = 0): [Transaction!]!
+	"""
+	Total transactions matching `query` -- the count companion to
+	`transactions`, for total-page math. Runs the same dispatch (same
+	filters), uncapped and unpaged, and counts the result so the count
+	can never disagree with the list.
+	"""
+	transactionsCount(query: TransactionQueryInput, sortBy: TransactionSortByInput): Int!
+	internalCommands(query: InternalCommandQueryInput, sortBy: InternalCommandSortByInput, limit: Int! = 100, offset: Int! = 0): [InternalCommandWithMeta!]!
+	"""
+	Total internal commands matching `query` -- the count companion to
+	`internalCommands`, for total-page math. Runs the same dispatch (same
+	filters), uncapped and unpaged, and counts the result so the count can
+	never disagree with the list.
+	"""
+	internalCommandsCount(query: InternalCommandQueryInput, sortBy: InternalCommandSortByInput): Int!
+	snarks(query: SnarkQueryInput, sortBy: SnarkSortByInput, limit: Int! = 100, offset: Int! = 0): [SnarkWithCanonicity!]!
+	"""
+	Total snarks matching `query` -- the count companion to `snarks`, for a
+	gateway to compute total pages. Runs the same dispatch (same filters),
+	uncapped and unpaged, and counts the result so the count can never
+	disagree with the list.
+	"""
+	snarksCount(query: SnarkQueryInput, sortBy: SnarkSortByInput): Int!
+	stagedLedgerAccounts(query: StagedLedgerQueryInput, sortBy: StagedLedgerSortByInput, limit: Int! = 100, offset: Int! = 0): [StagedLedgerAccount!]
+	tokens(query: TokensQueryInput, sortBy: TokensSortByInput, limit: Int! = 100, offset: Int! = 0): [Token!]!
+	"""
+	Total tokens matching `query` -- the count companion to `tokens`, for a
+	gateway to compute total pages. Applies the same `matches` filter over
+	the same iterator without building each `Token`, so it stays cheap.
+	"""
+	tokensCount(query: TokensQueryInput): Int!
+	tokenHolders(query: TokenHoldersQueryInput, sortBy: TokenHoldersSortByInput, limit: Int! = 100, offset: Int! = 0): [TokenHolder!]!
+	"""
+	Total token holders matching `query` -- the count companion to
+	`tokenHolders`. Applies the same `matches` filter over the same iterator
+	(by token, or by holder) without building each `TokenHolder`, so it
+	stays cheap.
+	"""
+	tokenHoldersCount(query: TokenHoldersQueryInput): Int!
+	topStakers(query: TopStakersQueryInput, sortBy: TopStakersSortByInput, limit: Int! = 100, offset: Int! = 0): [TopStakerAccount!]!
+	"""
+	Total stakers matching `query` in the epoch -- the count companion to
+	`topStakers`, for a gateway to compute total pages. Counts the same rows
+	`topStakers` would return (same epoch region + `matches` filter), but
+	without building each `TopStakerAccount`, so it stays cheap.
+	"""
+	topStakersCount(query: TopStakersQueryInput): Int!
+	topSnarkers(query: TopSnarkersQueryInput, sortBy: TopSnarkersSortByInput, limit: Int! = 100, offset: Int! = 0): [TopSnarker!]!
+	"""
+	Total snarkers matching `query` in the epoch -- the count companion to
+	`topSnarkers`. Counts the same epoch-region rows (with the same pk/username
+	filter) without building each `TopSnarker`, so it stays cheap.
+	"""
+	topSnarkersCount(query: TopSnarkersQueryInput): Int!
+	"""
+	Locked/vesting supply rolled up by `bucket` (all-time / year / month /
+	day), oldest first. Backs Blockberry's
+	`getTimeLocks{All,Day,Month,Year}`.
+	"""
+	timeLocks(bucket: TimeLockBucket!): [TimeLockEntry!]!
+	"""
+	User-transaction count per `bucket` over the canonical chain, oldest
+	first. Backs Blockberry's `getTransactionsCountChart`.
+	
+	With `address`, counts only transactions that public key is a party to
+	(sent or received); without it, the network-wide total.
+	"""
+	transactionsCountChart(bucket: ChartBucket!, address: String): [ChartPoint!]!
+	"""
+	zkApp-command count per `bucket` over the canonical chain, oldest first.
+	Backs Blockberry's `getZkAppTransactionsCountChart`. Network-wide only
+	-- the store has no per-address zkApp-command index to filter on.
+	"""
+	zkappTransactionsCountChart(bucket: ChartBucket!): [ChartPoint!]!
+	"""
+	Stake delegated to `address` per staking epoch, oldest first. Backs
+	Blockberry's `getDelegationAmountChart`.
+	
+	One point per epoch that has a staking ledger delegating to `address`;
+	`date` is the epoch's start (for a time axis). Cheap -- staking ledgers
+	are per-epoch and few (~one lookup per epoch), so it is not scanned like
+	the block-count charts.
+	"""
+	delegationAmountChart(address: String!): [DelegationPoint!]!
+	"""
+	A zkApp account's verification-key change history, newest first,
+	canonical only. Backs Blockberry's `getVerificationKeyHistory`.
+	"""
+	verificationKeyHistory(address: String!, limit: Int! = 100, offset: Int! = 0): [VerificationKeyChangeEntry!]!
+	"""
+	The most recent canonical verification-key change for a zkApp account,
+	or `null` if the key never changed. Backs
+	`getLastVerificationKeyChange`.
+	"""
+	lastVerificationKeyChange(address: String!): VerificationKeyChangeEntry
+	version: String!
+	dbVersion: String!
+}
+
+type SnarkBlock {
+	stateHash: String!
+}
+
+type SnarkJob {
+	"""
+	Value block state hash
+	"""
+	blockStateHash: String!
+	"""
+	Valuable block height
+	"""
+	blockHeight: Int!
+	"""
+	Value date time
+	"""
+	dateTime: String!
+	"""
+	Value fee (nanomina)
+	"""
+	fee: Int!
+	prover: String!
+	proverUsername: String
+}
+
+input SnarkQueryInput {
+	canonical: Boolean
+	prover: String
+	blockHeight: Int
+	block: BlockQueryInput
+	blockHeight_gt: Int
+	blockHeight_gte: Int
+	blockHeight_lt: Int
+	blockHeight_lte: Int
+	and: [SnarkQueryInput!]
+	or: [SnarkQueryInput!]
+}
+
+enum SnarkSortByInput {
+	BLOCKHEIGHT_ASC
+	BLOCKHEIGHT_DESC
+}
+
+type SnarkWithCanonicity {
+	"""
+	Value canonicity
+	"""
+	canonical: Boolean!
+	"""
+	Value SNARK fee (nanomina)
+	"""
+	fee: Int!
+	prover: String!
+	proverUsername: String
+	"""
+	Value SNARK block
+	"""
+	block: SnarkBlock!
+	"""
+	Value epoch SNARKs count
+	"""
+	epoch_num_snarks: Int!
+	"""
+	Value total SNARKs count
+	"""
+	total_num_snarks: Int!
+	"""
+	Value state hash
+	"""
+	stateHash: String!
+	"""
+	Value block height
+	"""
+	blockHeight: Int!
+	"""
+	Value date time
+	"""
+	dateTime: String!
+}
+
+type StagedLedgerAccount {
+	publicKey: String!
+	username: String
+	delegate: String!
+	delegateUsername: String
+	"""
+	Value balance
+	"""
+	balance: Float!
+	"""
+	Value balance (nano)
+	"""
+	balance_nano: Int!
+	"""
+	Value nonce
+	"""
+	nonce: Int!
+	"""
+	Value token address
+	"""
+	token: String!
+}
+
+input StagedLedgerQueryInput {
+	"""
+	Input staged ledger hash
+	"""
+	ledgerHash: String
+	"""
+	Input block state hash
+	"""
+	stateHash: String
+	"""
+	Input account public key
+	"""
+	publicKey: String
+	"""
+	Input account token
+	"""
+	token: String
+	"""
+	Input blockchain length (aka block height)
+	"""
+	blockchain_length: Int
+}
+
+enum StagedLedgerSortByInput {
+	BALANCE_DESC
+	BALANCE_ASC
+}
+
+type StakesDelegationTotals {
+	"""
+	Value total currency (nanomina)
+	"""
+	totalCurrency: Int!
+	"""
+	Value total delegated (MINA)
+	"""
+	totalDelegated: Float!
+	"""
+	Value total delegated (nanomina)
+	"""
+	totalDelegatedNanomina: Int!
+	"""
+	Value count delegates
+	"""
+	countDelegates: Int!
+	"""
+	Value delegate public keys
+	"""
+	delegates: [String!]! @deprecated(reason: "Use delegate_pks instead")
+	"""
+	Value delegate public keys
+	"""
+	delegate_pks: [PublicKey!]!
+	"""
+	Value total stake percentage
+	"""
+	totalStakePercentage: String!
+}
+
+type StakesLedgerAccountWithMeta {
+	"""
+	Value staking epoch
+	"""
+	epoch: Int!
+	"""
+	Value staking ledger hash
+	"""
+	ledgerHash: String!
+	"""
+	Value genesis state hash
+	"""
+	genesisStateHash: String!
+	"""
+	Value delegation totals
+	"""
+	delegationTotals: StakesDelegationTotals!
+	"""
+	Value balance (MINA)
+	"""
+	balance: Float!
+	"""
+	Value balance nanomina
+	"""
+	balanceNanomina: Int!
+	"""
+	Value nonce
+	"""
+	nonce: Int!
+	delegate: String!
+	delegateUsername: String
+	public_key: String!
+	username: String
+	"""
+	Value public key
+	"""
+	pk: String! @deprecated(reason: "Use public_key instead")
+	"""
+	Value token id
+	"""
+	token: Int!
+	"""
+	Value token address
+	"""
+	tokenAddress: String!
+	"""
+	Value receipt chain hash
+	"""
+	receipt_chain_hash: String!
+	"""
+	Value voting for
+	"""
+	voting_for: String!
+	"""
+	Value pk epoch num blocks
+	"""
+	pk_epoch_num_blocks: Int!
+	"""
+	Value pk total num blocks
+	"""
+	pk_total_num_blocks: Int!
+	"""
+	Value pk epoch num supercharged blocks
+	"""
+	pk_epoch_num_supercharged_blocks: Int!
+	"""
+	Value pk total num supercharged blocks
+	"""
+	pk_total_num_supercharged_blocks: Int!
+	"""
+	Value pk epoch num snarks
+	"""
+	pk_epoch_num_snarks: Int!
+	"""
+	Value pk total num snarks
+	"""
+	pk_total_num_snarks: Int!
+	"""
+	Value pk epoch num user commands
+	"""
+	pk_epoch_num_user_commands: Int!
+	"""
+	Value pk total num user commands
+	"""
+	pk_total_num_user_commands: Int!
+	"""
+	Value pk epoch num internal commands
+	"""
+	pk_epoch_num_internal_commands: Int!
+	"""
+	Value pk total num internal commands
+	"""
+	pk_total_num_internal_commands: Int!
+	"""
+	Value timing
+	"""
+	timing: Timing
+	"""
+	Value epoch num blocks
+	"""
+	epoch_num_blocks: Int!
+	"""
+	Value epoch num supercharged blocks
+	"""
+	epoch_num_supercharged_blocks: Int!
+	"""
+	Value total num blocks
+	"""
+	total_num_blocks: Int!
+	"""
+	Value total num supercharged blocks
+	"""
+	total_num_supercharged_blocks: Int!
+	"""
+	Value epoch num snarks
+	"""
+	epoch_num_snarks: Int!
+	"""
+	Value total num snarks
+	"""
+	total_num_snarks: Int!
+	"""
+	Value epoch num user commands
+	"""
+	epoch_num_user_commands: Int!
+	"""
+	Value total num user commands
+	"""
+	total_num_user_commands: Int!
+	"""
+	Value epoch num internal commands
+	"""
+	epoch_num_internal_commands: Int!
+	"""
+	Value total num internal commands
+	"""
+	total_num_internal_commands: Int!
+	"""
+	Value epoch num accounts
+	"""
+	epoch_num_accounts: Int!
+	"""
+	Value num accounts
+	"""
+	num_accounts: Int!
+	"""
+	Value epoch total currency (nanomina)
+	"""
+	epoch_total_currency: Int!
+}
+
+input StakesQueryInput {
+	"""
+	Input staking epoch
+	"""
+	epoch: Int
+	"""
+	Input delegate
+	"""
+	delegate: String
+	"""
+	Input staking ledger hash
+	"""
+	ledgerHash: String
+	"""
+	Input genesis state hash
+	"""
+	genesisStateHash: String
+	stake_lte: String
+	"""
+	Input staking account public key
+	"""
+	public_key: String
+	"""
+	Input staking account username
+	"""
+	username: String
+}
+
+enum StakesSortByInput {
+	BALANCE_DESC
+	BALANCE_ASC
+	STAKE_DESC
+	STAKE_ASC
+}
+
+type StakingEpochData {
+	"""
+	Value staking epoch seed
+	"""
+	seed: String!
+	"""
+	Value staking epoch length
+	"""
+	epochLength: Int!
+	"""
+	Value staking epoch start checkpoint
+	"""
+	startCheckpoint: String!
+	"""
+	Value staking epoch lock checkpoint
+	"""
+	lockCheckpoint: String!
+	"""
+	Value epoch staking ledger
+	"""
+	ledger: StakingEpochDataLedger!
+}
+
+type StakingEpochDataLedger {
+	"""
+	Value staking epoch hash
+	"""
+	hash: String!
+	"""
+	Value staking epoch total currency (nanomina)
+	"""
+	totalCurrency: Int!
+}
+
+
+"""
+Bucket granularity for the locked-supply rollup.
+"""
+enum TimeLockBucket {
+	"""
+	A single all-time bucket (the whole schedule).
+	"""
+	ALL
+	DAY
+	MONTH
+	YEAR
+}
+
+type TimeLockEntry {
+	"""
+	Bucket label: `all`, `YYYY`, `YYYY-MM`, or `YYYY-MM-DD` (UTC).
+	"""
+	date: String!
+	"""
+	Last global slot in the bucket (the slot the bucket's state is reported
+	as of).
+	"""
+	global_slot: Int!
+	"""
+	Locked supply at the end of the bucket, in whole MINA.
+	"""
+	locked_supply: Int!
+	"""
+	Supply unlocked (vested) during the bucket, in whole MINA -- the drop in
+	locked supply from the previous bucket's close to this one's.
+	"""
+	unlocked: Int!
+}
+
+type Timing {
+	cliff_amount: Int
+	cliff_time: Int
+	initial_minimum_balance: Int
+	vesting_period: Int
+	vesting_increment: Int
+}
+
+type Token {
+	"""
+	Value token address
+	"""
+	token: String!
+	"""
+	Value token supply (nano)
+	"""
+	supply: Int!
+	"""
+	Value token owner
+	"""
+	owner: String @deprecated(reason: "Use owner_account instead")
+	"""
+	Value token owner account
+	"""
+	owner_account: PublicKey
+	"""
+	Value token symbol
+	"""
+	symbol: String
+	"""
+	Value count of token holders
+	"""
+	num_holders: Int!
+	"""
+	Value total count of token transactions
+	"""
+	total_num_txns: Int!
+	"""
+	Value total count of locked tokens
+	"""
+	total_num_locked: Int!
+	"""
+	Value total count of tokens
+	"""
+	total_num_tokens: Int!
+}
+
+type TokenAccount {
+	"""
+	Public key
+	"""
+	pk: String! @deprecated(reason: "Use public_key instead")
+	public_key: String!
+	username: String
+	"""
+	Token address
+	"""
+	token: String!
+	"""
+	Token symbol
+	"""
+	symbol: String!
+	"""
+	Balance change (nano)
+	"""
+	balance_change: Int!
+	"""
+	Balance change (decimal)
+	"""
+	balance_change_str: String!
+	"""
+	Increment nonce
+	"""
+	increment_nonce: Boolean!
+}
+
+type TokenHolder {
+	"""
+	Value token address
+	"""
+	token: String!
+	"""
+	Value token supply (nano)
+	"""
+	supply: Int!
+	"""
+	Value token owner public key
+	"""
+	owner: String @deprecated(reason: "Use owner_account instead")
+	"""
+	Value token owner account
+	"""
+	owner_account: PublicKey
+	"""
+	Value token symbol
+	"""
+	symbol: String
+	"""
+	Value token holder account
+	"""
+	account: Account!
+}
+
+input TokenHoldersQueryInput {
+	"""
+	Input token address of holder account
+	"""
+	token: String
+	"""
+	Input public key of holder account
+	"""
+	holder: String
+}
+
+enum TokenHoldersSortByInput {
+	BALANCE_ASC
+	BALANCE_DESC
+}
+
+input TokensQueryInput {
+	"""
+	Input token address
+	"""
+	token: String
+	"""
+	Input token owner
+	"""
+	owner: String
+	"""
+	Input token symbol
+	"""
+	symbol: String
+	"""
+	Input token supply
+	"""
+	supply: Int
+}
+
+enum TokensSortByInput {
+	SUPPLY_DESC
+	SUPPLY_ASC
+	NUM_HOLDERS_DESC
+	NUM_HOLDERS_ASC
+	TOTAL_NUM_TXNS_DESC
+	TOTAL_NUM_TXNS_ASC
+}
+
+type TopSnarker {
+	public_key: String!
+	username: String
+	"""
+	Value all-time total SNARK fees
+	"""
+	total_fees: Int!
+	"""
+	Value epoch total SNARK fees
+	"""
+	epoch_fees: Int!
+	"""
+	Value all-time min SNARK fee
+	"""
+	min_fee: Int!
+	"""
+	Value epoch min SNARK fee
+	"""
+	epoch_min_fee: Int!
+	"""
+	Value all-time max SNARK fee
+	"""
+	max_fee: Int!
+	"""
+	Value epoch max SNARK fee
+	"""
+	epoch_max_fee: Int!
+	"""
+	Value all-time SNARKs sold
+	"""
+	snarks_sold: Int!
+	"""
+	Value epoch SNARKs sold
+	"""
+	epoch_snarks_sold: Int!
+}
+
+input TopSnarkersQueryInput {
+	"""
+	Input epoch
+	"""
+	epoch: Int
+	"""
+	Input genesis state hash
+	"""
+	genesis_state_hash: String
+	"""
+	Input SNARK prover public key
+	"""
+	public_key: String
+	"""
+	Input SNARK prover username
+	"""
+	username: String
+}
+
+enum TopSnarkersSortByInput {
+	"""
+	Sort by epoch total fees descending
+	"""
+	TOTAL_FEES_DESC
+	"""
+	Sort by epoch total fees ascending
+	"""
+	TOTAL_FEES_ASC
+	"""
+	Sort by epoch max fee descending
+	"""
+	MAX_FEE_DESC
+	"""
+	Sort by epoch max fee ascending
+	"""
+	MAX_FEE_ASC
+	"""
+	Sort by all-time total fees descending
+	"""
+	ALL_TIME_TOTAL_FEES_DESC
+	"""
+	Sort by all-time total fees ascending
+	"""
+	ALL_TIME_TOTAL_FEES_ASC
+	"""
+	Sort by all-time max fee descending
+	"""
+	ALL_TIME_MAX_FEE_DESC
+	"""
+	Sort by all-time max fee ascending
+	"""
+	ALL_TIME_MAX_FEE_ASC
+}
+
+type TopStakerAccount {
+	public_key: String!
+	username: String
+	"""
+	Value epoch delegation totals
+	"""
+	delegation_totals: StakesDelegationTotals!
+	"""
+	Value epoch blocks produced count
+	"""
+	num_blocks_produced: Int!
+	"""
+	Value epoch canonical blocks produced count
+	"""
+	num_canonical_blocks_produced: Int!
+	"""
+	Value epoch supercharged blocks count
+	"""
+	num_supercharged_blocks_produced: Int!
+	"""
+	Value epoch slots produced count
+	"""
+	num_slots_produced: Int!
+}
+
+input TopStakersQueryInput {
+	"""
+	Input epoch
+	"""
+	epoch: Int!
+	"""
+	Input genesis state hash
+	"""
+	genesis_state_hash: String
+	"""
+	Input staker public key
+	"""
+	public_key: String
+	"""
+	Input staker username
+	"""
+	username: String
+}
+
+enum TopStakersSortByInput {
+	"""
+	Sort by number of canonical blocks produced descending
+	"""
+	NUM_CANONICAL_BLOCKS_PRODUCED_DESC
+	"""
+	Sort by number of canonical blocks produced ascending
+	"""
+	NUM_CANONICAL_BLOCKS_PRODUCED_ASC
+	"""
+	Sort by number of slot produced descending
+	"""
+	NUM_SLOTS_PRODUCED_DESC
+	"""
+	Sort by number of slot produced ascending
+	"""
+	NUM_SLOTS_PRODUCED_ASC
+}
+
+type Transaction {
+	"""
+	Value block
+	"""
+	block: TransactionBlock!
+	"""
+	Value amount (nanomina) as a string. Archive-node-api compatible.
+	"""
+	amount: String!
+	"""
+	Value txn fee (nanomina) as a string. Archive-node-api compatible.
+	"""
+	fee: String!
+	"""
+	Value txn sender public key
+	"""
+	from: String! @deprecated(reason: "Use sender instead")
+	sender: String!
+	senderUsername: String
+	"""
+	Value txn receiver public key
+	"""
+	receiver: String @deprecated(reason: "Use receiver_account instead")
+	"""
+	Value txn receiver public key
+	"""
+	to: String @deprecated(reason: "Use receiver_account instead")
+	"""
+	Value txn receiver account
+	"""
+	receiver_account: PublicKey
+	blockHeight: Int!
+	globalSlot: Int!
+	nonce: Int!
+	canonical: Boolean!
+	hash: String!
+	kind: String!
+	"""
+	Base58check-encoded memo. Archive-node-api compatible.
+	"""
+	memo: String!
+	"""
+	Decoded (human-readable) memo text. Indexer enrichment.
+	"""
+	memoText: String!
+	failureReason: String
+	isApplied: Boolean!
+	"""
+	Transaction status: "applied" | "failed". Archive-node-api compatible.
+	"""
+	status: String!
+	zkapp: TransactionZkapp
+	tokens: [String!]!
+	"""
+	Total number of user commands in the given epoch
+	(default: current epoch)
+	"""
+	epoch_num_user_commands: Int!
+	"""
+	Total number of user commands
+	"""
+	total_num_user_commands: Int!
+	"""
+	Total number of zkapp commands in the given epoch
+	(default: current epoch)
+	"""
+	epoch_num_zkapp_commands: Int!
+	"""
+	Total number of zkapp commands
+	"""
+	total_num_zkapp_commands: Int!
+}
+
+type TransactionBlock {
+	dateTime: DateTime!
+	stateHash: String!
+}
+
+input TransactionFeePayerQueryInput {
+	token: Int
+	and: [TransactionFeePayerQueryInput!]
+	or: [TransactionFeePayerQueryInput!]
+}
+
+input TransactionFromAccountQueryInput {
+	and: [TransactionFromAccountQueryInput!]
+	or: [TransactionFromAccountQueryInput!]
+	token: Int
+}
+
+input TransactionQueryInput {
+	block: BlockQueryInput
+	hash: String
+	canonical: Boolean
+	kind: String
+	memo: String
+	token: String
+	isDelegation: Boolean
+	zkapp: Boolean
+	"""
+	Failure reason only applies to failed transactions
+	"""
+	failureReason: String
+	isApplied: Boolean
+	from: String
+	source: TransactionSourceQueryInput
+	fromAccount: TransactionFromAccountQueryInput
+	to: String
+	receiver: TransactionReceiverQueryInput
+	toAccount: TransactionToAccountQueryInput
+	fee: Int
+	feePayer: TransactionFeePayerQueryInput
+	feeToken: Int
+	feeGt: Int
+	feeGte: Int
+	feeLt: Int
+	feeLte: Int
+	amount: Int
+	amountGt: Int
+	amountGte: Int
+	amountLte: Int
+	amountLt: Int
+	blockHeight: Int
+	blockHeight_gt: Int
+	blockHeight_gte: Int
+	blockHeight_lt: Int
+	blockHeight_lte: Int
+	globalSlot: Int
+	globalSlot_gt: Int
+	globalSlot_gte: Int
+	globalSlot_lt: Int
+	globalSlot_lte: Int
+	dateTime: DateTime
+	dateTimeGt: DateTime
+	dateTimeGte: DateTime
+	dateTimeLt: DateTime
+	dateTimeLte: DateTime
+	nonce: Int
+	nonceLte: Int
+	nonceGt: Int
+	nonceLt: Int
+	nonceGte: Int
+	and: [TransactionQueryInput!]
+	or: [TransactionQueryInput!]
+}
+
+input TransactionReceiverQueryInput {
+	publicKey: String
+	and: [TransactionReceiverQueryInput!]
+	or: [TransactionReceiverQueryInput!]
+}
+
+enum TransactionSortByInput {
+	BLOCKHEIGHT_ASC
+	BLOCKHEIGHT_DESC
+	DATETIME_ASC
+	DATETIME_DESC
+	GLOBALSLOT_ASC
+	GLOBALSLOT_DESC
+}
+
+input TransactionSourceQueryInput {
+	and: [TransactionSourceQueryInput!]
+	or: [TransactionSourceQueryInput!]
+	publicKey: String
+}
+
+input TransactionToAccountQueryInput {
+	token: Int
+	and: [TransactionToAccountQueryInput!]
+	or: [TransactionToAccountQueryInput!]
+}
+
+type TransactionWithoutBlock {
+	"""
+	Value amount (nanomina) as a string. Archive-node-api compatible.
+	"""
+	amount: String!
+	"""
+	Value txn fee (nanomina) as a string. Archive-node-api compatible.
+	"""
+	fee: String!
+	"""
+	Value txn sender public key
+	"""
+	from: String! @deprecated(reason: "Use sender instead")
+	sender: String!
+	senderUsername: String
+	"""
+	Value txn receiver public key
+	"""
+	receiver: String @deprecated(reason: "Use receiver_account instead")
+	"""
+	Value txn receiver public key
+	"""
+	to: String @deprecated(reason: "Use receiver_account instead")
+	"""
+	Value txn receiver account
+	"""
+	receiver_account: PublicKey
+	blockHeight: Int!
+	globalSlot: Int!
+	nonce: Int!
+	canonical: Boolean!
+	hash: String!
+	kind: String!
+	"""
+	Base58check-encoded memo. Archive-node-api compatible.
+	"""
+	memo: String!
+	"""
+	Decoded (human-readable) memo text. Indexer enrichment.
+	"""
+	memoText: String!
+	failureReason: String
+	isApplied: Boolean!
+	"""
+	Transaction status: "applied" | "failed". Archive-node-api compatible.
+	"""
+	status: String!
+	zkapp: TransactionZkapp
+	tokens: [String!]!
+	"""
+	Total number of user commands in the given epoch
+	(default: current epoch)
+	"""
+	epoch_num_user_commands: Int!
+	"""
+	Total number of user commands
+	"""
+	total_num_user_commands: Int!
+	"""
+	Total number of zkapp commands in the given epoch
+	(default: current epoch)
+	"""
+	epoch_num_zkapp_commands: Int!
+	"""
+	Total number of zkapp commands
+	"""
+	total_num_zkapp_commands: Int!
+}
+
+type TransactionZkapp {
+	"""
+	Accounts updated
+	"""
+	accounts_updated: [TokenAccount!]!
+	"""
+	Actions
+	"""
+	actions: [String!]!
+	"""
+	Events
+	"""
+	events: [String!]!
+}
+
+type Transactions {
+	"""
+	Value coinbase amount
+	"""
+	coinbase: String!
+	"""
+	Value coinbase receiver account
+	"""
+	coinbaseReceiverAccount: PublicKey! @deprecated(reason: "Use coinbase_receiver instead")
+	coinbaseReceiver: String!
+	coinbaseReceiverUsername: String
+	"""
+	Value block fee transfers
+	"""
+	feeTransfer: [BlockFeeTransfer!]!
+	"""
+	Value block user commands (payments & delegations only, matching the
+	archive node; zkApp commands are served under `zkapp_commands`).
+	"""
+	userCommands: [TransactionWithoutBlock!]!
+	"""
+	Value block zkApp commands. Archive-node-api compatible.
+	"""
+	zkappCommands: [ZkAppCommand!]!
+}
+
+type TxnInfo {
+	"""
+	Value txn status - applied/failed
+	"""
+	status: String!
+	"""
+	Value txn hash
+	"""
+	txnHash: String!
+	"""
+	Value txn memo
+	"""
+	memo: String!
+}
+
+type VerificationKey {
+	data: String!
+	hash: String!
+}
+
+type VerificationKeyChangeEntry {
+	"""
+	Block height the change was applied at.
+	"""
+	block_height: Int!
+	"""
+	State hash of that block.
+	"""
+	state_hash: String!
+	"""
+	Block timestamp.
+	"""
+	date_time: DateTime!
+	"""
+	Hash of the transaction that set the key.
+	"""
+	txn_hash: String!
+	"""
+	Token of the zkApp account.
+	"""
+	token: String!
+	"""
+	Hash of the previous verification key, or `null` when this is the first
+	key set on the account (its creation).
+	"""
+	old_verification_key_hash: String
+	"""
+	The verification key set by this change (full key + hash).
+	"""
+	verification_key: VerificationKey!
+}
+
+"""
+Archive-node-api compatible zkApp command. The archive serves zkApp commands
+under `BlockTransactions.zkappCommands`, separate from `userCommands`.
+"""
+type ZkAppCommand {
+	hash: String!
+	"""
+	zkApp fee-payer public key.
+	"""
+	feePayer: String!
+	"""
+	Fee (nanomina) as a string.
+	"""
+	fee: String!
+	"""
+	Base58check-encoded memo.
+	"""
+	memo: String!
+	"""
+	"applied" | "failed".
+	"""
+	status: String!
+	failureReason: String
+}
+
+type ZkappAccount {
+	appState: [String!]!
+	actionState: [String!]!
+	verificationKey: VerificationKey!
+	provedState: Boolean!
+	zkappUri: String!
+	zkappVersion: Int!
+	lastActionSlot: Int!
+}
+
+directive @deprecated(reason: String = "No longer supported") on FIELD_DEFINITION | ARGUMENT_DEFINITION | INPUT_FIELD_DEFINITION | ENUM_VALUE
+directive @include(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+directive @skip(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+schema {
+	query: Root
+}

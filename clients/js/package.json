@@ -1,0 +1,33 @@
+{
+  "name": "@o1-labs/mina-indexer-client",
+  "version": "0.1.0",
+  "description": "TypeScript client for the Mina Indexer REST + GraphQL API, with sync-aware health checks.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/o1-labs/mina-indexer",
+    "directory": "clients/js"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "src", "README.md"],
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test --experimental-strip-types test/*.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": ["mina", "indexer", "blockchain", "graphql", "client"],
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "@types/node": "^20"
+  }
+}
