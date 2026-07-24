@@ -6,6 +6,7 @@ use crate::{
         self,
         parser::BlockParser,
         precomputed::{CurrencyEncoding, PcbVersion, PrecomputedBlock},
+        store::BlockStore,
         vrf_output::VrfOutput,
     },
     chain::{ChainId, Network},
@@ -807,8 +808,25 @@ async fn reconcile_blocks_dir(
         // quiet presence check (unlike check_block, which logs per block)
         let (_, _, state_hash) = extract_network_height_hash(&path);
         let state_hash: StateHash = state_hash.into();
-        if state.read().await.diffs_map.contains_key(&state_hash) {
-            continue;
+        // Skip blocks already ingested. The witness tree (`diffs_map`) only holds
+        // the recent working set and prunes below the tip, so a block that has
+        // aged out of the tree but is still on disk within the reconcile window
+        // (`>= tip - k`) and in the store must ALSO be checked against the store
+        // -- otherwise it is re-parsed and re-applied on every reconcile cycle.
+        // That re-application (observed at ~7-12x per block per catch-up cycle)
+        // is the dominant cost that starves forward progress during bootstrap.
+        // `get_block_height` is a cheap point lookup (no PCB deserialize).
+        {
+            let st = state.read().await;
+            let ingested = st.diffs_map.contains_key(&state_hash)
+                || st
+                    .indexer_store
+                    .as_ref()
+                    .and_then(|store| store.get_block_height(&state_hash).ok().flatten())
+                    .is_some();
+            if ingested {
+                continue;
+            }
         }
 
         // trustless gate: only ingest blocks whose proof verifies
