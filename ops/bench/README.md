@@ -44,7 +44,7 @@ deployment specs:
 | Components | mina-daemon + mina-archive + PostgreSQL (+ the API server) | one binary |
 | Pods / processes | several | 1 |
 | Datastore | PostgreSQL (managed volume, WAL, vacuum) | embedded speedb, in-process |
-| Memory | daemon (GBs) + Postgres (GBs) | ~1.9 GiB, ~constant regardless of DB size |
+| Memory | daemon (GBs) + Postgres (GBs) | **~1.9 GiB, flat** — measured live: ~1986 MiB resident, +0 MiB under query load |
 | CPU | daemon consensus + archive ingest + PG | ~1.5 cores ingest, up to ~4.4 under heavy query |
 | Ops surface | daemon keys/peers, PG backups/migrations, archive schema | one PVC, one config-less image |
 
