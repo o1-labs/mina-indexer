@@ -346,6 +346,7 @@ impl DbAccountUpdate {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     pub fn unapply_updates(
         db: &IndexerStore,
         unapply: Vec<AccountUpdate>,
