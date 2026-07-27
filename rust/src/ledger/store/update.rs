@@ -691,4 +691,67 @@ mod tests {
             "unapply must fold the credit last"
         );
     }
+
+    /// The invariant the ordering above exists to protect (issue #86),
+    /// exercised on real balances: **apply then unapply restores the
+    /// starting balance exactly** -- and it only does so because unapply
+    /// folds debits first. The balance is unsigned and saturates at zero
+    /// (`Account::debit`), so unapplying a large credit *before* adding its
+    /// paired debits back underflows and permanently inflates the balance.
+    /// This asserts the round-trip identity AND that the fold order is
+    /// load-bearing (the credits-first unapply yields the wrong, +MINA
+    /// answer).
+    #[test]
+    fn apply_then_unapply_restores_balance() {
+        let key = (pk(), TokenAddress::default());
+        // #86 shape: a large incoming credit fully spent by two debits, on an
+        // account that starts -- and must end -- at zero.
+        let diffs = vec![
+            mina_payment(UpdateType::Credit, 100_000_000_000),
+            mina_payment(UpdateType::Debit(None), 30_000_000_000),
+            mina_payment(UpdateType::Debit(None), 30_000_000_000),
+        ];
+
+        let fold = |start: &Account, order: &[AccountDiff], unapply: bool| {
+            let mut acct = start.clone();
+            for d in order {
+                if let AccountDiff::Payment(p) = d {
+                    acct = if unapply {
+                        acct.payment_unapply(p)
+                    } else {
+                        acct.payment(p)
+                    };
+                }
+            }
+            acct.balance.0
+        };
+
+        let start = Account::empty(pk(), TokenAddress::default(), false);
+        assert_eq!(start.balance.0, 0);
+
+        // apply (credits first): 0 + 100 - 30 - 30 = 40
+        let apply = aggregate_token_account_diffs(diffs.clone(), false);
+        let applied = Account {
+            balance: Amount(fold(&start, &apply[&key], false)),
+            ..start.clone()
+        };
+        assert_eq!(applied.balance.0, 40_000_000_000, "apply: 0 +100 -30 -30");
+
+        // unapply (correct: debits first) restores exactly zero: 40 +30 +30 -100
+        let unapply = aggregate_token_account_diffs(diffs.clone(), true);
+        assert_eq!(
+            fold(&applied, &unapply[&key], true),
+            0,
+            "apply then unapply must restore the starting balance"
+        );
+
+        // unapply in the WRONG (credits-first) order: 40 -100 saturates to 0,
+        // then +30 +30 = 60 -- the exact #86 over-count. Guards the order.
+        let wrong = aggregate_token_account_diffs(diffs, false);
+        assert_eq!(
+            fold(&applied, &wrong[&key], true),
+            60_000_000_000,
+            "credits-first unapply underflows and inflates the balance"
+        );
+    }
 }
