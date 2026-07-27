@@ -243,6 +243,14 @@ end
 # they still run uninstrumented in the regular `test` job. Prints a per-crate
 # summary and writes lcov to rust/target/llvm-cov/lcov.info for CI upload.
 # Non-blocking: a reporting tool, not a gate -- no coverage floor yet (#19 WS1).
+#
+# The binary entrypoints (src/bin/*.rs -- CLI arg wiring for `mina-indexer` and
+# the `mesa-mut-blocks` fetcher) are excluded from the denominator: they are thin
+# wiring exercised by the e2e/system tests, never unit-tested, so counting them
+# only depresses the number without pointing at a real gap. Everything else --
+# including the IPC layer (unix_socket_server) and the orchestration loop
+# (server.rs) -- stays in scope; those are untested, not untestable.
+COVERAGE_IGNORE = 'src/bin/'
 desc "Measure unit-test coverage (cargo-llvm-cov, --lib)"
 task coverage: CARGO_DEPS do
   puts "--- Measuring unit-test coverage (llvm-cov --lib)"
@@ -251,8 +259,9 @@ task coverage: CARGO_DEPS do
   FileUtils.mkdir_p("#{TOP}/rust/target/llvm-cov")
   # Run instrumented lib tests once, then render both a summary and lcov from it.
   cargo_output("llvm-cov --lib --no-report")
-  cargo_output("llvm-cov report --summary-only")
-  cargo_output("llvm-cov report --lcov --output-path target/llvm-cov/lcov.info")
+  cargo_output("llvm-cov report --summary-only --ignore-filename-regex '#{COVERAGE_IGNORE}'")
+  cargo_output("llvm-cov report --lcov --output-path target/llvm-cov/lcov.info " \
+               "--ignore-filename-regex '#{COVERAGE_IGNORE}'")
   puts "--- lcov written to rust/target/llvm-cov/lcov.info"
 end
 
