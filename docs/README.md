@@ -1,5 +1,11 @@
 # Mina Indexer documentation
 
+## Start here
+
+- [getting-started.md](getting-started.md) — run one (or use the public devnet
+  endpoint), gate on readiness, make your first GraphQL/REST query, and reach for a
+  typed client. The five-minute path.
+
 ## Operating & deploying
 
 - [operating.md](operating.md) — run, configure (CLI + env reference), observe, and
