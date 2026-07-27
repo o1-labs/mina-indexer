@@ -28,6 +28,8 @@
 - [reorg-behavior.md](reorg-behavior.md) — reorg handling, finality zones (canonical
   threshold vs `k`), and which query results are provisional vs final.
 - [ledger-calculations.md](ledger-calculations.md)
+- [lightnet-integration-test.md](lightnet-integration-test.md) — scoping for the
+  live node → indexer integration test (reconcile/reorg pipeline coverage).
 - [understanding-mainnet-transaction-fees.md](understanding-mainnet-transaction-fees.md)
 - [user-commands.md](user-commands.md)
 - [state/](state/) — the witness tree and how blocks are added to it.
