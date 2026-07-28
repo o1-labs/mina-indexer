@@ -34,8 +34,14 @@ pub struct AccountUpdate {
 
     /// The block these diffs came from. Needed on unapply: the block-stated
     /// fields are not reversible from a diff, so they are restored from the
-    /// parent block's staged account instead.
+    /// parent block's staged account instead. Also the correct provenance for
+    /// every per-diff write (events/actions/VK-history/staged accounts): a
+    /// multi-block apply/unapply batch must attribute each update to *its own*
+    /// block, not the best-tip target (mina-indexer#126).
     pub state_hash: StateHash,
+
+    /// Height of `state_hash` -- paired with it for per-diff attribution.
+    pub block_height: u32,
 }
 
 /// The block-stated account for `(pk, token)`, if this block touched it.
@@ -134,16 +140,24 @@ impl DbAccountUpdate {
         db: &IndexerStore,
         apply: Vec<AccountUpdate>,
         state_hash: &StateHash,
-        block_height: u32,
+        _best_block_height: u32,
     ) -> Result<()> {
         for AccountUpdate {
             account_diffs,
             token_diffs,
             new_accounts,
             accounts_accessed,
+            state_hash: update_state_hash,
+            block_height,
             ..
         } in apply.into_iter()
         {
+            // Attribute every write below to the block these diffs actually came
+            // from, not the best-tip target. A multi-block apply batch would
+            // otherwise record all diffs under the final block's state hash --
+            // e.g. an event keyed to a block that never held the emitting
+            // command, which then fails the events query (mina-indexer#126).
+            let state_hash = &update_state_hash;
             let token_account_diffs = aggregate_token_account_diffs(account_diffs, false);
             let mut diffed: HashSet<(PublicKey, TokenAddress)> = HashSet::new();
 
@@ -332,11 +346,12 @@ impl DbAccountUpdate {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     pub fn unapply_updates(
         db: &IndexerStore,
         unapply: Vec<AccountUpdate>,
         state_hash: &StateHash,
-        block_height: u32,
+        _best_block_height: u32,
     ) -> Result<()> {
         // unapply account & token diffs, remove accounts
         for AccountUpdate {
@@ -345,6 +360,7 @@ impl DbAccountUpdate {
             new_accounts,
             accounts_accessed,
             state_hash: unapplied_state_hash,
+            block_height,
             ..
         } in unapply
         {
@@ -420,7 +436,7 @@ impl DbAccountUpdate {
                             db.remove_zkapp_verification_key_change(
                                 &diff.public_key,
                                 block_height,
-                                state_hash,
+                                &unapplied_state_hash,
                             )
                             .ok();
 

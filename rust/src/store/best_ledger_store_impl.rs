@@ -222,6 +222,7 @@ impl BestLedgerStore for IndexerStore {
                             new_zkapp_accounts,
                             accounts_accessed: d.accounts_accessed,
                             state_hash: d.state_hash,
+                            block_height: d.blockchain_length,
                         }
                     })
                 })
@@ -243,6 +244,7 @@ impl BestLedgerStore for IndexerStore {
                             new_zkapp_accounts,
                             accounts_accessed: d.accounts_accessed,
                             state_hash: d.state_hash,
+                            block_height: d.blockchain_length,
                         }
                     })
                 })
