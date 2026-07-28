@@ -139,25 +139,25 @@ impl DbAccountUpdate {
     pub fn apply_updates(
         db: &IndexerStore,
         apply: Vec<AccountUpdate>,
-        state_hash: &StateHash,
-        _best_block_height: u32,
+        best_state_hash: &StateHash,
     ) -> Result<()> {
         for AccountUpdate {
             account_diffs,
             token_diffs,
             new_accounts,
             accounts_accessed,
-            state_hash: update_state_hash,
+            state_hash,
             block_height,
             ..
         } in apply.into_iter()
         {
-            // Attribute every write below to the block these diffs actually came
-            // from, not the best-tip target. A multi-block apply batch would
-            // otherwise record all diffs under the final block's state hash --
-            // e.g. an event keyed to a block that never held the emitting
-            // command, which then fails the events query (mina-indexer#126).
-            let state_hash = &update_state_hash;
+            // Every write in this update is attributed to the block it came from
+            // -- its own `state_hash`/`block_height`, never the batch's best-tip.
+            // A multi-block apply must not record one block's diffs under another,
+            // else an event lands under a block that never held its command and
+            // the events query fails (mina-indexer#126). `best_state_hash` is used
+            // only for the batch-level supply update after the loop.
+            let state_hash = &state_hash;
             let token_account_diffs = aggregate_token_account_diffs(account_diffs, false);
             let mut diffed: HashSet<(PublicKey, TokenAddress)> = HashSet::new();
 
@@ -338,8 +338,8 @@ impl DbAccountUpdate {
             }
         }
 
-        // adjust MINA token supply
-        if let Some(supply) = db.get_block_total_currency(state_hash)? {
+        // batch-level: MINA supply after the whole apply is the best tip's
+        if let Some(supply) = db.get_block_total_currency(best_state_hash)? {
             db.set_token(&Token::mina_with_supply(supply))?;
         }
 
@@ -350,8 +350,7 @@ impl DbAccountUpdate {
     pub fn unapply_updates(
         db: &IndexerStore,
         unapply: Vec<AccountUpdate>,
-        state_hash: &StateHash,
-        _best_block_height: u32,
+        best_state_hash: &StateHash,
     ) -> Result<()> {
         // unapply account & token diffs, remove accounts
         for AccountUpdate {
@@ -560,7 +559,7 @@ impl DbAccountUpdate {
             // arrival order.
             for (pk, token) in new_accounts.iter() {
                 let on_best_chain = db
-                    .get_staged_account(pk, token, state_hash)
+                    .get_staged_account(pk, token, best_state_hash)
                     .ok()
                     .flatten()
                     .is_some();
@@ -570,8 +569,8 @@ impl DbAccountUpdate {
                 }
             }
 
-            // adjust MINA token supply
-            if let Some(supply) = db.get_block_total_currency(state_hash)? {
+            // batch-level: MINA supply after the whole unapply is the best tip's
+            if let Some(supply) = db.get_block_total_currency(best_state_hash)? {
                 db.set_token(&Token::mina_with_supply(supply))?;
             }
         }
