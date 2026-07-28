@@ -44,7 +44,6 @@ pub trait BestLedgerStore {
     fn update_best_accounts(
         &self,
         state_hash: &StateHash,
-        block_height: u32,
         updates: DbAccountUpdate,
     ) -> Result<()>;
 
@@ -62,7 +61,6 @@ pub trait BestLedgerStore {
     fn update_block_best_accounts(
         &self,
         state_hash: &StateHash,
-        block_height: u32,
         blocks: &DbBlockUpdate,
     ) -> Result<()>;
 

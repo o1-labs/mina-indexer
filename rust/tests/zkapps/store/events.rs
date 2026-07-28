@@ -110,69 +110,97 @@ fn event_store_test() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Fluent builder for a per-block `AccountUpdate` in tests. Lets a test read as
+/// "the block at this height emitted these events" instead of restating the
+/// whole ledger-update struct, so the setup shows intent, not bookkeeping.
+struct BlockUpdate {
+    state_hash: StateHash,
+    block_height: u32,
+    account_diffs: Vec<AccountDiff>,
+}
+
+impl BlockUpdate {
+    fn at(state_hash: &str, block_height: u32) -> Self {
+        Self {
+            state_hash: state_hash.into(),
+            block_height,
+            account_diffs: vec![],
+        }
+    }
+
+    fn emitting_events(
+        mut self,
+        pk: &PublicKey,
+        token: &TokenAddress,
+        events: &[&str],
+    ) -> Self {
+        self.account_diffs
+            .push(AccountDiff::ZkappEvents(ZkappEventsDiff {
+                token: token.clone(),
+                public_key: pk.clone(),
+                events: events.iter().copied().map(ZkappEvent::from).collect(),
+                txn_hash: TxnHash::default(),
+            }));
+        self
+    }
+
+    fn build(self) -> AccountUpdate {
+        AccountUpdate {
+            account_diffs: self.account_diffs,
+            token_diffs: vec![],
+            new_accounts: Default::default(),
+            new_zkapp_accounts: Default::default(),
+            accounts_accessed: vec![],
+            state_hash: self.state_hash,
+            block_height: self.block_height,
+        }
+    }
+}
+
 /// Regression for mina-indexer#126.
 ///
-/// `apply_updates` receives a batch of per-block `AccountUpdate`s plus the
-/// best-tip target `(state_hash, block_height)`. When the batch spans more than
-/// one block (a reorg or a catch-up advance), every update's events must be
-/// keyed to *its own* block, not the final target. The pre-fix code used the
-/// single target for all of them, so an event ended up recorded under a block
-/// that never contained its emitting command -- and the events resolver then
+/// `apply_updates` takes a batch of per-block `AccountUpdate`s and the best-tip
+/// state hash. When the batch spans more than one block (a reorg or a catch-up
+/// advance), every update's events must be keyed to *its own* block, not the
+/// tip. The pre-fix code keyed them all to the tip, so an event landed under a
+/// block that never held its emitting command and the events resolver then
 /// failed the whole query with "no command <hash> in <block>".
 #[test]
 fn apply_updates_keys_events_to_their_own_block() -> anyhow::Result<()> {
-    let store_dir = setup_new_db_dir("apply-updates-event-attribution")?;
-    let db = IndexerStore::new(store_dir.path(), true)?;
+    const BLOCK_A: &str = "3NLXXQ1ZtzPMb1Tcx2mLdAUEKgL8bWH4qdFPdwsUKMpJQ7hNAwfW";
+    const BLOCK_B: &str = "3NKAwFdBbSGEcsqokVhdLoHm3kN4eDiV9akSQX2XMGeeXbikopjd";
 
-    let pk = PublicKey::default();
-    let token = TokenAddress::default();
+    let db = IndexerStore::new(setup_new_db_dir("apply-updates-event-attribution")?.path(), true)?;
+    let (pk, token) = (PublicKey::default(), TokenAddress::default());
 
-    // two distinct blocks + a third, different best-tip target
-    let sh1: StateHash = "3NLXXQ1ZtzPMb1Tcx2mLdAUEKgL8bWH4qdFPdwsUKMpJQ7hNAwfW".into();
-    let sh2: StateHash = "3NKAwFdBbSGEcsqokVhdLoHm3kN4eDiV9akSQX2XMGeeXbikopjd".into();
-    let best_tip: StateHash = "3NLMSgtHY8eToF5P1y7ai6bpkfZ2vZauGnLyUCme4LjGSbu4pUTp".into();
-
-    let update = |sh: &StateHash, height: u32, ev: &str| AccountUpdate {
-        account_diffs: vec![AccountDiff::ZkappEvents(ZkappEventsDiff {
-            token: token.clone(),
-            public_key: pk.clone(),
-            events: vec![ZkappEvent::from(ev)],
-            txn_hash: TxnHash::default(),
-        })],
-        token_diffs: vec![],
-        new_accounts: Default::default(),
-        new_zkapp_accounts: Default::default(),
-        accounts_accessed: vec![],
-        state_hash: sh.clone(),
-        block_height: height,
-    };
-
-    // event payloads must be valid 66-char `0x…` field elements
+    // valid 66-char `0x…` event field elements, one per block
     let ev_a = format!("0x{:064x}", 0xAAAA_u32);
     let ev_b = format!("0x{:064x}", 0xBBBB_u32);
 
-    // apply a two-block batch under a *different* best-tip target
+    // a two-block canonical segment, applied under a *different* best tip
+    let best_tip: StateHash = "3NLMSgtHY8eToF5P1y7ai6bpkfZ2vZauGnLyUCme4LjGSbu4pUTp".into();
     DbAccountUpdate::apply_updates(
         &db,
         vec![
-            update(&sh1, 531_667, &ev_a),
-            update(&sh2, 531_668, &ev_b),
+            BlockUpdate::at(BLOCK_A, 531_667)
+                .emitting_events(&pk, &token, &[&ev_a])
+                .build(),
+            BlockUpdate::at(BLOCK_B, 531_668)
+                .emitting_events(&pk, &token, &[&ev_b])
+                .build(),
         ],
         &best_tip,
-        999_999,
     )?;
 
-    // each event keeps its own block's provenance, not the best-tip's
+    // each event keeps its own block's provenance, never the best tip's
     let e0 = db.get_event(&pk, &token, 0)?.unwrap();
     let e1 = db.get_event(&pk, &token, 1)?.unwrap();
 
-    assert_eq!(e0.state_hash, sh1, "event 0 must keep block 531667's state hash");
+    assert_eq!(e0.state_hash, BLOCK_A.into(), "event 0 keeps block 531667");
     assert_eq!(e0.block_height, 531_667);
-    assert_eq!(e1.state_hash, sh2, "event 1 must keep block 531668's state hash");
+    assert_eq!(e1.state_hash, BLOCK_B.into(), "event 1 keeps block 531668");
     assert_eq!(e1.block_height, 531_668);
-
-    assert_ne!(e0.state_hash, best_tip, "must not be keyed to the best-tip target");
-    assert_ne!(e1.state_hash, best_tip, "must not be keyed to the best-tip target");
+    assert_ne!(e0.state_hash, best_tip, "not keyed to the best tip");
 
     Ok(())
 }
