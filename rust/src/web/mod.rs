@@ -199,6 +199,7 @@ pub async fn start_web_server<A: net::ToSocketAddrs>(
             .app_data(Data::new(locked.clone()))
             .app_data(BodyLimit(body_limit))
             .service(blocks::get_blocks)
+            .service(blocks::get_block_proof)
             .service(blocks::get_block_by_state_hash)
             .service(accounts::get_account)
             .service(blockchain::get_blockchain_summary)
