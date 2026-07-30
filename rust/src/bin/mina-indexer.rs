@@ -569,10 +569,17 @@ fn maybe_restore_from_checkpoint(
     };
     let latest = checkpoint_dir.join("latest");
     if !latest.join("CURRENT").exists() {
-        anyhow::bail!(
+        // No usable checkpoint: a fresh PVC, a restart before the first periodic
+        // checkpoint is written, or a crash caught mid rename. Don't restore garbage
+        // -- but don't abort either. Skip the restore and let the indexer build the
+        // DB from blocks. This is what makes --restore-from-checkpoint safe to pass
+        // unconditionally from the configless entrypoint (which is the whole point of
+        // baking it in), instead of forcing a bespoke conditional-restore wrapper.
+        warn!(
             "--restore-from-checkpoint {checkpoint_dir:#?}: no usable checkpoint at {latest:#?} \
-             (missing CURRENT)"
+             (missing CURRENT); skipping restore, building from blocks"
         );
+        return Ok(());
     }
 
     if database_dir.join("CURRENT").exists() {
@@ -820,8 +827,10 @@ mod checkpoint_restore_tests {
     //! lives in `server::tests`). The periodic checkpoint only ever swaps
     //! `<dir>/latest` via an atomic rename, so a `kill -9` mid-write can leave
     //! `latest` briefly absent — but never a *partial* DB. `maybe_restore_from_checkpoint`
-    //! gates on `latest/CURRENT`, so an absent/partial checkpoint is refused
-    //! (safe) rather than restored as garbage.
+    //! gates on `latest/CURRENT`: an absent/partial checkpoint is *skipped* (no
+    //! garbage restored) and the caller builds the DB from blocks — it must never
+    //! abort, so `--restore-from-checkpoint` is safe to pass unconditionally from the
+    //! configless entrypoint (a fresh PVC has no checkpoint yet).
     use super::{copy_dir_recursive, maybe_restore_from_checkpoint};
     use std::fs;
 
@@ -843,25 +852,53 @@ mod checkpoint_restore_tests {
     }
 
     #[test]
-    fn absent_latest_is_refused() {
-        // A crash in the remove-then-rename window leaves `latest` absent.
-        let ckpt = tempfile::tempdir().unwrap();
+    fn absent_checkpoint_skips_and_continues() {
+        // Reproduction for the recurring bootstrap failure: on a fresh PVC there is
+        // no checkpoint yet, but the configless entrypoint always passes
+        // --restore-from-checkpoint. This function must SKIP the restore and let the
+        // indexer build from blocks -- NOT abort. Aborting is what forced the gitops
+        // entrypoint workaround that then dropped the bulk-fetch (a whole prod incident).
+        let ckpt = tempfile::tempdir().unwrap(); // empty: no latest/CURRENT
         let db = tempfile::tempdir().unwrap();
+        maybe_restore_from_checkpoint(Some(ckpt.path()), db.path(), false)
+            .expect("absent checkpoint must skip (build from blocks), not abort");
         assert!(
-            maybe_restore_from_checkpoint(Some(ckpt.path()), db.path(), false).is_err(),
-            "an absent checkpoint must be refused, not restored"
+            !db.path().join("CURRENT").exists(),
+            "nothing should be restored from an absent checkpoint"
         );
     }
 
     #[test]
-    fn partial_latest_without_current_is_refused() {
-        // A `latest` dir that exists but lacks CURRENT (never a real state given
-        // the atomic rename, but the guard must still reject it).
+    fn partial_latest_without_current_skips_restore() {
+        // A `latest` dir that exists but lacks CURRENT (a crash caught mid rename).
+        // Skip it -- don't copy the orphan files, and don't abort.
         let ckpt = tempfile::tempdir().unwrap();
         fs::create_dir_all(ckpt.path().join("latest")).unwrap();
         fs::write(ckpt.path().join("latest/000001.sst"), b"orphan sst").unwrap();
         let db = tempfile::tempdir().unwrap();
-        assert!(maybe_restore_from_checkpoint(Some(ckpt.path()), db.path(), false).is_err());
+        maybe_restore_from_checkpoint(Some(ckpt.path()), db.path(), false)
+            .expect("partial checkpoint must skip, not error");
+        assert!(
+            !db.path().join("000001.sst").exists(),
+            "orphan checkpoint files must not be restored"
+        );
+        assert!(!db.path().join("CURRENT").exists());
+    }
+
+    #[test]
+    fn absent_checkpoint_keeps_existing_db() {
+        // Absent checkpoint must never destroy an already-populated DB (a restart
+        // before the first periodic checkpoint is written).
+        let ckpt = tempfile::tempdir().unwrap(); // no latest/CURRENT
+        let db = tempfile::tempdir().unwrap();
+        fs::write(db.path().join("CURRENT"), b"live db\n").unwrap();
+        maybe_restore_from_checkpoint(Some(ckpt.path()), db.path(), false)
+            .expect("absent checkpoint must skip, not error");
+        assert_eq!(
+            fs::read(db.path().join("CURRENT")).unwrap(),
+            b"live db\n",
+            "existing DB must be preserved"
+        );
     }
 
     #[test]
