@@ -2151,6 +2151,30 @@ type VerificationKeyChangeEntry {
 }
 
 """
+A single account update inside a zkApp command: whose balance moves, in which token, and
+by how much. Updates nested under `calls` are flattened in, because the ledger applies
+those too and a consumer reconstructing balances must see them.
+"""
+type ZkAppAccountUpdate {
+	"""
+	Public key of the account this update touches.
+	"""
+	publicKey: String!
+	"""
+	Token address the update applies to.
+	"""
+	token: String!
+	"""
+	Signed balance change in nanomina, as a string. Negative for a debit.
+	"""
+	balanceChange: String!
+	"""
+	Whether this update increments the account's nonce.
+	"""
+	incrementNonce: Boolean!
+}
+
+"""
 Archive-node-api compatible zkApp command. The archive serves zkApp commands
 under `BlockTransactions.zkappCommands`, separate from `userCommands`.
 """
@@ -2173,6 +2197,11 @@ type ZkAppCommand {
 	"""
 	status: String!
 	failureReason: String
+	"""
+	The command's account updates, in the order the ledger applies them. Without these a
+	consumer sees only the fee and cannot reconstruct what the command did to balances.
+	"""
+	accountUpdates: [ZkAppAccountUpdate!]!
 }
 
 type ZkappAccount {
