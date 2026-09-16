@@ -17,9 +17,12 @@
 #       per height, turning thousands of list calls into a handful of paged ones;
 #     - downloads in parallel.
 #
-#   Result: minutes instead of hours. Ingesting the downloaded blocks is fast
-#   (devnet's 11k blocks ingest in ~3 minutes), so the tip is reached quickly and
-#   block-pull takes over from there.
+#   Result: bandwidth-bound instead of rate-limited -- tens of minutes rather
+#   than the ~9 hours block-pull would need. It is not instant: devnet's range
+#   has grown to ~46k objects / ~30 GB, so budget tens of minutes and size
+#   the blocks volume accordingly. Ingesting what was downloaded is fast
+#   (devnet's 11k blocks ingest in ~3 minutes), so the tip is reached quickly
+#   and block-pull takes over from there.
 #
 # Writes to a temp file and atomically renames, so the indexer's directory watcher
 # never sees a half-written block. Re-running is safe: existing blocks are skipped.
@@ -113,6 +116,47 @@ NAMES="$(list_range)"
 COUNT="$(echo "$NAMES" | grep -c . || true)"
 echo "block-bootstrap: $COUNT objects (forks included), $WORKERS workers" >&2
 
+on_disk() { find "$DIR" -maxdepth 1 -name "${NET}-*.json" -printf '.' 2>/dev/null | wc -c; }
+
+# Report progress while the fetch runs.
+#
+# The fetch below prints nothing for as long as it takes, and for devnet's full
+# range that is tens of minutes and tens of GB (~680 KiB per block on average,
+# so ~30 GB for 46k objects -- it is bandwidth-bound, not latency-bound). A
+# healthy download and a stalled one therefore look identical in the log, which
+# is how "no output for 45 minutes" gets read as a hang. Print a line every
+# BOOTSTRAP_PROGRESS_SECS so the difference is visible.
+PROGRESS_SECS="${BOOTSTRAP_PROGRESS_SECS:-30}"
+BASE="$(on_disk)"      # blocks already present, so the rate reflects THIS run
+START_TS="$(date +%s)"
+
+progress_loop() {
+  local now elapsed done_n fetched pct size eta
+  while :; do
+    sleep "$PROGRESS_SECS"
+    done_n="$(on_disk)"
+    fetched=$((done_n - BASE))
+    now="$(date +%s)"
+    elapsed=$((now - START_TS))
+    pct=0
+    [ "$COUNT" -gt 0 ] && pct=$((done_n * 100 / COUNT))
+    size="$(du -sh "$DIR" 2>/dev/null | cut -f1)"
+    eta=""
+    if [ "$fetched" -gt 0 ] && [ "$elapsed" -gt 0 ]; then
+      eta=", ~$(((COUNT - done_n) * elapsed / fetched / 60)) min left"
+    fi
+    echo "block-bootstrap: $done_n/$COUNT objects (${pct}%), ${size:-?} on disk${eta}" >&2
+  done
+}
+
+progress_loop &
+progress_pid=$!
+# shellcheck disable=SC2064  # expand the pid now, not at trap time
+trap "kill $progress_pid 2>/dev/null" EXIT INT TERM
+
 echo "$NAMES" | grep . | xargs -P "$WORKERS" -I{} bash -c 'fetch_one "$@"' _ {} "$DIR" "$OBJ"
 
-echo "block-bootstrap: done — $(find "$DIR" -name "${NET}-*.json" | wc -l) blocks on disk" >&2
+kill "$progress_pid" 2>/dev/null
+trap - EXIT INT TERM
+
+echo "block-bootstrap: done — $(on_disk) blocks on disk, $(du -sh "$DIR" 2>/dev/null | cut -f1)" >&2
