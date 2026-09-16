@@ -28,6 +28,20 @@ Nothing else is required. A volume on `/data` is optional but recommended so the
 fetched blocks survive restarts. The first boot of the devnet/mesa images decompresses the
 baked genesis ledger to `/data` (mesa is ~900 MB; takes a few seconds).
 
+**The first boot is long.** After the ledger, devnet/mesa bulk-fetch their block backlog
+(devnet: ~32,000 heights) and then ingest it, so expect tens of minutes before `/readyz`
+returns 200. Port 8080 answers throughout — `/healthz` 200, everything else 503 with the
+current phase and block count — so you can watch progress:
+
+```bash
+curl -s localhost:8080/readyz
+# {"status":"bootstrapping","ready":false,"phase":"fetching-blocks","blocks_on_disk":18342}
+```
+
+On Kubernetes this needs a `startupProbe`, or the liveness probe kills the container
+mid-fetch and it never finishes. See
+[*Kubernetes probes*](../docs/operating.md#kubernetes-probes).
+
 ## What's inside
 
 - `mina-indexer` — the (network-agnostic) indexer binary.
@@ -36,6 +50,11 @@ baked genesis ledger to `/data` (mesa is ~900 MB; takes a few seconds).
   - `block-pull` (`ops/block-pull.sh`) for the public networks — pulls from the
     `mina_network_block_data` bucket (objects already named `<network>-<height>-<hash>.json`).
   - `mesa-pull` (`ops/mesa-mut/mesa-pull.sh`) for mesa — different bucket + prefix rewrite.
+- `bootstrap-health` (`ops/bootstrap-health.sh`) — holds port 8080 during the first-boot
+  window, before `server start` binds it, so probes see
+  `503 {"status":"bootstrapping","phase":…,"blocks_on_disk":…}` (and `/healthz` 200)
+  instead of `connection refused`. Stopped at handover; `MINA_BOOTSTRAP_HEALTH_PORT=0`
+  disables it.
 - `verify-block` — the trustless verify shim, baked but **dormant** (the images do not pass
   `--verify-block-exe`; trustless verification remains a separate opt-in + sidecar concern).
 - The mesa/devnet genesis ledgers ship gzipped at `/genesis/<network>.json.gz`.
