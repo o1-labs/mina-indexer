@@ -137,7 +137,8 @@ mina-indexer database verify-integrity --database-dir /data/db || alert "indexer
   latency histograms, best-tip height, tip age, synced flag, dangling branches, reconcile
   counts, blocks pruned, ingest/fetch failure counters, HTTP request histogram, DB-size
   gauges). Point Prometheus at `:8080/metrics`.
-- **Health / summary:** `GET /health`, `GET /summary` (chain summary as JSON).
+- **Health / summary:** `GET /healthz` (liveness), `GET /readyz` (readiness), `GET /health`
+  and `GET /summary` (chain summary as JSON). See *Kubernetes probes* below.
 - **Logs:** human-readable by default; set `MINA_LOG_FORMAT=json` for aggregation. Filter
   with `RUST_LOG`.
 
@@ -145,6 +146,73 @@ Ready-to-load **Prometheus alert rules + SLO recording rules** and an importable
 **Grafana dashboard** are in [`ops/observability/`](../ops/observability/README.md), with
 the full exported-metric reference. Design rationale and the metric list:
 [`ops/OBSERVABILITY.md`](../ops/OBSERVABILITY.md).
+
+## Kubernetes probes
+
+Three endpoints, three different questions. Point each probe at the right one — pointing
+all of them at the same endpoint is the usual cause of a pod that never goes `Ready`, or
+one that restarts forever during its first boot.
+
+| Endpoint | 200 when | Use for |
+| --- | --- | --- |
+| `GET /healthz` | the process is up and the store answers | **liveness** (and startup) |
+| `GET /readyz` | the best tip is fresher than `MINA_READY_MAX_LAG_SECS` (default 600 s) | **readiness** |
+| `GET /health` | a best tip exists; body carries `synced`, `tip_height`, `tip_age_seconds` | humans, dashboards |
+
+`/healthz` is deliberately independent of sync state: an indexer that is catching up is
+alive, and restarting it only throws away the work it has done.
+
+### The first boot is long — give it a startupProbe
+
+A fresh instance decompresses the baked genesis ledger and bulk-fetches its block backlog
+(devnet: ~32,000 heights / ~46,000 objects) *before* the server binds the port, then
+ingests all of it before a best tip exists. Expect **tens of minutes** before `/readyz`
+turns 200. That is bootstrapping, not a fault.
+
+Two things keep it from looking like a fault:
+
+- The image **holds port 8080 during the pre-server window** with a placeholder that
+  answers `/healthz` 200 and everything else `503 {"status":"bootstrapping","phase":…,
+  "blocks_on_disk":…}`. So probes get an answer with visible progress instead of
+  `connection refused`. (`MINA_BOOTSTRAP_HEALTH_PORT=0` disables it.)
+- A **`startupProbe`** tells Kubernetes the slow start is expected. While it runs, the
+  liveness and readiness probes are suspended, so the pod reports `0/1 Running` without
+  raising failure events or restart loops.
+
+```yaml
+startupProbe:            # suspends the other two until the first boot completes
+  httpGet: { path: /healthz, port: 8080 }
+  periodSeconds: 10
+  failureThreshold: 360  # up to 60 min of first-boot bootstrap
+livenessProbe:
+  httpGet: { path: /healthz, port: 8080 }
+  periodSeconds: 20
+  failureThreshold: 3
+readinessProbe:          # keeps a catching-up pod out of the Service
+  httpGet: { path: /readyz, port: 8080 }
+  periodSeconds: 10
+  failureThreshold: 3
+```
+
+Without the `startupProbe`, the `livenessProbe` kills the container part-way through the
+block fetch and the pod restarts forever, never finishing the bootstrap.
+
+Watch progress from outside the cluster-event view:
+
+```bash
+kubectl exec deploy/mina-indexer -- curl -s localhost:8080/readyz
+# bootstrapping: {"status":"bootstrapping","ready":false,"phase":"fetching-blocks","blocks_on_disk":18342}
+# ingesting:     {"status":"bootstrapping","ready":false}
+# catching up:   {"status":"catching_up","ready":false,"tip_height":551204,"tip_age_seconds":41207,...}
+# ready:         {"status":"ready","ready":true,"tip_height":560319,"tip_age_seconds":92,...}
+```
+
+### Readiness lag budget
+
+`MINA_READY_MAX_LAG_SECS` (default 600) is how stale the tip may be and still count as
+ready. Raise it if the network itself stalls longer than that — if every replica fails
+readiness at once, the Service has no endpoints and queries fail outright, which is worse
+than serving a slightly-behind tip.
 
 ## Checkpoints & recovery
 
