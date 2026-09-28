@@ -343,11 +343,19 @@ impl IndexerStore {
         let mut snapshot_temp_dir = output_file.to_path_buf();
         snapshot_temp_dir.set_extension("tmp-snapshot");
 
+        // Read before the checkpoint: a running indexer may ingest in between, so
+        // the manifest's best tip is at or below the snapshot's, never above it.
+        // A restore that fetches from the manifest height then never leaves a gap.
+        let manifest = SnapshotManifest::of(self)?;
+
         Checkpoint::new(&self.database)?
             .create_checkpoint(&snapshot_temp_dir)
             .map_err(|e| anyhow!("Error creating database snapshot: {e}"))
             .and_then(|_| {
-                persist_indexer_version(&IndexerStoreVersion::default(), &snapshot_temp_dir)?;
+                // the store's own version, not this binary's: a newer binary
+                // snapshotting an older store must not relabel it as current
+                persist_indexer_version(&manifest.store_version, &snapshot_temp_dir)?;
+                manifest.persist(&snapshot_temp_dir)?;
                 archive_directory(&snapshot_temp_dir, output_file)
                     .with_context(|| "Failed to archive database")
             })
@@ -388,32 +396,127 @@ impl IndexerStore {
     }
 }
 
-/// Restore a snapshot of the Indexer store
-pub fn restore_snapshot(snapshot_file: &PathBuf, restore_dir: &PathBuf) -> Result<()> {
-    if !snapshot_file.exists() {
-        bail!("Snapshot file {snapshot_file:#?} does not exist")
-    } else if restore_dir.is_dir() {
-        bail!("Restore dir {restore_dir:#?} must not exist")
-    } else {
-        extract_archive_file(snapshot_file, restore_dir)
-            .with_context(|| format!("Failed to extract archive file {snapshot_file:#?}"))
-            .map(|_| info!(
-                "Snapshot successfully restored. Start mina indexer using `mina-indexer server start --database-dir {}`",
-                restore_dir.display()
-            ))
+/// File a snapshot carries next to the database files, describing what it holds
+pub const SNAPSHOT_MANIFEST: &str = "SNAPSHOT_MANIFEST";
+
+/// What a snapshot holds: enough for a restore to reject one it cannot use, and
+/// for a cold start to know the height to fetch blocks from.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnapshotManifest {
+    pub store_version: IndexerStoreVersion,
+    pub genesis_state_hash: Option<String>,
+    pub best_block_height: Option<u32>,
+    pub best_block_hash: Option<String>,
+}
+
+impl SnapshotManifest {
+    fn of(store: &IndexerStore) -> Result<Self> {
+        use crate::block::store::BlockStore;
+
+        Ok(Self {
+            store_version: store.get_db_version()?,
+            genesis_state_hash: store.get_best_block_genesis_hash()?.map(|h| h.0),
+            best_block_height: store.get_best_block_height()?,
+            best_block_hash: store.get_best_block_hash()?.map(|h| h.0),
+        })
+    }
+
+    fn persist(&self, dir: &Path) -> Result<()> {
+        fs::write(dir.join(SNAPSHOT_MANIFEST), serde_json::to_vec(self)?)?;
+        Ok(())
+    }
+
+    /// Read the manifest of a restored snapshot
+    pub fn read(dir: &Path) -> Result<Self> {
+        let path = dir.join(SNAPSHOT_MANIFEST);
+        let bytes =
+            fs::read(&path).with_context(|| format!("no snapshot manifest at {path:#?}"))?;
+        Ok(serde_json::from_slice(&bytes)?)
+    }
+
+    /// Why this binary cannot use the snapshot as-is, if it cannot
+    fn incompatibility(&self, expected_genesis_hash: Option<&str>) -> Option<String> {
+        if !self.store_version.matches_binary() {
+            return Some(format!(
+                "store version {} != this binary's {}.{}.{}",
+                self.store_version.major_minor_patch(),
+                IndexerStoreVersion::MAJOR,
+                IndexerStoreVersion::MINOR,
+                IndexerStoreVersion::PATCH,
+            ));
+        }
+
+        match (expected_genesis_hash, self.genesis_state_hash.as_deref()) {
+            (Some(expected), Some(actual)) if expected != actual => {
+                Some(format!("genesis hash {actual} != expected {expected}"))
+            }
+            (Some(expected), None) => Some(format!(
+                "snapshot has no best block, so its genesis hash cannot be checked against {expected}"
+            )),
+            _ => None,
+        }
     }
 }
 
-fn extract_archive_file(archive_file: &Path, output_dir: &Path) -> io::Result<()> {
-    debug!(
-        "Extracting {} to {}",
-        archive_file.display(),
-        output_dir.display()
-    );
+/// Restore a snapshot of the Indexer store.
+///
+/// `snapshot_file` `-` reads the archive from stdin, so a download can be piped
+/// straight in without holding the archive and the database on disk together.
+///
+/// The restored store must match this binary's store version and, when given,
+/// `expected_genesis_hash` (a snapshot from another network or from before a
+/// hardfork). Otherwise the restore dir is removed and this fails, leaving the
+/// caller free to build the database from blocks instead.
+pub fn restore_snapshot(
+    snapshot_file: &Path,
+    restore_dir: &Path,
+    expected_genesis_hash: Option<&str>,
+) -> Result<SnapshotManifest> {
+    let from_stdin = snapshot_file == Path::new("-");
+
+    if !from_stdin && !snapshot_file.exists() {
+        bail!("Snapshot file {snapshot_file:#?} does not exist")
+    } else if restore_dir.is_dir() {
+        bail!("Restore dir {restore_dir:#?} must not exist")
+    }
+
+    let restored = if from_stdin {
+        extract_archive(io::stdin().lock(), restore_dir)
+    } else {
+        File::open(snapshot_file).and_then(|file| extract_archive(file, restore_dir))
+    }
+    .with_context(|| format!("Failed to extract archive file {snapshot_file:#?}"))
+    .and_then(|_| {
+        let manifest = SnapshotManifest::read(restore_dir)?;
+        match manifest.incompatibility(expected_genesis_hash) {
+            Some(reason) => bail!("Snapshot {snapshot_file:#?} is not usable: {reason}"),
+            None => Ok(manifest),
+        }
+    });
+
+    match restored {
+        Ok(manifest) => {
+            info!(
+                "Snapshot successfully restored (best block {:?} at height {:?}). Start mina indexer using `mina-indexer server start --database-dir {}`",
+                manifest.best_block_hash,
+                manifest.best_block_height,
+                restore_dir.display()
+            );
+            Ok(manifest)
+        }
+        Err(e) => {
+            // never leave a half-restored or unusable database behind
+            let _ = fs::remove_dir_all(restore_dir);
+            Err(e)
+        }
+    }
+}
+
+fn extract_archive(archive: impl io::Read, output_dir: &Path) -> io::Result<()> {
+    debug!("Extracting to {}", output_dir.display());
     fs::create_dir_all(output_dir)?;
 
-    let mut archive = tar::Archive::new(BufReader::new(File::open(archive_file)?));
-    archive.unpack(output_dir)
+    tar::Archive::new(BufReader::new(archive)).unpack(output_dir)
 }
 
 fn archive_directory(input_dir: impl AsRef<Path>, output_file: impl AsRef<Path>) -> io::Result<()> {

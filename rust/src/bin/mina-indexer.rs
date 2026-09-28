@@ -99,13 +99,18 @@ enum DatabaseCommand {
 
     /// Restore an indexer database from an archived snapshot file
     Restore {
-        /// Full path to the archive snapshot file
+        /// Full path to the archive snapshot file (`-` reads it from stdin)
         #[arg(long, default_value = "./snapshot")]
         snapshot_file: PathBuf,
 
         /// Full path to the database directory
         #[arg(long)]
         restore_dir: PathBuf,
+
+        /// Reject a snapshot whose chain does not have this genesis hash
+        /// (another network, or a chain from before a hardfork)
+        #[arg(long)]
+        genesis_hash: Option<String>,
     },
 
     /// Query mina indexer database version
@@ -352,9 +357,10 @@ impl DatabaseCommand {
             Self::Restore {
                 snapshot_file,
                 restore_dir,
+                genesis_hash,
             } => {
                 info!("Restoring mina indexer database from snapshot file {snapshot_file:#?} to {restore_dir:#?}");
-                restore_snapshot(&snapshot_file, &restore_dir)?
+                restore_snapshot(&snapshot_file, &restore_dir, genesis_hash.as_deref())?;
             }
             Self::Create(args) => {
                 let database_dir = args.database_dir.clone();
@@ -673,10 +679,7 @@ fn verify_database_integrity(db: &IndexerStore) -> anyhow::Result<IntegrityRepor
 
     // 1) store schema version matches this binary
     let version = db.get_db_version()?;
-    if version.major != IndexerStoreVersion::MAJOR
-        || version.minor != IndexerStoreVersion::MINOR
-        || version.patch != IndexerStoreVersion::PATCH
-    {
+    if !version.matches_binary() {
         problems.push(format!(
             "store schema version {} != this binary's {}.{}.{} (a migration / re-index may be required)",
             version.major_minor_patch(),
