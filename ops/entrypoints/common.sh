@@ -74,6 +74,41 @@ if [ -n "${GENESIS_GZ:-}" ]; then
   ledger_args=(--genesis-ledger "$GEN")
 fi
 
+# First boot: restore a published snapshot, if the operator provides one.
+#
+# Building the database from blocks costs time in proportion to the chain since
+# its root, and that grows every day. A snapshot the operator publishes (see
+# `mina-indexer database snapshot`) makes a cold start one download plus a short
+# catch-up from the snapshot's best tip, however long the chain gets.
+#
+# MINA_SNAPSHOT_URL is a plain HTTP(S) URL of a snapshot tar (e.g. a public GCS
+# object the operator overwrites with the newest one). The download is streamed
+# straight into the restore, so the archive and the database are never on disk
+# together. `database restore` rejects a snapshot from another store version or
+# another chain (--genesis-hash, e.g. one from before a hardfork) and removes what
+# it unpacked; any failure falls back to building from blocks below.
+first_boot=false
+[ -d /data/db ] || first_boot=true
+
+if $first_boot && [ -n "${MINA_SNAPSHOT_URL:-}" ]; then
+  echo "first boot: restoring the ${NETWORK} snapshot from ${MINA_SNAPSHOT_URL}..." >&2
+  phase restoring-snapshot
+  if curl -fsSL --retry 5 --retry-delay 5 "$MINA_SNAPSHOT_URL" |
+    mina-indexer database restore --snapshot-file - --restore-dir /data/db --genesis-hash "$GENESIS_HASH"; then
+    snapshot_height="$(grep -oE '"best_block_height":[0-9]+' /data/db/SNAPSHOT_MANIFEST | grep -oE '[0-9]+$' || true)"
+    if [ -n "$snapshot_height" ]; then
+      # Fetch from a transition frontier (k = 290) below the snapshot's best tip:
+      # its tip may sit on a branch the network since abandoned, and the blocks
+      # the snapshot already holds are skipped on ingest. A few hundred objects.
+      BOOTSTRAP_FROM=$((snapshot_height > 290 ? snapshot_height - 290 : 1))
+      echo "snapshot restored at height ${snapshot_height}; catching up from ${BOOTSTRAP_FROM}" >&2
+    fi
+  else
+    echo "snapshot restore failed; building the database from blocks" >&2
+    rm -rf /data/db
+  fi
+fi
+
 # First boot: bulk-fetch the backlog in parallel.
 #
 # FETCH_EXE follows the *tip*. The indexer calls it synchronously inside its
@@ -88,7 +123,7 @@ fi
 # mainnet, whose history is far too large to pull this way) simply skip it.
 #
 # Set BOOTSTRAP_FROM=0 to disable; BOOTSTRAP_WORKERS tunes the parallelism.
-if [ -n "${BOOTSTRAP_FROM:-}" ] && [ "${BOOTSTRAP_FROM}" -gt 0 ] && [ ! -d /data/db ]; then
+if $first_boot && [ -n "${BOOTSTRAP_FROM:-}" ] && [ "${BOOTSTRAP_FROM}" -gt 0 ]; then
   echo "first boot: bulk-fetching ${NETWORK} blocks from height ${BOOTSTRAP_FROM}..." >&2
   phase fetching-blocks
   block-bootstrap "$NETWORK" "$BOOTSTRAP_FROM" /data/blocks "${BOOTSTRAP_WORKERS:-16}" ||

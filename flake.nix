@@ -301,6 +301,10 @@
                 mina-indexer
                 block-bootstrap
                 bootstrap-health
+                # snapshot restore: download + manifest read
+                pkgs.curl
+                pkgs.gnugrep
+                pkgs.coreutils
               ] ++ pkgs.lib.optional needsGzip pkgs.gzip;
               bashOptions = [ "errexit" "nounset" "pipefail" ];
               text =

@@ -128,6 +128,7 @@ mina-indexer database verify-integrity --database-dir /data/db || alert "indexer
 | `RUST_LOG` | unset | Standard `tracing`/`env_logger` filter; overrides `--log-level`. e.g. `warn,mina_indexer=debug`. |
 | `MINA_CHECKPOINT_DIR` | unset | Enables periodic speedb checkpoints to `<dir>/latest`. |
 | `MINA_CHECKPOINT_INTERVAL_SECS` | 3600 | Checkpoint cadence (hourly by default). |
+| `MINA_SNAPSHOT_URL` | unset | Images only: on first boot (no `/data/db`), restore this snapshot tar and catch up from its best tip instead of building from blocks. See [Cold start from a published snapshot](#cold-start-from-a-published-snapshot). |
 | `MINA_BLOCKS_RETENTION_LENGTH` | 1000 (images) | Block-file retention window the configless image entrypoints pass to `--blocks-retention-length`. Set `0` to disable and keep every block. |
 | `GIT_COMMIT_HASH` | — | Build-time version stamp (set by Nix). |
 
@@ -237,6 +238,31 @@ The three configless images set `MINA_CHECKPOINT_DIR=/data/checkpoints` and pass
 `--restore-from-checkpoint /data/checkpoints` (no force): hourly checkpoints by default, and
 a wiped or fresh-but-checkpointed `/data` self-heals on boot while a healthy DB is never
 clobbered. For a corrupt-but-present DB, clear `/data/db` (or run once with `--restore-force`).
+
+### Cold start from a published snapshot
+
+Building a database from blocks takes time in proportion to the chain since its root, and
+that grows every day. A snapshot makes a cold start one download plus a short catch-up.
+
+- **Operator:** publish snapshots on a schedule with [`ops/dr/backup.sh`](../ops/dr/backup.sh)
+  (it wraps `mina-indexer database snapshot`). Also copy the newest one to a fixed URL, for
+  example `REMOTE_CMD='rclone copyto {src} gcs:<bucket>/devnet/{name} && rclone copyto {src} gcs:<bucket>/devnet/latest.tar'`.
+- **Image:** set `MINA_SNAPSHOT_URL` to that fixed URL (a public GCS object URL works without
+  credentials). On first boot only (no `/data/db`), the entrypoint streams the download into
+  `database restore --snapshot-file - --genesis-hash <network genesis>` — the archive and the
+  database are never on disk together — then bulk-fetches blocks from `k = 290` below the
+  snapshot's best tip.
+
+Each snapshot carries a `SNAPSHOT_MANIFEST` (store version, genesis hash, best block height
+and hash). `database restore` rejects, and removes what it unpacked from, a snapshot that:
+
+- has another **store version** than the binary (the store needs a rebuild after a bump), or
+- belongs to another **chain** than `--genesis-hash` (another network, or a chain from before
+  a hardfork), or
+- has **no manifest** (made before manifests existed, so it cannot be checked).
+
+Any restore failure falls back to building the database from blocks, so a missing, stale or
+wrong snapshot costs time, never correctness.
 
 ## Bounding block-dir growth
 
