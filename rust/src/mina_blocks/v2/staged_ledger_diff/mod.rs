@@ -442,12 +442,18 @@ pub struct Preconditions {
     pub valid_while: Precondition<NumericBoundsU32>,
 }
 
+// The network preconditions follow the protocol's `Zkapp_precondition.Protocol_state`:
+// a hash is checked for equality (`["Check", "<hash>"]`), while lengths, slots and
+// amounts are checked against `{lower, upper}` bounds. Amounts are u64 nanomina.
+// A field typed wrongly here only fails once a zkApp actually checks it, which is
+// how devnet stalled at the mesa fork: every block with a zkApp that checked the
+// staking-epoch `total_currency` was skipped, so its descendants never connected.
 #[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct NetworkPreconditions {
-    pub snarked_ledger_hash: Precondition<LedgerHashBounds>,
+    pub snarked_ledger_hash: Precondition<LedgerHash>,
     pub blockchain_length: Precondition<NumericBoundsU32>,
     pub min_window_density: Precondition<NumericBoundsU32>,
-    pub total_currency: Precondition<NumericBoundsU32>,
+    pub total_currency: Precondition<NumericBoundsU64>,
     pub global_slot_since_genesis: Precondition<NumericBoundsU32>,
     pub staking_epoch_data: StakingEpochDataPreconditions,
     pub next_epoch_data: StakingEpochDataPreconditions,
@@ -459,13 +465,13 @@ pub struct StakingEpochDataPreconditions {
     pub seed: Precondition<String>,
     pub start_checkpoint: Precondition<String>,
     pub lock_checkpoint: Precondition<String>,
-    pub epoch_length: Precondition<String>,
+    pub epoch_length: Precondition<NumericBoundsU32>,
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct LedgerPreconditions {
     pub hash: Precondition<String>,
-    pub total_currency: Precondition<String>,
+    pub total_currency: Precondition<NumericBoundsU64>,
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -497,12 +503,6 @@ pub struct NumericBoundsU32 {
 pub struct NumericBoundsU64 {
     lower: Numeric<u64>,
     upper: Numeric<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub struct LedgerHashBounds {
-    lower: LedgerHash,
-    upper: LedgerHash,
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -645,6 +645,62 @@ mod tests {
         mina_blocks::v2::staged_ledger_diff::UserCommandData,
     };
     use std::path::PathBuf;
+
+    /// A post-mesa-fork devnet block whose zkApp checks the staking-epoch ledger
+    /// `total_currency` (`["Check", {lower, upper}]`). With that field typed as a
+    /// string the whole block failed to parse and was skipped, stalling devnet at
+    /// the fork.
+    #[test]
+    fn zkapp_network_precondition_bounds() -> anyhow::Result<()> {
+        let block_file = PathBuf::from("./tests/data/devnet/devnet-546365-3NLP4wdhHVC6iPJPui2yZhL2BWbLMMqJNyBBVzYTpYvp7HP878Bd.json");
+        let block = PrecomputedBlock::parse_file(
+            &block_file,
+            PcbVersion::V2(CurrencyEncoding::DecimalMina),
+        )?;
+        assert!(block.commands().iter().any(|cmd| cmd.is_zkapp_command()));
+        Ok(())
+    }
+
+    /// Every network precondition checked at once, in the shapes the protocol
+    /// writes: hashes as a single value, lengths/slots/amounts as bounds.
+    #[test]
+    fn zkapp_network_preconditions_all_checked() -> anyhow::Result<()> {
+        use super::{NetworkPreconditions, Precondition};
+
+        let epoch = r#"{
+            "ledger": {
+                "hash": ["Check", "jxUYRdFcuDDMyEtRXkAEo74EFpFSAjcVf6pBX9j56siW7rFZFRq"],
+                "total_currency": ["Check", {"lower": "1585748525000001000", "upper": "1585748525000001000"}]
+            },
+            "seed": ["Check", "2vaRh7FQ5wSzmpFReF9gcRKjv48CcJvHs25aqb3SSZiPgHQBy5Dt"],
+            "start_checkpoint": ["Check", "3NK2tkzqqK5spR2sZ7tujjqPksL45M3UUrcA4WhCkeiPtnugyE2x"],
+            "lock_checkpoint": ["Check", "3NK2tkzqqK5spR2sZ7tujjqPksL45M3UUrcA4WhCkeiPtnugyE2x"],
+            "epoch_length": ["Check", {"lower": "1", "upper": "7140"}]
+        }"#;
+        let json = format!(
+            r#"{{
+                "snarked_ledger_hash": ["Check", "jxUYRdFcuDDMyEtRXkAEo74EFpFSAjcVf6pBX9j56siW7rFZFRq"],
+                "blockchain_length": ["Check", {{"lower": "0", "upper": "4294967295"}}],
+                "min_window_density": ["Check", {{"lower": "0", "upper": "4294967295"}}],
+                "total_currency": ["Check", {{"lower": "0", "upper": "18446744073709551615"}}],
+                "global_slot_since_genesis": ["Check", {{"lower": "867720", "upper": "867805"}}],
+                "staking_epoch_data": {epoch},
+                "next_epoch_data": {epoch}
+            }}"#
+        );
+
+        let network: NetworkPreconditions = serde_json::from_str(&json)?;
+        assert!(matches!(network.total_currency, Precondition::Check(_)));
+        assert!(matches!(
+            network.staking_epoch_data.ledger.total_currency,
+            Precondition::Check(_)
+        ));
+        assert!(matches!(
+            network.next_epoch_data.epoch_length,
+            Precondition::Check(_)
+        ));
+        Ok(())
+    }
 
     #[test]
     fn v2_signed_command_to_mina_json() -> anyhow::Result<()> {
