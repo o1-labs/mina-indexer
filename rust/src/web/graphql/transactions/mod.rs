@@ -615,6 +615,24 @@ impl TransactionWithoutBlock {
     }
 }
 
+/// A single account update inside a zkApp command: whose balance moves, in which token, and
+/// by how much. Updates nested under `calls` are flattened in, because the ledger applies
+/// those too and a consumer reconstructing balances must see them.
+#[derive(Default, Clone, Debug, PartialEq, SimpleObject, Serialize)]
+pub struct ZkAppAccountUpdate {
+    /// Public key of the account this update touches.
+    pub public_key: String,
+
+    /// Token address the update applies to.
+    pub token: String,
+
+    /// Signed balance change in nanomina, as a string. Negative for a debit.
+    pub balance_change: String,
+
+    /// Whether this update increments the account's nonce.
+    pub increment_nonce: bool,
+}
+
 /// Archive-node-api compatible zkApp command. The archive serves zkApp commands
 /// under `BlockTransactions.zkappCommands`, separate from `userCommands`.
 #[derive(Default, Clone, Debug, PartialEq, SimpleObject, Serialize)]
@@ -634,6 +652,10 @@ pub struct ZkAppCommand {
     pub status: String,
 
     pub failure_reason: Option<String>,
+
+    /// The command's account updates, in the order the ledger applies them. Without these a
+    /// consumer sees only the fee and cannot reconstruct what the command did to balances.
+    pub account_updates: Vec<ZkAppAccountUpdate>,
 }
 
 impl ZkAppCommand {
@@ -655,6 +677,16 @@ impl ZkAppCommand {
                 "failed".to_string()
             },
             failure_reason,
+            account_updates: cmd
+                .accounts_updated()
+                .into_iter()
+                .map(|update| ZkAppAccountUpdate {
+                    public_key: update.public_key.to_string(),
+                    token: update.token.to_string(),
+                    balance_change: update.balance_change.to_string(),
+                    increment_nonce: update.increment_nonce,
+                })
+                .collect(),
         }
     }
 }
