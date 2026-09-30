@@ -836,12 +836,6 @@ impl PrecomputedBlock {
             return MESA_GENESIS_HASH.into();
         }
 
-        // devnet blocks carry the devnet chain's genesis_state_hash; the indexer
-        // roots at a recent checkpoint, so remap the whole devnet chain to it.
-        if self.network() == Network::Devnet {
-            return DEVNET_GENESIS_HASH.into();
-        }
-
         match self {
             Self::V1(v1) => {
                 StateHash::from_hashv1(v1.protocol_state.body.t.t.genesis_state_hash.to_owned())
@@ -854,7 +848,8 @@ impl PrecomputedBlock {
     /// MINA, mainnet and devnet pay 720. Selected by genesis hash, like the rest
     /// of the network dispatch.
     pub fn coinbase_reward(&self) -> u64 {
-        if self.genesis_state_hash().0 == MESA_GENESIS_HASH {
+        let genesis_state_hash = self.genesis_state_hash();
+        if genesis_state_hash.0 == MESA_GENESIS_HASH || genesis_state_hash.0 == DEVNET_GENESIS_HASH {
             MESA_COINBASE_REWARD
         } else {
             MAINNET_COINBASE_REWARD

@@ -28,10 +28,11 @@ pub const GENESIS_MESA_BLOCK_CONTENTS: &[u8] = include_bytes!(
     "../../data/genesis_blocks/mesa-297735-3NKQttwm8QRdvSZL62Lid8YAPCXBuAucZPDT8mJriHmw2qk9cVcr.json"
 );
 
-// devnet checkpoint/genesis block (transactions emptied so it applies as a
-// no-op onto the genesis ledger supplied at runtime).
+// devnet fork genesis block (2026-08-19 mesa-protocol fork), built from the
+// daemon's `genesisBlock` with no transactions, so it applies as a no-op onto the
+// genesis ledger supplied at runtime.
 pub const GENESIS_DEVNET_BLOCK_CONTENTS: &[u8] = include_bytes!(
-    "../../data/genesis_blocks/devnet-527922-3NK4DL35iKQ6G8VPqPFLZ122M82dcRRPt8rHrpRW662kXWpH8fRa.json"
+    "../../data/genesis_blocks/devnet-545434-3NLT7n4LiVo6U4LXr9BjCEp9712fP61uXkRC6hnRnB682A8f4HrJ.json"
 );
 
 impl GenesisBlock {
@@ -85,7 +86,7 @@ impl GenesisBlock {
         ))
     }
 
-    /// Creates the devnet checkpoint/genesis block as a PCB
+    /// Creates the devnet fork genesis block as a PCB
     pub fn new_devnet() -> anyhow::Result<Self> {
         let contents = GENESIS_DEVNET_BLOCK_CONTENTS.to_vec();
         let size = contents.len() as u64;
@@ -144,6 +145,46 @@ mod test {
     fn parse_genesis_block_v2() -> anyhow::Result<()> {
         let block = GenesisBlock::new_v2()?;
         assert_eq!(block.0.state_hash().0, HARDFORK_GENESIS_HASH);
+        Ok(())
+    }
+
+    /// The embedded devnet genesis is the 2026-08-19 fork genesis the daemon
+    /// reports (`genesisBlock`), with no transactions.
+    #[test]
+    fn parse_genesis_block_devnet() -> anyhow::Result<()> {
+        use crate::constants::*;
+
+        let block = GenesisBlock::new_devnet()?.0;
+        assert_eq!(block.state_hash().0, DEVNET_GENESIS_HASH);
+        assert_eq!(block.genesis_state_hash().0, DEVNET_GENESIS_HASH);
+        assert_eq!(block.previous_state_hash().0, DEVNET_GENESIS_PREV_STATE_HASH);
+        assert_eq!(block.blockchain_length(), DEVNET_GENESIS_BLOCKCHAIN_LENGTH);
+        assert_eq!(block.global_slot_since_genesis(), DEVNET_GENESIS_GLOBAL_SLOT);
+        assert_eq!(block.last_vrf_output(), DEVNET_GENESIS_LAST_VRF_OUTPUT);
+        assert!(block.commands().is_empty());
+        Ok(())
+    }
+
+    /// Blocks after the devnet fork carry its genesis and pay the mesa coinbase;
+    /// blocks of the retired pre-fork chain carry another genesis, so the indexer
+    /// rejects them as another chain.
+    #[test]
+    fn devnet_blocks_across_the_fork() -> anyhow::Result<()> {
+        use crate::{block::precomputed::CurrencyEncoding, constants::*};
+        let version = PcbVersion::V2(CurrencyEncoding::DecimalMina);
+
+        let post_fork = PrecomputedBlock::parse_file(
+            std::path::Path::new("./tests/data/devnet/devnet-546365-3NLP4wdhHVC6iPJPui2yZhL2BWbLMMqJNyBBVzYTpYvp7HP878Bd.json"),
+            version.clone(),
+        )?;
+        assert_eq!(post_fork.genesis_state_hash().0, DEVNET_GENESIS_HASH);
+        assert_eq!(post_fork.coinbase_reward(), MESA_COINBASE_REWARD);
+
+        let pre_fork = PrecomputedBlock::parse_file(
+            std::path::Path::new("./tests/data/devnet/devnet-531098-3NKLWSTmDsiWtzt79PKVzdro155uYRzC2FsDitqsUV7K4qiY6Ggb.json"),
+            version,
+        )?;
+        assert_ne!(pre_fork.genesis_state_hash().0, DEVNET_GENESIS_HASH);
         Ok(())
     }
 
