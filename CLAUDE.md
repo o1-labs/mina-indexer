@@ -73,8 +73,10 @@ ad-hoc `cargo build` pass any value). Set `ulimit -n` ≥ 4096 before running th
 - **Embedded vs supplied genesis ledger.** No `--genesis-ledger` ⇒ the embedded ledger for
   that version (mainnet V1 = `rust/data/genesis_ledgers/mainnet.json`). Hardfork networks
   (mesa, devnet) supply a **state-dump** ledger at runtime via `--genesis-ledger`; their
-  genesis *block* is embedded (transactions emptied) and the `genesis_state_hash` is
-  remapped to the checkpoint root so the whole chain shares one genesis for canonicity.
+  genesis *block* is embedded (transactions emptied). mesa remaps its blocks'
+  `genesis_state_hash` to the embedded root. devnet roots at its 2026-08-19 fork genesis
+  (545434), which its blocks already carry, and rejects blocks of the retired pre-fork
+  chain as another chain (`IndexerState::is_other_chain`).
 - **Block filename contract:** `<network>-<height>-<hash>.json`, split on the first dash,
   height parsed as `u32` (`block/mod.rs` `extract_network_height_hash`). Fetchers must
   produce this exact shape (mesa's bucket uses a different prefix, so `mesa-pull` rewrites).

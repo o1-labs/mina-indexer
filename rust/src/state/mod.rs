@@ -680,6 +680,10 @@ impl IndexerState {
     ///     - best block update
     ///     - new deep canonical blocks
     pub fn block_pipeline(&mut self, block: &PrecomputedBlock, block_bytes: u64) -> Result<bool> {
+        if self.is_other_chain(block) {
+            return Ok(false);
+        }
+
         let _ingest_timer = crate::metrics::BLOCK_INGEST_SECONDS.start_timer();
         if let Some(db_event) = self.add_block_to_store(block, block_bytes, false)? {
             self.bytes_processed += block_bytes;
@@ -1175,6 +1179,31 @@ impl IndexerState {
         Ok(())
     }
 
+    /// Whether `block` belongs to another chain than the one indexed, and so
+    /// must not be ingested.
+    ///
+    /// Only devnet is checked. Its whole chain carries the fork genesis in
+    /// `genesis_state_hash`, while the retired pre-fork chain kept producing
+    /// blocks at the same heights for a while after the fork, and those sit in
+    /// the same bucket. They parse, but can never connect, and would otherwise
+    /// linger as dangling branches that missing-block recovery keeps chasing.
+    /// (mainnet's chain spans two genesis hashes, so it cannot be checked so.)
+    fn is_other_chain(&self, block: &PrecomputedBlock) -> bool {
+        let other = self.version.genesis.state_hash.0 == DEVNET_GENESIS_HASH
+            && block.genesis_state_hash().0 != DEVNET_GENESIS_HASH;
+
+        if other {
+            // debug, not warn: reconcile re-reads recent block files every cycle
+            debug!(
+                "Skipping block from another chain (genesis {}): {}",
+                block.genesis_state_hash(),
+                block.summary()
+            );
+        }
+
+        other
+    }
+
     /// Add block to the underlying block store
     pub fn add_block_to_store(
         &mut self,
@@ -1182,6 +1211,10 @@ impl IndexerState {
         num_block_bytes: u64,
         increment_blocks: bool,
     ) -> Result<Option<DbEvent>> {
+        if self.is_other_chain(block) {
+            return Ok(None);
+        }
+
         if increment_blocks {
             self.blocks_processed += 1;
             self.bytes_processed += num_block_bytes;

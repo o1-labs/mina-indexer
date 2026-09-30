@@ -96,11 +96,12 @@
           url = "https://storage.googleapis.com/o1labs-gitops-infrastructure/mina-mesa-mut-1/mina-mesa-mut-1-state-dump-3NLp6dKNhYtsqUj49QYV5GtDaeocSJBAa2y2ER2QQLqLukE3wuZT-df71a5f2dd5abdae8e2e5d4d0047b383bdfca4d75ec1d2260b8ad621f1a18ffe.json.gz";
           sha256 = "004li2l5c319730czsav8bqqpysb2fs48sri6vqxav3m9zvf68qr";
         };
-        # devnet genesis ledger = the o1labs-gitops state dump matching the embedded
-        # checkpoint block (devnet-527922-3NK4DL35, ledger hash jwX3YJh…).
+        # devnet genesis ledger = the o1labs-gitops state dump of the 2026-08-19 fork:
+        # taken at the fork's previous block 3NLYmfj4 (its `proof.fork`), whose
+        # ledger is the genesis ledger of the embedded fork genesis 3NLT7n4L @545434.
         devnetGenesisGz = pkgs.fetchurl {
-          url = "https://storage.googleapis.com/o1labs-gitops-infrastructure/devnet/devnet-state-dump-3NK4DL35iKQ6G8VPqPFLZ122M82dcRRPt8rHrpRW662kXWpH8fRa-8ad77d2bc0adcd51d5837fabe00e6a76c69f00f547e112cdb0534b425d2d9c3b.json.gz";
-          sha256 = "0a7kld30iwmly23bx2x625l6haihlrfv227wxh0qvf9j65mbxxw6";
+          url = "https://storage.googleapis.com/o1labs-gitops-infrastructure/devnet/devnet-state-dump-3NLYmfj4U9Fbbvruz3QJj2j8WJyjhGtq4LgYvo7oW1WZm16uEKib-7afaf8cdc1aedd2319b4f005a29f204e36168251fd6a8cab4073d2dd0083149b.json.gz";
+          sha256 = "0vk2nilzpbm3qsbh8jzvsvinv28da0gb0jj9gz5p5vpij6m37mhp";
         };
         # Factory for a configless per-network indexer image. Everything the
         # indexer needs is baked in; the per-network entrypoint runs it with no

@@ -11,10 +11,10 @@ GHCR repo with a `-<network>` tag suffix.
 | devnet     | `ghcr.io/o1-labs/mina-indexer:<tag>-devnet`   | baked state-dump (`.gz`)  | `gs://mina_network_block_data`       |
 | mesa-mut   | `ghcr.io/o1-labs/mina-indexer:<tag>-mesa-mut` | baked state-dump (`.gz`)  | `gs://mesa-mut-precomputed-blocks`   |
 
-> **devnet** is a hardfork network; the image roots at a recent published state-dump
-> checkpoint (`devnet-527922-3NK4DL35`, embedded emptied) and follows the tip — it does
-> not index history before that checkpoint. Re-bake (newer state dump + block) to advance
-> the start point.
+> **devnet** is a hardfork network; the image roots at the genesis of its 2026-08-19
+> mesa-protocol fork (`devnet-545434-3NLT7n4L`, embedded with no transactions) and follows
+> the tip — it does not index the chain before that fork. The next devnet fork needs a
+> re-bake: its genesis block (the daemon's `genesisBlock`) and its fork state dump.
 
 ## Run
 
@@ -53,7 +53,7 @@ CI (`.github/workflows/oci-image.yml`) builds the `[mainnet, devnet, mesa-mut]` 
 ## Status
 
 - **mainnet**, **devnet**, and **mesa-mut**: built and runnable configless.
-- **devnet** roots at the published state-dump checkpoint `devnet-527922-3NK4DL35` (genesis
-  ledger from `gs://o1labs-gitops-infrastructure/devnet/`); it indexes from that checkpoint
-  forward, not full history. `DEVNET_CHAIN_ID` is a placeholder (like mesa's) — the real
+- **devnet** roots at its fork genesis `devnet-545434-3NLT7n4L` (genesis ledger: the fork's
+  state dump `devnet-state-dump-3NLYmfj4…` from `gs://o1labs-gitops-infrastructure/devnet/`);
+  it indexes from that fork forward, not full history. `DEVNET_CHAIN_ID` is a placeholder (like mesa's) — the real
   chain id only affects the REST chain-id endpoint, not indexing.
