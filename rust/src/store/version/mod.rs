@@ -16,7 +16,7 @@ pub trait VersionStore {
     fn get_db_version(&self) -> anyhow::Result<IndexerStoreVersion>;
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IndexerStoreVersion {
     pub major: u32,
     pub minor: u32,
@@ -40,6 +40,11 @@ impl IndexerStoreVersion {
     /// Output as `MAJOR`.`MINOR`.`PATCH`
     pub fn major_minor_patch(&self) -> String {
         format!("{}.{}.{}", self.major, self.minor, self.patch)
+    }
+
+    /// Whether this binary can open a store of this version as-is
+    pub fn matches_binary(&self) -> bool {
+        self.major == Self::MAJOR && self.minor == Self::MINOR && self.patch == Self::PATCH
     }
 }
 

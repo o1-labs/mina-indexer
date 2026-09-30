@@ -270,6 +270,21 @@
             text = builtins.readFile ./ops/block-bootstrap.sh;
           };
 
+          # Placeholder health endpoint held during the first-boot window, before
+          # `server start` binds the port. Without it a probe sees `connection
+          # refused` for minutes and a livenessProbe restarts the container
+          # mid-fetch, so the bootstrap never finishes.
+          bootstrap-health = pkgs.writeShellApplication {
+            name = "bootstrap-health";
+            runtimeInputs = with pkgs; [
+              socat
+              coreutils
+              findutils
+            ];
+            bashOptions = [ "nounset" "pipefail" ];
+            text = builtins.readFile ./ops/bootstrap-health.sh;
+          };
+
           # Configless per-network entrypoints: each exec's mina-indexer with all
           # flags baked in (zero args/mounts needed). Each per-network file holds
           # only its variables (NETWORK / GENESIS_HASH / FETCH_EXE / GENESIS_GZ);
@@ -286,6 +301,11 @@
               runtimeInputs = [
                 mina-indexer
                 block-bootstrap
+                bootstrap-health
+                # snapshot restore: download + manifest read
+                pkgs.curl
+                pkgs.gnugrep
+                pkgs.coreutils
               ] ++ pkgs.lib.optional needsGzip pkgs.gzip;
               bashOptions = [ "errexit" "nounset" "pipefail" ];
               text =
