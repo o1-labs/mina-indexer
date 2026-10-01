@@ -1,4 +1,5 @@
 pub mod canonical_chain_discovery;
+pub mod proof;
 pub mod store;
 
 use crate::{base::state_hash::StateHash, store::DbUpdate};
