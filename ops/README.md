@@ -7,13 +7,16 @@ GHCR repo with a `-<network>` tag suffix.
 
 | Network    | Image tag                                   | Genesis ledger            | Block source                         |
 |------------|---------------------------------------------|---------------------------|--------------------------------------|
-| mainnet    | `ghcr.io/o1-labs/mina-indexer:<tag>-mainnet`  | embedded (V1, in binary)  | `gs://mina_network_block_data`       |
+| mainnet    | `ghcr.io/o1-labs/mina-indexer:<tag>-mainnet`  | baked state-dump (`.gz`)  | `gs://mina_network_block_data`       |
 | devnet     | `ghcr.io/o1-labs/mina-indexer:<tag>-devnet`   | baked state-dump (`.gz`)  | `gs://mina_network_block_data`       |
 
 > **devnet** is a hardfork network; the image roots at the genesis of its 2026-08-19
 > mesa-protocol fork (`devnet-545434-3NLT7n4L`, embedded with no transactions) and follows
 > the tip — it does not index the chain before that fork. The next devnet fork needs a
 > re-bake: its genesis block (the daemon's `genesisBlock`) and its fork state dump.
+>
+> **mainnet** is rooted the same way, at the genesis of its 2026-09-03 mesa-protocol fork
+> (`mainnet-548147-3NLntCRR`). It does not index the V1 or Berkeley chain before that fork.
 
 ## Run
 
@@ -24,8 +27,8 @@ docker run -d --name indexer -p 8080:8080 \
 ```
 
 Nothing else is required. A volume on `/data` is optional but recommended so the DB and
-fetched blocks survive restarts. The first boot of the devnet image decompresses the
-baked genesis ledger to `/data` (takes a few seconds).
+fetched blocks survive restarts. The first boot decompresses the baked genesis ledger to
+`/data` (takes a few seconds).
 
 **The first boot is long.** After the ledger, the indexer fetches its block backlog
 in-process and ingests it, so expect tens of minutes before `/readyz` returns 200. Port
