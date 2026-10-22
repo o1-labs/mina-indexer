@@ -87,13 +87,12 @@ impl PcbVersion {
 impl CurrencyEncoding {
     /// The encoding `network`'s block producer writes.
     ///
-    /// Only devnet and mesa run the newer node. Everything else keeps the
+    /// Only devnet runs the newer node. Everything else keeps the
     /// nanomina reading, which is what the indexer has always done for integer
     /// magnitudes -- an unrecognized network is not silently reinterpreted.
     pub fn for_network(network: &Network) -> Self {
         match network {
             Network::Devnet => Self::DecimalMina,
-            Network::Custom(name) if name == "mesa" || name == "mesa-mut" => Self::DecimalMina,
             _ => Self::Nanomina,
         }
     }
@@ -824,16 +823,9 @@ impl PrecomputedBlock {
         let state_hash = self.state_hash();
         if state_hash.0 == MAINNET_GENESIS_HASH
             || state_hash.0 == HARDFORK_GENESIS_HASH
-            || state_hash.0 == MESA_GENESIS_HASH
             || state_hash.0 == DEVNET_GENESIS_HASH
         {
             return state_hash;
-        }
-
-        // mesa-mut blocks carry varying genesis_state_hash values (pre-fork
-        // continuity metadata); the whole mesa chain shares the fork genesis.
-        if self.network().to_string() == "mesa" {
-            return MESA_GENESIS_HASH.into();
         }
 
         match self {
@@ -844,12 +836,12 @@ impl PrecomputedBlock {
         }
     }
 
-    /// The coinbase reward is a per-network protocol constant: mesa-mut pays 360
-    /// MINA, mainnet and devnet pay 720. Selected by genesis hash, like the rest
-    /// of the network dispatch.
+    /// The coinbase reward is a per-network protocol constant: devnet (mesa
+    /// protocol, since its fork) pays 360 MINA, mainnet pays 720. Selected by
+    /// genesis hash, like the rest of the network dispatch.
     pub fn coinbase_reward(&self) -> u64 {
         let genesis_state_hash = self.genesis_state_hash();
-        if genesis_state_hash.0 == MESA_GENESIS_HASH || genesis_state_hash.0 == DEVNET_GENESIS_HASH {
+        if genesis_state_hash.0 == DEVNET_GENESIS_HASH {
             MESA_COINBASE_REWARD
         } else {
             MAINNET_COINBASE_REWARD
