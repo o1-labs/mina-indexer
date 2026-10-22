@@ -125,12 +125,12 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "Indexer fetch-new-blocks failing"
-          description: "The external fetch executable failed to run ({{ $value | printf \"%.3f\" }}/s over 10m) — bad path, permissions, or missing deps. Ingest will fall behind."
+          summary: "Indexer block fetch failing"
+          description: "Block source listings/downloads are failing after retries ({{ $value | printf \"%.3f\" }}/s over 10m) — source unreachable, wrong --block-source, or a full disk. Ingest will fall behind."
 
-      # Slow fetcher blocks the ingest timer (the O(tree)/window-200 class of
-      # bug). p95 fetch wall time crossing the fetch delay is the tell.
-      # TUNE: 60s ~ a fetch delay of a few minutes; align with --fetch-new-blocks-delay.
+      # A fetch cycle includes catch-up, so long cycles are normal while far
+      # behind; sustained long cycles at the tip mean a slow/throttled source.
+      # TUNE: align with --block-fetch-interval.
       - alert: IndexerFetchSlow
         expr: >
           histogram_quantile(0.95, sum by (le) (rate(mina_indexer_fetch_seconds_bucket[15m]))) > 60
@@ -139,7 +139,7 @@ groups:
           severity: warning
         annotations:
           summary: "Indexer fetch slow (p95 {{ $value | humanizeDuration }})"
-          description: "fetch-new-blocks p95 wall time > 60s — a slow fetch runs synchronously in the timer branch and starves reconcile."
+          description: "Block fetcher cycle p95 wall time > 60s — expected during catch-up; at the tip it means a slow or throttled block source."
 
   # --- Serving health ------------------------------------------------------
   - name: mina-indexer.serving

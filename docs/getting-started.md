@@ -17,7 +17,7 @@ self-initialize (bootstrap from the public block bucket, then follow the tip):
 docker run -p 8080:8080 ghcr.io/o1-labs/mina-indexer:latest-devnet
 ```
 
-(`latest-mainnet` / `latest-mesa-mut` for the other networks. See
+(`latest-mainnet` for mainnet. See
 [../ops/README.md](../ops/README.md) for volumes, checkpoints, and sizing.)
 
 ## 2. Is it ready?

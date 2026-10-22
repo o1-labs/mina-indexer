@@ -1,10 +1,9 @@
 # Shared body for the configless per-network image entrypoints.
 #
-# The per-network file (mainnet.sh / devnet.sh / mesa.sh) is concatenated AHEAD
-# of this one at image-build time (see flake.nix `mkEntry`) and sets:
+# The per-network file (mainnet.sh / devnet.sh) is concatenated AHEAD of this
+# one at image-build time (see flake.nix `mkEntry`) and sets:
 #   NETWORK       — --network value
 #   GENESIS_HASH  — --genesis-hash value
-#   FETCH_EXE     — fetcher for --fetch-new-blocks-exe / --missing-block-recovery-exe
 #   GENESIS_GZ    — (hardfork networks only) baked genesis ledger to decompress
 #
 # Composed at build time rather than sourced at runtime so each image's
@@ -17,11 +16,11 @@ export MINA_CHECKPOINT_DIR="${MINA_CHECKPOINT_DIR:-/data/checkpoints}"
 
 # Hold the web port while we bootstrap.
 #
-# Everything below (genesis decompression, the bulk block fetch) runs BEFORE
+# Everything below (genesis decompression, the snapshot restore) runs BEFORE
 # `mina-indexer server start` binds the port, and on a fresh instance that is
 # minutes. Until then a probe gets `connection refused`, which looks like a
 # crash rather than a long first boot -- and a livenessProbe would keep killing
-# the container before the fetch ever completes.
+# the container before the bootstrap ever completes.
 #
 # So a placeholder answers probes for that window with the same contract the
 # real server uses: /healthz 200 (alive, do not restart), everything else 503
@@ -61,7 +60,7 @@ if [ "$BOOTSTRAP_HEALTH_PORT" -gt 0 ] 2>/dev/null; then
   trap 'stop_bootstrap_health' EXIT
 fi
 
-# Hardfork networks (mesa, devnet) ship a gzipped genesis ledger we decompress
+# Hardfork networks (devnet) ship a gzipped genesis ledger we decompress
 # to /data on first boot; mainnet's ledger is embedded in the binary.
 ledger_args=()
 if [ -n "${GENESIS_GZ:-}" ]; then
@@ -95,39 +94,12 @@ if $first_boot && [ -n "${MINA_SNAPSHOT_URL:-}" ]; then
   phase restoring-snapshot
   if curl -fsSL --retry 5 --retry-delay 5 "$MINA_SNAPSHOT_URL" |
     mina-indexer database restore --snapshot-file - --restore-dir /data/db --genesis-hash "$GENESIS_HASH"; then
-    snapshot_height="$(grep -oE '"best_block_height":[0-9]+' /data/db/SNAPSHOT_MANIFEST | grep -oE '[0-9]+$' || true)"
-    if [ -n "$snapshot_height" ]; then
-      # Fetch from a transition frontier (k = 290) below the snapshot's best tip:
-      # its tip may sit on a branch the network since abandoned, and the blocks
-      # the snapshot already holds are skipped on ingest. A few hundred objects.
-      BOOTSTRAP_FROM=$((snapshot_height > 290 ? snapshot_height - 290 : 1))
-      echo "snapshot restored at height ${snapshot_height}; catching up from ${BOOTSTRAP_FROM}" >&2
-    fi
+    # the block fetcher catches up from the snapshot's best tip on its own
+    echo "snapshot restored" >&2
   else
     echo "snapshot restore failed; building the database from blocks" >&2
     rm -rf /data/db
   fi
-fi
-
-# First boot: bulk-fetch the backlog in parallel.
-#
-# FETCH_EXE follows the *tip*. The indexer calls it synchronously inside its
-# fetch/reconcile timer, so it keeps a deliberately small window (15 heights) --
-# a slow fetch there starves the reconcile step that ingests what was fetched.
-# That is right for staying at the tip and hopeless for starting from nothing:
-# devnet's ~7,700 blocks from its checkpoint would take ~9 hours at that rate.
-#
-# So on a fresh instance (no DB yet) we bulk-fetch the range once, in parallel,
-# which takes minutes. Ingesting it is fast (devnet: ~11k blocks in ~3 minutes),
-# and FETCH_EXE takes over at the tip. Networks that set no BOOTSTRAP_FROM (i.e.
-# mainnet, whose history is far too large to pull this way) simply skip it.
-#
-# Set BOOTSTRAP_FROM=0 to disable; BOOTSTRAP_WORKERS tunes the parallelism.
-if $first_boot && [ -n "${BOOTSTRAP_FROM:-}" ] && [ "${BOOTSTRAP_FROM}" -gt 0 ]; then
-  echo "first boot: bulk-fetching ${NETWORK} blocks from height ${BOOTSTRAP_FROM}..." >&2
-  phase fetching-blocks
-  block-bootstrap "$NETWORK" "$BOOTSTRAP_FROM" /data/blocks "${BOOTSTRAP_WORKERS:-16}" ||
-    echo "bootstrap incomplete; the fetcher will fill the gaps (slowly)" >&2
 fi
 
 # Bound /data/blocks growth: keep only recent block files on disk (older blocks
@@ -139,9 +111,15 @@ if [ "$RETENTION" -gt 0 ] 2>/dev/null; then
   retention_args=(--blocks-retention-length "$RETENTION")
 fi
 
+# Blocks are fetched in-process from MINA_BLOCK_SOURCE (default: the public
+# o1Labs bucket) into /data/blocks: a parallel catch-up from the best tip, then
+# following the tip and filling gaps. Tune with MINA_BLOCK_FETCH_INTERVAL /
+# MINA_BLOCK_FETCH_WORKERS.
+BLOCK_SOURCE="${MINA_BLOCK_SOURCE:-gs://mina_network_block_data}"
+
 # Hand the port over to the real server, which serves /healthz and /readyz from
-# here on. It answers /readyz 503 "bootstrapping" until the fetched blocks are
-# ingested, so the pod stays out of the Service without ever looking crashed.
+# here on. It answers /readyz 503 until the fetched blocks are ingested up to a
+# recent tip, so the pod stays out of the Service without ever looking crashed.
 stop_bootstrap_health
 trap - EXIT
 
@@ -152,6 +130,7 @@ exec mina-indexer --socket /data/mi.sock server start \
   --restore-from-checkpoint "$MINA_CHECKPOINT_DIR" \
   --database-dir /data/db \
   --blocks-dir /data/blocks \
-  --fetch-new-blocks-exe "$FETCH_EXE" --fetch-new-blocks-delay 60 \
-  --missing-block-recovery-exe "$FETCH_EXE" --missing-block-recovery-delay 120 \
+  --block-source "$BLOCK_SOURCE" \
+  --block-fetch-interval "${MINA_BLOCK_FETCH_INTERVAL:-60}" \
+  --block-fetch-workers "${MINA_BLOCK_FETCH_WORKERS:-16}" \
   ${retention_args[@]+"${retention_args[@]}"}

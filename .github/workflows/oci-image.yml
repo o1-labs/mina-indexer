@@ -2,7 +2,7 @@
 # and push them to the GitHub Container Registry: ghcr.io/<owner>/mina-indexer.
 #
 # Per-network configless images, single repo with a tag suffix:
-#   tag v*  -> :<tag>-<network> and :latest-<network>   (mainnet | devnet | mesa-mut)
+#   tag v*  -> :<tag>-<network> and :latest-<network>   (mainnet | devnet)
 #   PRs     -> build only (no push)
 #
 # Auth uses the built-in GITHUB_TOKEN (packages: write) — no extra secrets.
@@ -31,8 +31,6 @@ jobs:
             attr: dockerImage-mainnet
           - network: devnet
             attr: dockerImage-devnet
-          - network: mesa-mut
-            attr: dockerImage-mesa
     env:
       REGISTRY: ghcr.io/${{ github.repository_owner }}
       IMAGE: mina-indexer

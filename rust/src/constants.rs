@@ -186,6 +186,12 @@ pub mod berkeley {
 pub const DEFAULT_WEB_HOSTNAME: &str = "0.0.0.0";
 pub const DEFAULT_WEB_PORT: u16 = 8080;
 
+/// Default seconds between block fetcher cycles (`--block-fetch-interval`)
+pub const DEFAULT_BLOCK_FETCH_INTERVAL: u64 = 60;
+
+/// Default parallel block downloads (`--block-fetch-workers`)
+pub const DEFAULT_BLOCK_FETCH_WORKERS: usize = 16;
+
 /// Default seconds the server waits to receive a client's request headers before
 /// dropping the connection (guards against slowloris-style header stalls). `0`
 /// disables the timeout.

@@ -23,7 +23,7 @@ set -euo pipefail
 IMAGE="${IMAGE:-mina-indexer}"
 TAG="${TAG:-$(git rev-parse --short=8 HEAD)}"
 # Flake attribute to build. Default is the generic image; the per-network
-# configless images are dockerImage-mainnet / -devnet / -mesa. The TAG passed in
+# configless images are dockerImage-mainnet / -devnet. The TAG passed in
 # already carries any network suffix (e.g. v1.2.3-mainnet).
 ATTR="${ATTR:-dockerImage}"
 # REGISTRY is only required for an actual push; build-only/DRY_RUN works without it.

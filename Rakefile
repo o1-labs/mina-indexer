@@ -42,14 +42,12 @@ SHELL_SCRIPTS = %W[
   ops/ci/tier3
   ops/ci/build-and-test
   tests/regression.bash
-  tests/recovery.sh
   ops/traverse-canonical-chain.sh
   ops/correct-file-names.sh
   ops/upload-staking-ledgers.sh
   ops/upload-snapshot.sh
   ops/upload-granola-blocks
   ops/calculate-archive-ledgers.sh
-  ops/recover-block
 ]
 
 def run(cmd, *args, dir: TOP)
@@ -244,8 +242,8 @@ end
 # summary and writes lcov to rust/target/llvm-cov/lcov.info for CI upload.
 # Non-blocking: a reporting tool, not a gate -- no coverage floor yet (#19 WS1).
 #
-# The binary entrypoints (src/bin/*.rs -- CLI arg wiring for `mina-indexer` and
-# the `mesa-mut-blocks` fetcher) are excluded from the denominator: they are thin
+# The binary entrypoints (src/bin/*.rs -- CLI arg wiring for `mina-indexer`)
+# are excluded from the denominator: they are thin
 # wiring exercised by the e2e/system tests, never unit-tested, so counting them
 # only depresses the number without pointing at a real gap. Everything else --
 # including the IPC layer (unix_socket_server) and the orchestration loop

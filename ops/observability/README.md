@@ -39,7 +39,7 @@ your network and disk budget before wiring to a pager. In particular:
   `500e9` byte budget to ~80% of your DB volume (Prometheus can't see the
   volume's free space, so the alert is on the store's own footprint).
 - `IndexerTipLagHigh`, `IndexerFetchSlow`, `IndexerHighQueryLatency` — tune to
-  your freshness / latency SLOs and `--fetch-new-blocks-delay`.
+  your freshness / latency SLOs and `--block-fetch-interval`.
 
 ## 3. Import the dashboard
 
@@ -85,9 +85,10 @@ first event. Source: `rust/src/metrics.rs`.
 ### Fetcher
 | Metric | Type | Meaning |
 |---|---|---|
-| `mina_indexer_fetch_invocations_total` | counter | fetch-new-blocks invocations |
-| `mina_indexer_fetch_failures_total` | counter | fetch-new-blocks invocations that failed to spawn |
-| `mina_indexer_fetch_seconds` | histogram | fetch-new-blocks wall time |
+| `mina_indexer_fetch_invocations_total` | counter | block fetcher cycles |
+| `mina_indexer_fetch_failures_total` | counter | block source listings/downloads that failed after retries |
+| `mina_indexer_fetch_seconds` | histogram | block fetcher cycle wall time |
+| `mina_indexer_fetch_blocks_downloaded_total` | counter | block files downloaded into `blocks_dir` |
 
 ### HTTP serving
 | Metric | Type | Meaning |

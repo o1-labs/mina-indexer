@@ -25,11 +25,11 @@ checkpoints live there and should survive restarts.
 
 ## Host requirements
 
-Sizing is driven mostly by **disk**, not RAM. The figures below are grounded in the
-mesa-mut benchmark ([`ops/mesa-mut/benchmark.md`](../ops/mesa-mut/benchmark.md), full
-chain at tip 300579 on a 16-core / 62.5 GiB host).
+Sizing is driven mostly by **disk**, not RAM. The figures below were measured on the
+retired mesa-mut test network (full chain at tip 300579 on a 16-core / 62.5 GiB host);
+the "small chain" disk column is that network.
 
-| Tier | vCPU | RAM | Disk (mesa-mut) | Disk (mainnet) | Use |
+| Tier | vCPU | RAM | Disk (small chain) | Disk (mainnet) | Use |
 |------|------|-----|-----------------|----------------|-----|
 | **Minimum viable** | 2 | 4 GB | 80 GB SSD | 250 GB SSD | low query traffic, tolerant of slow sync |
 | **Recommended** | 4 | 8 GB | 100 GB SSD | 400 GB SSD | normal prod, healthy ingest + query headroom |
@@ -42,13 +42,12 @@ queries. The working set does **not** grow as the DB reaches tens of GB.
 
 **CPU** is bursty, not sustained: near-zero when idle, **~1.5 cores during ingest**, and
 peaks of **~4.4 cores under heavy query load**. A single vCPU is a real bottleneck — the
-fetcher runs *synchronously* in the timer loop, so on one core a fetch window stalls
-reconcile and the tip lags, and any query traffic contends head-on with ingestion. Use
+block fetcher, ingest and query traffic all contend for it, and the tip lags. Use
 **≥ 2 vCPU** (4 recommended).
 
 **Disk** is the variable that matters and must be **SSD/NVMe** — throughput is dominated
-by random reads across SST files; spinning disk will not keep up. mesa-mut is ~52 GB
-today (30 GB speedb + 21 GB blocks + ~0.9 GB genesis) and grows with the chain; **mainnet
+by random reads across SST files; spinning disk will not keep up. The mesa-mut chain was
+~52 GB (30 GB speedb + 21 GB blocks + ~0.9 GB genesis) and grows with the chain; **mainnet
 is several times larger** — budget generously.
 
 > **`ulimit -n ≥ 4096` is mandatory** on any tier. The indexer opens many SST files; a
@@ -70,15 +69,40 @@ mina-indexer --socket /data/mi.sock server start \
   --genesis-hash 3NKeMoncuHab5ScarV5ViyF16cJPT4taWNSaTLS64Dp67wuXigPZ \
   --database-dir /data/db \
   --blocks-dir /data/blocks \
-  --fetch-new-blocks-exe /bin/block-pull --fetch-new-blocks-delay 60 \
-  --missing-block-recovery-exe /bin/block-pull --missing-block-recovery-delay 120 \
+  --block-source gs://mina_network_block_data \
   --web-port 8080
 ```
 
 > **Network is chosen by `--genesis-hash`, not `--network`.** The hash selects the block
 > parser version and chain config (see [CLAUDE.md](../CLAUDE.md)). Pass the matching hash
-> for the network you intend to index. Hardfork networks (mesa, devnet) also need a
+> for the network you intend to index. Hardfork networks (devnet) also need a
 > `--genesis-ledger` state dump; mainnet uses its embedded ledger.
+
+## Block fetching
+
+With `--block-source`, a fetcher task inside the indexer downloads blocks into
+`--blocks-dir`. It does not write to the database: the directory watcher and the reconcile
+pass ingest the files from there, as they ingest a block that you copy in by hand.
+
+Each cycle (`--block-fetch-interval`) it:
+
+1. **Fills gaps** — lists and downloads every block at the missing parent height of each
+   dangling branch.
+2. **Catches up and follows** — lists the source by height range above the best tip (250
+   heights per request) and downloads the blocks that are not on disk, up to
+   `--block-fetch-workers` at a time. While each range is full it continues at once, so a
+   fresh or restored instance catches up in one cycle; it stops at most 1000 heights ahead
+   of the best tip until ingest catches up.
+
+Downloads go to hidden `.<name>.part` files and are renamed into place in height order, so
+the watcher only sees complete files, parent-first. A source error is logged, counted in
+`mina_indexer_fetch_failures_total` and retried on the next cycle; it never stops the
+indexer.
+
+The source must hold the heights from the root of the chain that you index. The public
+`gs://mina_network_block_data` bucket has no mainnet blocks below 296166 and no devnet
+blocks between 239699 and 552016; start such networks from a snapshot
+(`MINA_SNAPSHOT_URL`), or use a `file://` mirror that has the missing heights.
 
 ## CLI flag reference (`server start`)
 
@@ -87,15 +111,13 @@ Shared database flags (`cli/database.rs`) plus server flags (`cli/server.rs`):
 | Flag | Default | Meaning |
 |------|---------|---------|
 | `--genesis-hash <HASH>` | mainnet hash | Selects network/parser version. |
-| `--genesis-ledger <FILE>` | embedded | State-dump ledger (required for mesa/devnet). |
+| `--genesis-ledger <FILE>` | embedded | State-dump ledger (required for devnet). |
 | `--database-dir <DIR>` | `/var/lib/mina-indexer/database` | speedb data dir. |
 | `--blocks-dir <DIR>` | — | Watched precomputed-block dir (ingest source). |
 | `--staking-ledgers-dir <DIR>` | — | Optional staking-ledger dir. |
-| `--fetch-new-blocks-exe <EXE>` | — | Fetcher run as `EXE <network> <height> <dir>` on a timer. |
-| `--fetch-new-blocks-delay <SEC>` | 180 | Seconds between fetch attempts. |
-| `--missing-block-recovery-exe <EXE>` | — | Same contract; backfills gaps below the tip. |
-| `--missing-block-recovery-delay <SEC>` | — | Seconds between recovery attempts. |
-| `--missing-block-recovery-batch <BOOL>` | — | Recover all missing heights per pass. |
+| `--block-source <SRC>` | — (no fetch) | Fetch blocks into `--blocks-dir` in-process from `gs://<bucket>` (public GCS) or `file://<dir>`. Objects must be named `<network>-<height>-<hash>.json`. See [Block fetching](#block-fetching). |
+| `--block-fetch-interval <SEC>` | 60 | Seconds between fetch cycles (also the reconcile cadence). |
+| `--block-fetch-workers <N>` | 16 | Max parallel block downloads. |
 | `--blocks-retention-length <N>` | — (keep all) | Bound `--blocks-dir` growth: delete ingested block files below `tip − N` each cycle. Floored at `k=290`. See [Bounding block-dir growth](#bounding-block-dir-growth). |
 | `--verify-block-exe <EXE>` | — | Trustless gate: ingest a block only if `EXE <network> <file>` exits 0 (fail-closed). |
 | `--restore-from-checkpoint <DIR>` | — | Seed an empty `--database-dir` from `<DIR>/latest` before opening. |
@@ -165,10 +187,11 @@ alive, and restarting it only throws away the work it has done.
 
 ### The first boot is long — give it a startupProbe
 
-A fresh instance decompresses the baked genesis ledger and bulk-fetches its block backlog
-(devnet: ~32,000 heights / ~46,000 objects) *before* the server binds the port, then
-ingests all of it before a best tip exists. Expect **tens of minutes** before `/readyz`
-turns 200. That is bootstrapping, not a fault.
+A fresh instance decompresses the baked genesis ledger (and restores a snapshot, if
+`MINA_SNAPSHOT_URL` is set) *before* the server binds the port. The server then fetches
+and ingests its block backlog (see [Block fetching](#block-fetching)) before its best tip
+is recent. Expect **tens of minutes** before `/readyz` turns 200. That is bootstrapping,
+not a fault.
 
 Two things keep it from looking like a fault:
 
@@ -196,13 +219,14 @@ readinessProbe:          # keeps a catching-up pod out of the Service
 ```
 
 Without the `startupProbe`, the `livenessProbe` kills the container part-way through the
-block fetch and the pod restarts forever, never finishing the bootstrap.
+genesis decompression or snapshot restore, and the pod restarts forever, never finishing
+the bootstrap.
 
 Watch progress from outside the cluster-event view:
 
 ```bash
 kubectl exec deploy/mina-indexer -- curl -s localhost:8080/readyz
-# bootstrapping: {"status":"bootstrapping","ready":false,"phase":"fetching-blocks","blocks_on_disk":18342}
+# bootstrapping: {"status":"bootstrapping","ready":false,"phase":"restoring-snapshot","blocks_on_disk":0}
 # ingesting:     {"status":"bootstrapping","ready":false}
 # catching up:   {"status":"catching_up","ready":false,"tip_height":551204,"tip_age_seconds":41207,...}
 # ready:         {"status":"ready","ready":true,"tip_height":560319,"tip_age_seconds":92,...}
@@ -283,10 +307,10 @@ set:
 - Deletions are counted by the `mina_indexer_blocks_pruned_total` metric and logged
   (`Pruned N … block file(s) below height H (… MiB freed)`).
 
-The three configless images enable it by default at **1000 blocks**
+The configless images enable it by default at **1000 blocks**
 (`MINA_BLOCKS_RETENTION_LENGTH=1000`); set `MINA_BLOCKS_RETENTION_LENGTH=0` to disable and
 retain every fetched block. This keeps `/data/blocks` bounded to a small recent window
-instead of the full chain (e.g. mesa-mut's full block set is ~21 GB).
+instead of the full chain.
 
 > The older `database snapshot` / `database restore` subcommands are the **tarred** form of
 > the same checkpoint (a single archive file + version stamp), for manual backup/transfer.
@@ -298,8 +322,9 @@ instead of the full chain (e.g. mesa-mut's full block set is ~21 GB).
 verifier: it runs `exe <network> <block-file>` and ingests only on exit 0 (unreachable
 verifier or non-zero exit ⇒ block rejected, fail-closed). Paired with a SNARK-proof
 verifier sidecar, the indexer trusts *math* rather than whoever served the block. The
-configless images bake a `verify-block` shim but do **not** enable it by default. End-to-end
-runbook: [`ops/mesa-mut/TRUSTLESS-DEMO.md`](../ops/mesa-mut/TRUSTLESS-DEMO.md).
+configless images bake a `verify-block` shim ([`ops/verify-block.sh`](../ops/verify-block.sh),
+which posts the block to `VERIFY_ENDPOINT`, default `http://mina-verifier:8090/verify`) but
+do **not** enable it by default.
 
 ## Public deployment (reverse proxy)
 

@@ -1696,8 +1696,9 @@ test_version_file() {
 test_fetch_new_blocks() {
 	stage_blocks v1 9 "$BLOCKS_DIR"
 
-	# start the indexer using the block fetching exe on path "$SRC"/tests/recovery.sh
-	# wait for 3s in between recovery attempts
+	# start the indexer fetching from an (initially empty) local block source,
+	# every 3s
+	mkdir -p ./source
 	idxr database create \
 		--log-level debug \
 		--blocks-dir ./blocks \
@@ -1707,13 +1708,14 @@ test_fetch_new_blocks() {
 		--log-level debug \
 		--blocks-dir ./blocks \
 		--database-dir ./database \
-		--fetch-new-blocks-exe "$SRC"/tests/recovery.sh \
-		--fetch-new-blocks-delay 10
+		--block-source "file://$PWD/source" \
+		--block-fetch-interval 3
 
 	# after blocks are added, check dangling branches
 	assert 9 $(idxr summary --json | jq -r .witness_tree.best_tip_length)
 
-	# wait for block fetching to work its magic
+	# publish the next block & wait for block fetching to work its magic
+	stage_blocks v1_single 10 ./source
 	sleep 15
 
 	# check that all dangling branches have resolved & the best block has the right height
@@ -1726,8 +1728,9 @@ test_fetch_new_blocks() {
 test_missing_block_recovery() {
 	stage_blocks v1 5 "$BLOCKS_DIR"
 
-	# start the indexer using the block recovery exe on path "$SRC"/tests/recovery.sh
-	# wait for 3s in between recovery attempts
+	# start the indexer fetching from an (initially empty) local block source,
+	# every 1s
+	mkdir -p ./source
 	idxr database create \
 		--blocks-dir ./blocks \
 		--database-dir ./database
@@ -1735,15 +1738,17 @@ test_missing_block_recovery() {
 	start \
 		--blocks-dir ./blocks \
 		--database-dir ./database \
-		--missing-block-recovery-exe "$SRC"/tests/recovery.sh \
-		--missing-block-recovery-delay 1 \
-		--missing-block-recovery-batch true
+		--block-source "file://$PWD/source" \
+		--block-fetch-interval 1
 
 	# miss blocks at heights 6, 8, 11-16, 18-20
 	stage_blocks v1_single 7 "$BLOCKS_DIR"
 	stage_blocks v1_range 9 10 "$BLOCKS_DIR"
 	stage_blocks v1_single 17 "$BLOCKS_DIR"
 	stage_blocks v1_single 21 "$BLOCKS_DIR"
+
+	# publish the missing blocks
+	stage_blocks v1_range 6 21 ./source
 
 	# wait for missing block recovery to work its magic
 	sleep 30
@@ -1763,20 +1768,19 @@ test_fetch_new_and_recover_missing_blocks() {
 		--blocks-dir ./blocks \
 		--database-dir ./database
 
+	mkdir -p ./source
 	start \
 		--blocks-dir ./blocks \
 		--database-dir ./database \
-		--fetch-new-blocks-exe "$SRC"/tests/recovery.sh \
-		--fetch-new-blocks-delay 6 \
-		--missing-block-recovery-exe "$SRC"/tests/recovery.sh \
-		--missing-block-recovery-delay 6 \
-		--missing-block-recovery-batch true
+		--block-source "file://$PWD/source" \
+		--block-fetch-interval 3
 
 	best_tip_hash=$(idxr summary --json | jq -r .witness_tree.best_tip_hash)
 	assert 3 $(idxr summary --json | jq -r .witness_tree.num_dangling)
 	assert 10 $(idxr summary --json | jq -r .witness_tree.best_tip_length)
 
-	# wait for the blocks
+	# publish the missing & new blocks, then wait for them
+	stage_blocks v1_range 11 13 ./source
 	sleep 15
 
 	# check dangling branches
