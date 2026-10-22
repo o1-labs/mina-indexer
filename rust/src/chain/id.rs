@@ -73,6 +73,10 @@ impl ChainId {
         Self(DEVNET_CHAIN_ID.to_string())
     }
 
+    pub fn mainnet_mesa() -> Self {
+        Self(MAINNET_MESA_CHAIN_ID.to_string())
+    }
+
     /// Checks length & hex
     pub fn is_valid<T>(chain_id: T) -> bool
     where
