@@ -66,7 +66,8 @@ The indexer self-initializes: if `--database-dir` has no DB yet it builds one fr
 ```bash
 mina-indexer --socket /data/mi.sock server start \
   --network mainnet \
-  --genesis-hash 3NKeMoncuHab5ScarV5ViyF16cJPT4taWNSaTLS64Dp67wuXigPZ \
+  --genesis-hash 3NLntCRR9RvjtzP24Q1dRvdhmpjiPvfKGaJmAZuJgYoqGpevqDR7 \
+  --genesis-ledger /data/mainnet-genesis-ledger.json \
   --database-dir /data/db \
   --blocks-dir /data/blocks \
   --block-source gs://mina_network_block_data \
@@ -75,8 +76,10 @@ mina-indexer --socket /data/mi.sock server start \
 
 > **Network is chosen by `--genesis-hash`, not `--network`.** The hash selects the block
 > parser version and chain config (see [CLAUDE.md](../CLAUDE.md)). Pass the matching hash
-> for the network you intend to index. Hardfork networks (devnet) also need a
-> `--genesis-ledger` state dump; mainnet uses its embedded ledger.
+> for the network you intend to index. The networks rooted at a mesa fork (devnet
+> 3NLT7n4L @545434, mainnet 3NLntCRR @548147) also need a `--genesis-ledger` state dump of
+> that fork (see the `devnetGenesisGz` / `mainnetGenesisGz` pins in `flake.nix`). Only the
+> V1 (3NKeMonc) and Berkeley (3NK4BpDS) mainnet roots use an embedded ledger.
 
 ## Block fetching
 

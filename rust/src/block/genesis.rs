@@ -5,7 +5,8 @@ use crate::{
     chain::Network,
     constants::{
         DEVNET_GENESIS_BLOCKCHAIN_LENGTH, DEVNET_GENESIS_HASH, HARDFORK_GENESIS_BLOCKCHAIN_LENGTH,
-        HARDFORK_GENESIS_HASH, MAINNET_GENESIS_HASH,
+        HARDFORK_GENESIS_HASH, MAINNET_GENESIS_HASH, MAINNET_MESA_GENESIS_BLOCKCHAIN_LENGTH,
+        MAINNET_MESA_GENESIS_HASH,
     },
 };
 
@@ -25,6 +26,12 @@ pub const GENESIS_HARDFORK_BLOCK_CONTENTS: &str = include_str!(
 // genesis ledger supplied at runtime.
 pub const GENESIS_DEVNET_BLOCK_CONTENTS: &[u8] = include_bytes!(
     "../../data/genesis_blocks/devnet-545434-3NLT7n4LiVo6U4LXr9BjCEp9712fP61uXkRC6hnRnB682A8f4HrJ.json"
+);
+
+// mainnet fork genesis block (2026-09-03 mesa-protocol fork), built like the
+// devnet one above.
+pub const GENESIS_MAINNET_MESA_BLOCK_CONTENTS: &[u8] = include_bytes!(
+    "../../data/genesis_blocks/mainnet-548147-3NLntCRR9RvjtzP24Q1dRvdhmpjiPvfKGaJmAZuJgYoqGpevqDR7.json"
 );
 
 impl GenesisBlock {
@@ -71,6 +78,21 @@ impl GenesisBlock {
         let blockchain_length: BlockchainLength = DEVNET_GENESIS_BLOCKCHAIN_LENGTH.into();
         let state_hash: StateHash = DEVNET_GENESIS_HASH.into();
         let version = PcbVersion::V2(CurrencyEncoding::for_network(&network));
+
+        Ok(Self(
+            PrecomputedBlock::new(network, blockchain_length, state_hash, contents, version)?,
+            size,
+        ))
+    }
+
+    /// Creates the mainnet mesa fork genesis block as a PCB
+    pub fn new_mainnet_mesa() -> anyhow::Result<Self> {
+        let contents = GENESIS_MAINNET_MESA_BLOCK_CONTENTS.to_vec();
+        let size = contents.len() as u64;
+        let network = Network::Mainnet;
+        let blockchain_length: BlockchainLength = MAINNET_MESA_GENESIS_BLOCKCHAIN_LENGTH.into();
+        let state_hash: StateHash = MAINNET_MESA_GENESIS_HASH.into();
+        let version = PcbVersion::V2(CurrencyEncoding::for_chain(&network, &state_hash));
 
         Ok(Self(
             PrecomputedBlock::new(network, blockchain_length, state_hash, contents, version)?,
@@ -162,6 +184,53 @@ mod test {
             version,
         )?;
         assert_ne!(pre_fork.genesis_state_hash().0, DEVNET_GENESIS_HASH);
+        Ok(())
+    }
+
+    /// The embedded mesa mainnet genesis is the 2026-09-03 fork genesis the
+    /// daemon reports (`genesisBlock`), with no transactions.
+    #[test]
+    fn parse_genesis_block_mainnet_mesa() -> anyhow::Result<()> {
+        use crate::constants::*;
+
+        let block = GenesisBlock::new_mainnet_mesa()?.0;
+        assert_eq!(block.state_hash().0, MAINNET_MESA_GENESIS_HASH);
+        assert_eq!(block.genesis_state_hash().0, MAINNET_MESA_GENESIS_HASH);
+        assert_eq!(block.previous_state_hash().0, MAINNET_MESA_GENESIS_PREV_STATE_HASH);
+        assert_eq!(block.blockchain_length(), MAINNET_MESA_GENESIS_BLOCKCHAIN_LENGTH);
+        assert_eq!(block.global_slot_since_genesis(), MAINNET_MESA_GENESIS_GLOBAL_SLOT);
+        assert_eq!(block.last_vrf_output(), MAINNET_MESA_GENESIS_LAST_VRF_OUTPUT);
+        assert_eq!(block.version(), PcbVersion::V2(CurrencyEncoding::DecimalMina));
+        assert!(block.commands().is_empty());
+        Ok(())
+    }
+
+    /// Blocks after the mainnet mesa fork carry its genesis, pay the mesa
+    /// coinbase and write currency as decimal MINA; blocks of the retired
+    /// Berkeley chain carry another genesis, so the indexer rejects them as
+    /// another chain.
+    #[test]
+    fn mainnet_blocks_across_the_mesa_fork() -> anyhow::Result<()> {
+        use crate::{block::precomputed::CurrencyEncoding, constants::*};
+        let version = PcbVersion::V2(CurrencyEncoding::DecimalMina);
+
+        let post_fork = PrecomputedBlock::parse_file(
+            std::path::Path::new("./tests/data/mainnet-mesa/mainnet-548185-3NKrDP9Sp2e9QjRDMYPuG8nsQwto4u5NwBreZ64fyhNtNTGGiN2i.json"),
+            version.clone(),
+        )?;
+        assert_eq!(post_fork.genesis_state_hash().0, MAINNET_MESA_GENESIS_HASH);
+        assert_eq!(post_fork.coinbase_reward(), MESA_COINBASE_REWARD);
+        assert_eq!(post_fork.version(), version);
+
+        // one zkApp command (fee "0.1") and two payments (fee "0.01" each)
+        assert_eq!(post_fork.tx_fees(), 120_000_000);
+
+        let pre_fork = PrecomputedBlock::parse_file(
+            std::path::Path::new("./tests/data/mainnet-mesa/mainnet-548148-3NKPoFh4wB6MvvJPTLdfnL3GUNnCB3pLG2AC35cF2pcKfue3cG9s.json"),
+            version,
+        )?;
+        assert_eq!(pre_fork.genesis_state_hash().0, HARDFORK_GENESIS_HASH);
+        assert_eq!(pre_fork.coinbase_reward(), MAINNET_COINBASE_REWARD);
         Ok(())
     }
 

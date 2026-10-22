@@ -99,6 +99,13 @@
           url = "https://storage.googleapis.com/o1labs-gitops-infrastructure/devnet/devnet-state-dump-3NLYmfj4U9Fbbvruz3QJj2j8WJyjhGtq4LgYvo7oW1WZm16uEKib-7afaf8cdc1aedd2319b4f005a29f204e36168251fd6a8cab4073d2dd0083149b.json.gz";
           sha256 = "0vk2nilzpbm3qsbh8jzvsvinv28da0gb0jj9gz5p5vpij6m37mhp";
         };
+        # mainnet genesis ledger = the o1labs-gitops state dump of the 2026-09-03
+        # mesa fork, taken at the fork genesis 3NLntCRR @548147 itself: its ledger
+        # hash is the embedded genesis block's genesis ledger hash (jwo3EM3z…).
+        mainnetGenesisGz = pkgs.fetchurl {
+          url = "https://storage.googleapis.com/o1labs-gitops-infrastructure/mainnet/mainnet-state-dump-3NLntCRR9RvjtzP24Q1dRvdhmpjiPvfKGaJmAZuJgYoqGpevqDR7-1987c8d894439277d9d8155f5af07160f79ea07a51de38126872eb9afecb91a8.json.gz";
+          sha256 = "121z7n3cm80mngrr6z4zdlggsqz2a4z3n0hnsbvhmx9v9kld2kdk";
+        };
         # Factory for a configless per-network indexer image. Everything the
         # indexer needs is baked in; the per-network entrypoint runs it with no
         # args. Mirrors the generic `dockerImage` hardening (non-root, /data
@@ -265,7 +272,10 @@
                 builtins.readFile (./ops/entrypoints + "/${net}.sh")
                 + builtins.readFile ./ops/entrypoints/common.sh;
             };
-          indexer-entry-mainnet = mkEntry { net = "mainnet"; };
+          indexer-entry-mainnet = mkEntry {
+            net = "mainnet";
+            needsGzip = true;
+          };
           indexer-entry-devnet = mkEntry {
             net = "devnet";
             needsGzip = true;
@@ -278,6 +288,7 @@
             indexer = mina-indexer;
             verifyBlock = verify-block;
             entry = indexer-entry-mainnet;
+            genesisGz = mainnetGenesisGz;
           };
           "dockerImage-devnet" = mkIndexerImage {
             net = "devnet";

@@ -298,10 +298,13 @@ impl IndexerState {
             .indexer_store
             .set_chain_id_for_network(&config.version.chain_id, &config.version.network)?;
 
-        // Select the genesis block by genesis state hash so devnet (also
-        // PcbVersion::V2) gets its own fork block rather than the mainnet one.
+        // Select the genesis block by genesis state hash so devnet and mesa
+        // mainnet (also PcbVersion::V2) get their own fork block rather than the
+        // Berkeley one.
         let genesis_block = if config.version.genesis.state_hash.0 == DEVNET_GENESIS_HASH {
             GenesisBlock::new_devnet()?
+        } else if config.version.genesis.state_hash.0 == MAINNET_MESA_GENESIS_HASH {
+            GenesisBlock::new_mainnet_mesa()?
         } else {
             match config.version.version {
                 PcbVersion::V1 => GenesisBlock::new_v1()?,
@@ -536,6 +539,7 @@ impl IndexerState {
 
                     if diff.state_hash.0 != HARDFORK_GENESIS_HASH
                         && diff.state_hash.0 != DEVNET_GENESIS_HASH
+                        && diff.state_hash.0 != MAINNET_MESA_GENESIS_HASH
                     {
                         ledger_diffs.push((diff.clone(), accounts_accessed));
                     }
@@ -1179,15 +1183,17 @@ impl IndexerState {
     /// Whether `block` belongs to another chain than the one indexed, and so
     /// must not be ingested.
     ///
-    /// Only devnet is checked. Its whole chain carries the fork genesis in
-    /// `genesis_state_hash`, while the retired pre-fork chain kept producing
-    /// blocks at the same heights for a while after the fork, and those sit in
-    /// the same bucket. They parse, but can never connect, and would otherwise
-    /// linger as dangling branches that missing-block recovery keeps chasing.
-    /// (mainnet's chain spans two genesis hashes, so it cannot be checked so.)
+    /// Only the chains rooted at a mesa fork (devnet, mesa mainnet) are checked.
+    /// Their whole chain carries the fork genesis in `genesis_state_hash`, while
+    /// the retired pre-fork chain kept producing blocks at the same heights for a
+    /// while after the fork, and those sit in the same bucket. They parse, but
+    /// can never connect, and would otherwise linger as dangling branches that
+    /// missing-block recovery keeps chasing. (The V1/Berkeley mainnet chain spans
+    /// two genesis hashes, so it cannot be checked so.)
     fn is_other_chain(&self, block: &PrecomputedBlock) -> bool {
-        let other = self.version.genesis.state_hash.0 == DEVNET_GENESIS_HASH
-            && block.genesis_state_hash().0 != DEVNET_GENESIS_HASH;
+        let root = &self.version.genesis.state_hash.0;
+        let other = (root == DEVNET_GENESIS_HASH || root == MAINNET_MESA_GENESIS_HASH)
+            && block.genesis_state_hash().0 != *root;
 
         if other {
             // debug, not warn: reconcile re-reads recent block files every cycle
@@ -1354,6 +1360,7 @@ impl IndexerState {
                         if genesis_state_hash.0 == MAINNET_GENESIS_HASH
                             || genesis_state_hash.0 == HARDFORK_GENESIS_HASH
                             || genesis_state_hash.0 == DEVNET_GENESIS_HASH
+                            || genesis_state_hash.0 == MAINNET_MESA_GENESIS_HASH
                         {
                             staking_ledgers.insert((epoch, ledger_hash));
                         } else {
