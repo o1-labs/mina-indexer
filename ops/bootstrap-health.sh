@@ -5,13 +5,12 @@
 #
 # Why this exists:
 #
-#   The entrypoint decompresses the genesis ledger and bulk-fetches the block
-#   backlog (tens of thousands of blocks) BEFORE it execs `mina-indexer server
-#   start`. Only then does the real server bind :8080 and start answering
+#   The entrypoint decompresses the genesis ledger and restores a snapshot
+#   (when one is configured) BEFORE it execs `mina-indexer server start`. Only then does the real server bind :8080 and start answering
 #   /healthz and /readyz. For those first minutes nothing is listening, so a
 #   Kubernetes probe gets `connection refused` — which reads as "broken", not
 #   as "busy". Worse, a livenessProbe with a normal failureThreshold kills the
-#   container mid-fetch, and the pod restarts forever without ever finishing
+#   container mid-bootstrap, and the pod restarts forever without ever finishing
 #   the bootstrap.
 #
 #   So we hold the port during that window and answer probes honestly:
@@ -23,7 +22,7 @@
 #   independent of sync state, readiness gated on having a fresh tip), so the
 #   handover is invisible to the probes. The body also carries the current
 #   phase and the block count on disk, so `kubectl exec ... curl :8080/readyz`
-#   shows fetch progress instead of a refused connection.
+#   shows bootstrap progress instead of a refused connection.
 #
 # The entrypoint stops this before exec'ing the real server, which then binds
 # the same port.
@@ -66,7 +65,7 @@ respond)
   [ -d "$DIR" ] && blocks="$(find "$DIR" -maxdepth 1 -name '*.json' -printf '.' | wc -c)"
 
   # Liveness is deliberately independent of progress: the container is up, and
-  # restarting it would only throw away the blocks fetched so far.
+  # restarting it would only throw away the bootstrap work done so far.
   case "$path" in
   /healthz | /healthz\?*)
     status="200 OK"

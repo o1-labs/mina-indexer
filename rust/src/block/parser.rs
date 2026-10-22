@@ -247,8 +247,7 @@ impl BlockParser {
         let genesis_state_hash = GenesisStateHash::from_path(path)?;
         let curr_pcb_version = self.version.clone();
         // Fall back to the current version when the block's genesis_state_hash
-        // is not a known chain root. mesa-mut blocks carry varying
-        // genesis_state_hash values but are all the same (V2) chain.
+        // is not a known chain root.
         let new_pcb_version = self
             .chain_data
             .0

@@ -92,16 +92,19 @@
 
         # Baked genesis ledgers (state dumps) for the configless network images.
         # Fetched at build time (fixed-output), decompressed to /data on first boot.
-        mesaGenesisGz = pkgs.fetchurl {
-          url = "https://storage.googleapis.com/o1labs-gitops-infrastructure/mina-mesa-mut-1/mina-mesa-mut-1-state-dump-3NLp6dKNhYtsqUj49QYV5GtDaeocSJBAa2y2ER2QQLqLukE3wuZT-df71a5f2dd5abdae8e2e5d4d0047b383bdfca4d75ec1d2260b8ad621f1a18ffe.json.gz";
-          sha256 = "004li2l5c319730czsav8bqqpysb2fs48sri6vqxav3m9zvf68qr";
-        };
         # devnet genesis ledger = the o1labs-gitops state dump of the 2026-08-19 fork:
         # taken at the fork's previous block 3NLYmfj4 (its `proof.fork`), whose
         # ledger is the genesis ledger of the embedded fork genesis 3NLT7n4L @545434.
         devnetGenesisGz = pkgs.fetchurl {
           url = "https://storage.googleapis.com/o1labs-gitops-infrastructure/devnet/devnet-state-dump-3NLYmfj4U9Fbbvruz3QJj2j8WJyjhGtq4LgYvo7oW1WZm16uEKib-7afaf8cdc1aedd2319b4f005a29f204e36168251fd6a8cab4073d2dd0083149b.json.gz";
           sha256 = "0vk2nilzpbm3qsbh8jzvsvinv28da0gb0jj9gz5p5vpij6m37mhp";
+        };
+        # mainnet genesis ledger = the o1labs-gitops state dump of the 2026-09-03
+        # mesa fork, taken at the fork genesis 3NLntCRR @548147 itself: its ledger
+        # hash is the embedded genesis block's genesis ledger hash (jwo3EM3z…).
+        mainnetGenesisGz = pkgs.fetchurl {
+          url = "https://storage.googleapis.com/o1labs-gitops-infrastructure/mainnet/mainnet-state-dump-3NLntCRR9RvjtzP24Q1dRvdhmpjiPvfKGaJmAZuJgYoqGpevqDR7-1987c8d894439277d9d8155f5af07160f79ea07a51de38126872eb9afecb91a8.json.gz";
+          sha256 = "121z7n3cm80mngrr6z4zdlggsqz2a4z3n0hnsbvhmx9v9kld2kdk";
         };
         # Factory for a configless per-network indexer image. Everything the
         # indexer needs is baked in; the per-network entrypoint runs it with no
@@ -113,7 +116,6 @@
             net,
             indexer,
             verifyBlock,
-            fetcher,
             entry,
             genesisGz ? null,
           }:
@@ -132,7 +134,6 @@
             contents =
               [
                 indexer
-                fetcher
                 verifyBlock
                 entry
               ]
@@ -221,59 +222,19 @@
 
           default = mina-indexer;
 
-          # In-image block puller for the --fetch-new-blocks-exe /
-          # --missing-block-recovery-exe hooks (self-contained: bundles its
-          # curl/grep/sed/coreutils deps, so the minimal image needs nothing).
-          mesa-pull = pkgs.writeShellApplication {
-            name = "mesa-pull";
-            runtimeInputs = with pkgs; [ curl gnugrep gnused coreutils ];
-            # the script tolerates per-block failures, so no `errexit`
-            bashOptions = [ "nounset" "pipefail" ];
-            text = builtins.readFile ./ops/mesa-mut/mesa-pull.sh;
-          };
-
           # In-image block-verification shim for the --verify-block-exe hook:
           # forwards the block to the mina-verify-server sidecar (trustless mode).
           verify-block = pkgs.writeShellApplication {
             name = "verify-block";
             runtimeInputs = with pkgs; [ curl ];
             bashOptions = [ "nounset" "pipefail" ];
-            text = builtins.readFile ./ops/mesa-mut/verify-block.sh;
-          };
-
-          # Generic block puller for the PUBLIC networks (mainnet, devnet): pulls
-          # from gs://mina_network_block_data, whose objects are already named
-          # <network>-<height>-<hash>.json. Mesa keeps its own mesa-pull (different
-          # bucket + multi-dash prefix rewrite).
-          block-pull = pkgs.writeShellApplication {
-            name = "block-pull";
-            runtimeInputs = with pkgs; [ curl gnugrep gnused coreutils ];
-            bashOptions = [ "nounset" "pipefail" ];
-            text = builtins.readFile ./ops/block-pull.sh;
-          };
-
-          # One-shot bulk fetcher, used on first boot only. block-pull follows the
-          # tip and is deliberately slow (a small, synchronous window, so it never
-          # starves reconcile); bootstrapping a fresh instance with it would take
-          # hours. This lists by height prefix and downloads in parallel instead.
-          block-bootstrap = pkgs.writeShellApplication {
-            name = "block-bootstrap";
-            runtimeInputs = with pkgs; [
-              curl
-              gnugrep
-              gnused
-              gawk
-              coreutils
-              findutils
-            ];
-            bashOptions = [ "nounset" "pipefail" ];
-            text = builtins.readFile ./ops/block-bootstrap.sh;
+            text = builtins.readFile ./ops/verify-block.sh;
           };
 
           # Placeholder health endpoint held during the first-boot window, before
           # `server start` binds the port. Without it a probe sees `connection
           # refused` for minutes and a livenessProbe restarts the container
-          # mid-fetch, so the bootstrap never finishes.
+          # mid-bootstrap, so the bootstrap never finishes.
           bootstrap-health = pkgs.writeShellApplication {
             name = "bootstrap-health";
             runtimeInputs = with pkgs; [
@@ -287,10 +248,10 @@
 
           # Configless per-network entrypoints: each exec's mina-indexer with all
           # flags baked in (zero args/mounts needed). Each per-network file holds
-          # only its variables (NETWORK / GENESIS_HASH / FETCH_EXE / GENESIS_GZ);
+          # only its variables (NETWORK / GENESIS_HASH / GENESIS_GZ);
           # the shared body (checkpoints, genesis decompression, retention, the
           # server-start invocation) lives once in common.sh and is concatenated
-          # at build time. mesa/devnet decompress their baked genesis on first boot.
+          # at build time. devnet decompresses its baked genesis on first boot.
           mkEntry =
             {
               net,
@@ -300,7 +261,6 @@
               name = "indexer-entry-${net}";
               runtimeInputs = [
                 mina-indexer
-                block-bootstrap
                 bootstrap-health
                 # snapshot restore: download + manifest read
                 pkgs.curl
@@ -312,42 +272,31 @@
                 builtins.readFile (./ops/entrypoints + "/${net}.sh")
                 + builtins.readFile ./ops/entrypoints/common.sh;
             };
-          indexer-entry-mainnet = mkEntry { net = "mainnet"; };
+          indexer-entry-mainnet = mkEntry {
+            net = "mainnet";
+            needsGzip = true;
+          };
           indexer-entry-devnet = mkEntry {
             net = "devnet";
             needsGzip = true;
           };
-          indexer-entry-mesa = mkEntry {
-            net = "mesa";
-            needsGzip = true;
-          };
 
           # Per-network configless images (one repo, tag suffix -<network>):
-          #   ghcr.io/o1-labs/mina-indexer:<tag>-mainnet | -devnet | -mesa-mut
+          #   ghcr.io/o1-labs/mina-indexer:<tag>-mainnet | -devnet
           "dockerImage-mainnet" = mkIndexerImage {
             net = "mainnet";
             indexer = mina-indexer;
             verifyBlock = verify-block;
-            fetcher = block-pull;
             entry = indexer-entry-mainnet;
+            genesisGz = mainnetGenesisGz;
           };
           "dockerImage-devnet" = mkIndexerImage {
             net = "devnet";
             indexer = mina-indexer;
             verifyBlock = verify-block;
-            fetcher = block-pull;
             entry = indexer-entry-devnet;
             genesisGz = devnetGenesisGz;
           };
-          "dockerImage-mesa" = mkIndexerImage {
-            net = "mesa";
-            indexer = mina-indexer;
-            verifyBlock = verify-block;
-            fetcher = mesa-pull;
-            entry = indexer-entry-mesa;
-            genesisGz = mesaGenesisGz;
-          };
-
           # Production OCI image. Uses streamLayeredImage for cache-friendly
           # layers, ships only the runtime closure (no source tree), runs as a
           # non-root user, and is reproducible (pinned `created`).
@@ -357,7 +306,6 @@
             created = "1970-01-01T00:00:01Z";
             contents = with pkgs; [
               mina-indexer
-              mesa-pull # /bin/mesa-pull for the fetch/recovery hooks
               verify-block # /bin/verify-block for the --verify-block-exe hook
               bash
               cacert # CA roots for any outbound HTTPS (block/ledger fetch)
@@ -374,10 +322,10 @@
               # Cmd (not Entrypoint) so callers can override, e.g.
               #   docker run IMAGE mina-indexer server start --help
               Cmd = [ "${pkgs.lib.getExe mina-indexer}" ];
-              # SSL_CERT_FILE: the bundled curl (in mesa-pull) has no built-in CA
-              # path, so without this every HTTPS block/ledger fetch fails TLS
+              # SSL_CERT_FILE: the bundled curl (in verify-block) has no built-in
+              # CA path, so without this every outbound HTTPS call fails TLS
               # verification ("curl failed to verify the legitimacy of the
-              # server") and the fetcher silently pulls 0 blocks.
+              # server").
               Env = [
                 "TMPDIR=/tmp"
                 "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"

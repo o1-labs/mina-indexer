@@ -80,31 +80,9 @@ pub const HARDFORK_GENESIS_LEDGER_HASH: &str =
 pub const HARDFORK_GENESIS_LAST_VRF_OUTPUT: &str =
     "FSBXKqZKgSiy1T6SsjbrT0i84oDkBpUVsLH1zRviuIj0DjuGEXs=";
 
-// mesa-mut hardfork network (protocol transaction version 3).
-//
-// Values are taken from the fork block `mina-mesa-mut-1-297734-3NLp6dKN…json`
-// (the genesis/root of the mesa-mut chain). The genesis ledger is supplied at
-// runtime via `--genesis-ledger` (the state dump). See the `ops/mesa-mut`
-// tooling and the embedded genesis block in `block::genesis`.
-pub const MESA_GENESIS_BLOCKCHAIN_LENGTH: u32 = 297735;
-pub const MESA_GENESIS_GLOBAL_SLOT: u32 = 449660;
-pub const MESA_GENESIS_HASH: &str = "3NKQttwm8QRdvSZL62Lid8YAPCXBuAucZPDT8mJriHmw2qk9cVcr";
-// The pre-fork chain's genesis hash, which mesa-mut blocks carry in their
-// `genesis_state_hash` field for protocol continuity. The indexer remaps it to
-// MESA_GENESIS_HASH so the whole mesa chain shares one genesis for canonicity.
-pub const MESA_ORIGINAL_GENESIS_HASH: &str =
-    "3NL4ZJ3SEfc7yZwiyh6otjopKGgfFhGmU2R3HQbjBuXCFtLJQcoY";
-pub const MESA_GENESIS_PREV_STATE_HASH: &str =
-    "3NLp6dKNhYtsqUj49QYV5GtDaeocSJBAa2y2ER2QQLqLukE3wuZT";
-pub const MESA_GENESIS_LEDGER_HASH: &str = "jxicjVogngTDjJh5EEsTUrvBxa3R4fhepqrAeexiRVMogJGqHdT";
-pub const MESA_GENESIS_LAST_VRF_OUTPUT: &str = "8oxYNPIKw0xNLJJrhcXRICHIS34t4z-8fsvfTfSbIAA=";
-// The mesa protocol halved the coinbase: 360 MINA, against mainnet's 720. mesa-mut
-// and devnet (since its 2026-08-19 fork) run it.
+// The mesa protocol halved the coinbase: 360 MINA, against the 720 before it.
+// devnet runs it since its 2026-08-19 fork, mainnet since its 2026-09-03 fork.
 pub const MESA_COINBASE_REWARD: u64 = 360000000000;
-// Placeholder chain id (valid 64-char hex). mesa-mut's real chain id depends on
-// its constraint-system digests, which are not needed for indexing block data.
-pub const MESA_CHAIN_ID: &str =
-    "6d6573612d6d75740000000000000000000000000000000000000000000000aa";
 
 // devnet, rooted at its mesa-protocol hard fork of 2026-08-19 (transaction
 // version 4, 360 MINA coinbase). The fork's own genesis block is the root: every
@@ -127,6 +105,28 @@ pub const DEVNET_GENESIS_LAST_VRF_OUTPUT: &str = "KB53dC2i5R27zxr9gUlOOWz5U5Dxlu
 // constraint-system digests, which are not needed for indexing block data.
 pub const DEVNET_CHAIN_ID: &str =
     "6465766e657400000000000000000000000000000000000000000000000000bb";
+
+// mainnet, rooted at its mesa-protocol hard fork of 2026-09-03 (transaction
+// version 4, 360 MINA coinbase), like devnet above. Blocks from the retired
+// Berkeley chain (genesis HARDFORK_GENESIS_HASH, still in the bucket at the same
+// heights just after the fork) are rejected as another chain.
+//
+// Values are the daemon's `genesisBlock` (GraphQL); `block::genesis::new_mainnet_mesa`
+// embeds it as a block with no transactions. The genesis ledger is supplied at
+// runtime via `--genesis-ledger`: the state dump of the fork genesis itself, whose
+// ledger hash is MAINNET_MESA_GENESIS_LEDGER_HASH, in the o1labs-gitops bucket.
+pub const MAINNET_MESA_GENESIS_BLOCKCHAIN_LENGTH: u32 = 548147;
+pub const MAINNET_MESA_GENESIS_GLOBAL_SLOT: u32 = 958440;
+pub const MAINNET_MESA_GENESIS_HASH: &str = "3NLntCRR9RvjtzP24Q1dRvdhmpjiPvfKGaJmAZuJgYoqGpevqDR7";
+pub const MAINNET_MESA_GENESIS_PREV_STATE_HASH: &str =
+    "3NKHyxzgM9z4C1wUz5ZhJBmNhtDzDQGr1PGvWRwiCUcFvsdTco2T";
+pub const MAINNET_MESA_GENESIS_LEDGER_HASH: &str =
+    "jwo3EM3zXkK5gpQYZHQP9KJVgH4ZCfv5bMgvyy3Gh2dAWU6AgyN";
+pub const MAINNET_MESA_GENESIS_LAST_VRF_OUTPUT: &str =
+    "XQbwLMtdlT44KsS3XWOe76ZLQs-JPE5vkvPkhBWd1g4=";
+// The live daemon's `daemonStatus.chainId`
+pub const MAINNET_MESA_CHAIN_ID: &str =
+    "0718f61ab88f9d0fa643ff4dc3a3d5998dd6d51a6008b2b0339b0dbb26133886";
 
 pub const HARDFORK_CONSTRAINT_SYSTEM_DIGESTS: &[&str] = &[
     HARDFORK_DIGEST_TXN_MERGE,
@@ -185,6 +185,12 @@ pub mod berkeley {
 
 pub const DEFAULT_WEB_HOSTNAME: &str = "0.0.0.0";
 pub const DEFAULT_WEB_PORT: u16 = 8080;
+
+/// Default seconds between block fetcher cycles (`--block-fetch-interval`)
+pub const DEFAULT_BLOCK_FETCH_INTERVAL: u64 = 60;
+
+/// Default parallel block downloads (`--block-fetch-workers`)
+pub const DEFAULT_BLOCK_FETCH_WORKERS: usize = 16;
 
 /// Default seconds the server waits to receive a client's request headers before
 /// dropping the connection (guards against slowloris-style header stalls). `0`

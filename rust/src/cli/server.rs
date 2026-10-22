@@ -1,7 +1,7 @@
 //! Server commands
 
 use super::{database::DatabaseArgs, LogLevelFilter};
-use crate::constants::*;
+use crate::{constants::*, fetcher::BlockSource};
 use std::{path::PathBuf, str::FromStr};
 
 #[derive(clap::Parser, Debug, Clone, Default)]
@@ -68,13 +68,20 @@ pub struct ServerArgs {
     #[arg(long, default_value_t = false)]
     pub self_check: bool,
 
-    /// Path to the fetch new blocks executable
-    #[arg(long)]
-    pub fetch_new_blocks_exe: Option<PathBuf>,
+    /// Fetch new & missing precomputed blocks into `--blocks-dir` from this
+    /// source: `gs://<bucket>` (a public GCS bucket, e.g.
+    /// `gs://mina_network_block_data`) or `file://<dir>`. Source objects must
+    /// be named `<network>-<height>-<hash>.json`. Unset: no blocks are fetched.
+    #[arg(long, value_parser = parse_block_source)]
+    pub block_source: Option<BlockSource>,
 
-    /// Delay (sec) in between fetch new blocks attempts
-    #[arg(long)]
-    pub fetch_new_blocks_delay: Option<u64>,
+    /// Seconds between block fetch cycles
+    #[arg(long, default_value_t = DEFAULT_BLOCK_FETCH_INTERVAL)]
+    pub block_fetch_interval: u64,
+
+    /// Max parallel block downloads
+    #[arg(long, default_value_t = DEFAULT_BLOCK_FETCH_WORKERS)]
+    pub block_fetch_workers: usize,
 
     /// Path to a block-verification executable. When set, every live-ingested
     /// block is gated on it: the indexer runs `EXE <network> <block-file>` and
@@ -82,18 +89,6 @@ pub struct ServerArgs {
     /// SNARK-proof verifier (e.g. mina-verify-server) vouches for each block.
     #[arg(long)]
     pub verify_block_exe: Option<PathBuf>,
-
-    /// Path to the missing block recovery executable
-    #[arg(long)]
-    pub missing_block_recovery_exe: Option<PathBuf>,
-
-    /// Delay (sec) in between missing block recovery attempts
-    #[arg(long)]
-    pub missing_block_recovery_delay: Option<u64>,
-
-    /// Recover all blocks at all missing heights
-    #[arg(long)]
-    pub missing_block_recovery_batch: Option<bool>,
 
     /// Bound `blocks-dir` growth by deleting ingested block files older than the
     /// retention window. Keeps block files at height >= `best_tip - N`; older
@@ -118,6 +113,18 @@ pub struct ServerArgs {
     /// Indexer process ID
     #[arg(last = true)]
     pub pid: Option<u32>,
+}
+
+fn parse_block_source(s: &str) -> Result<BlockSource, String> {
+    s.parse().map_err(|e: anyhow::Error| e.to_string())
+}
+
+fn default_block_fetch_interval() -> u64 {
+    DEFAULT_BLOCK_FETCH_INTERVAL
+}
+
+fn default_block_fetch_workers() -> usize {
+    DEFAULT_BLOCK_FETCH_WORKERS
 }
 
 fn default_graphql_max_depth() -> usize {
@@ -187,12 +194,12 @@ pub struct ServerArgsJson {
     pub web_rate_limit_burst: u32,
     pub pid: Option<u32>,
     pub do_not_ingest_orphan_blocks: bool,
-    pub fetch_new_blocks_exe: Option<String>,
-    pub fetch_new_blocks_delay: Option<u64>,
+    pub block_source: Option<String>,
+    #[serde(default = "default_block_fetch_interval")]
+    pub block_fetch_interval: u64,
+    #[serde(default = "default_block_fetch_workers")]
+    pub block_fetch_workers: usize,
     pub verify_block_exe: Option<String>,
-    pub missing_block_recovery_exe: Option<String>,
-    pub missing_block_recovery_delay: Option<u64>,
-    pub missing_block_recovery_batch: Option<bool>,
     pub blocks_retention_length: Option<u32>,
     pub network: String,
     pub check_mode: bool,
@@ -235,23 +242,15 @@ impl ServerArgs {
             );
         }
 
-        // Soft: a delay without its executable means the timer does nothing.
-        if self.fetch_new_blocks_delay.is_some() && self.fetch_new_blocks_exe.is_none() {
-            warnings.push(
-                "--fetch-new-blocks-delay set without --fetch-new-blocks-exe: \
-                 no new blocks will be fetched"
-                    .to_string(),
-            );
-        }
-        if (self.missing_block_recovery_delay.is_some()
-            || self.missing_block_recovery_batch.is_some())
-            && self.missing_block_recovery_exe.is_none()
-        {
-            warnings.push(
-                "--missing-block-recovery-delay/-batch set without \
-                 --missing-block-recovery-exe: no missing-block recovery will run"
-                    .to_string(),
-            );
+        // Hard: the block fetcher downloads into --blocks-dir, and needs a
+        // non-zero interval and worker count to make progress.
+        if let Some(source) = &self.block_source {
+            if self.db.blocks_dir.is_none() {
+                anyhow::bail!("--block-source {source} needs --blocks-dir to fetch into");
+            }
+            if self.block_fetch_interval == 0 || self.block_fetch_workers == 0 {
+                anyhow::bail!("--block-fetch-interval and --block-fetch-workers must be > 0");
+            }
         }
 
         // Soft: port 0 binds an OS-assigned ephemeral port clients can't predict.
@@ -309,14 +308,10 @@ impl From<ServerArgs> for ServerArgsJson {
             web_rate_limit_per_second: value.web_rate_limit_per_second,
             web_rate_limit_burst: value.web_rate_limit_burst,
             pid: value.pid,
-            fetch_new_blocks_delay: value.fetch_new_blocks_delay,
-            fetch_new_blocks_exe: value.fetch_new_blocks_exe.map(|p| p.display().to_string()),
+            block_source: value.block_source.map(|s| s.to_string()),
+            block_fetch_interval: value.block_fetch_interval,
+            block_fetch_workers: value.block_fetch_workers,
             verify_block_exe: value.verify_block_exe.map(|p| p.display().to_string()),
-            missing_block_recovery_delay: value.missing_block_recovery_delay,
-            missing_block_recovery_exe: value
-                .missing_block_recovery_exe
-                .map(|p| p.display().to_string()),
-            missing_block_recovery_batch: value.missing_block_recovery_batch,
             blocks_retention_length: value.blocks_retention_length,
             network: value.db.network.to_string(),
             do_not_ingest_orphan_blocks: value.db.do_not_ingest_orphan_blocks,
@@ -364,12 +359,10 @@ impl From<ServerArgsJson> for ServerArgs {
             web_rate_limit_burst: value.web_rate_limit_burst,
             self_check: false,
             pid: value.pid,
-            fetch_new_blocks_delay: value.fetch_new_blocks_delay,
-            fetch_new_blocks_exe: value.fetch_new_blocks_exe.map(Into::into),
+            block_source: value.block_source.and_then(|s| s.parse().ok()),
+            block_fetch_interval: value.block_fetch_interval,
+            block_fetch_workers: value.block_fetch_workers,
             verify_block_exe: value.verify_block_exe.map(Into::into),
-            missing_block_recovery_delay: value.missing_block_recovery_delay,
-            missing_block_recovery_exe: value.missing_block_recovery_exe.map(Into::into),
-            missing_block_recovery_batch: value.missing_block_recovery_batch,
             blocks_retention_length: value.blocks_retention_length,
             restore_from_checkpoint: None,
             restore_force: false,
@@ -452,22 +445,25 @@ mod tests {
     }
 
     #[test]
-    fn ineffective_flags_warn_but_do_not_abort() {
+    fn block_source_needs_blocks_dir_and_progress() {
+        let source = Some("gs://mina_network_block_data".parse().unwrap());
         let a = ServerArgs {
-            fetch_new_blocks_delay: Some(60),
-            fetch_new_blocks_exe: None,
+            block_source: source.clone(),
+            block_fetch_interval: 60,
+            block_fetch_workers: 16,
             ..base()
         };
-        let w = a.validate().expect("soft issues only warn");
-        assert!(w.iter().any(|m| m.contains("fetch-new-blocks-delay")));
+        assert!(a.validate().is_err(), "no --blocks-dir");
 
-        let a = ServerArgs {
-            missing_block_recovery_delay: Some(120),
-            missing_block_recovery_exe: None,
-            ..base()
+        let mut a = a;
+        a.db.blocks_dir = Some("/data/blocks".into());
+        assert!(a.validate().unwrap().is_empty());
+
+        let b = ServerArgs {
+            block_fetch_interval: 0,
+            ..a.clone()
         };
-        let w = a.validate().unwrap();
-        assert!(w.iter().any(|m| m.contains("missing-block-recovery")));
+        assert!(b.validate().is_err(), "zero interval");
     }
 
     #[test]
