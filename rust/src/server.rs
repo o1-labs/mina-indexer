@@ -1099,6 +1099,20 @@ impl GenesisVersion {
         }
     }
 
+    pub fn mainnet_mesa() -> Self {
+        use std::str::FromStr;
+        let last_vrf_output = VrfOutput::from_str(MAINNET_MESA_GENESIS_LAST_VRF_OUTPUT)
+            .expect("mainnet mesa last vrf output");
+
+        Self {
+            last_vrf_output,
+            state_hash: MAINNET_MESA_GENESIS_HASH.into(),
+            prev_hash: MAINNET_MESA_GENESIS_PREV_STATE_HASH.into(),
+            blockchain_lenth: MAINNET_MESA_GENESIS_BLOCKCHAIN_LENGTH,
+            global_slot: MAINNET_MESA_GENESIS_GLOBAL_SLOT,
+        }
+    }
+
     /// Derive the genesis version from a supplied genesis block, for a
     /// **custom** network (a lightnet or any network the indexer doesn't
     /// embed). Everything is taken from the block itself rather than a
@@ -1145,6 +1159,18 @@ impl IndexerVersion {
             network,
             chain_id: ChainId::devnet(),
             genesis: GenesisVersion::devnet(),
+        }
+    }
+
+    pub fn mainnet_mesa() -> Self {
+        let network = Network::Mainnet;
+        let genesis = GenesisVersion::mainnet_mesa();
+
+        Self {
+            version: PcbVersion::V2(CurrencyEncoding::for_chain(&network, &genesis.state_hash)),
+            network,
+            chain_id: ChainId::mainnet_mesa(),
+            genesis,
         }
     }
 }

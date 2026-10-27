@@ -80,8 +80,8 @@ pub const HARDFORK_GENESIS_LEDGER_HASH: &str =
 pub const HARDFORK_GENESIS_LAST_VRF_OUTPUT: &str =
     "FSBXKqZKgSiy1T6SsjbrT0i84oDkBpUVsLH1zRviuIj0DjuGEXs=";
 
-// The mesa protocol halved the coinbase: 360 MINA, against mainnet's 720. devnet
-// runs it since its 2026-08-19 fork.
+// The mesa protocol halved the coinbase: 360 MINA, against the 720 before it.
+// devnet runs it since its 2026-08-19 fork, mainnet since its 2026-09-03 fork.
 pub const MESA_COINBASE_REWARD: u64 = 360000000000;
 
 // devnet, rooted at its mesa-protocol hard fork of 2026-08-19 (transaction
@@ -105,6 +105,28 @@ pub const DEVNET_GENESIS_LAST_VRF_OUTPUT: &str = "KB53dC2i5R27zxr9gUlOOWz5U5Dxlu
 // constraint-system digests, which are not needed for indexing block data.
 pub const DEVNET_CHAIN_ID: &str =
     "6465766e657400000000000000000000000000000000000000000000000000bb";
+
+// mainnet, rooted at its mesa-protocol hard fork of 2026-09-03 (transaction
+// version 4, 360 MINA coinbase), like devnet above. Blocks from the retired
+// Berkeley chain (genesis HARDFORK_GENESIS_HASH, still in the bucket at the same
+// heights just after the fork) are rejected as another chain.
+//
+// Values are the daemon's `genesisBlock` (GraphQL); `block::genesis::new_mainnet_mesa`
+// embeds it as a block with no transactions. The genesis ledger is supplied at
+// runtime via `--genesis-ledger`: the state dump of the fork genesis itself, whose
+// ledger hash is MAINNET_MESA_GENESIS_LEDGER_HASH, in the o1labs-gitops bucket.
+pub const MAINNET_MESA_GENESIS_BLOCKCHAIN_LENGTH: u32 = 548147;
+pub const MAINNET_MESA_GENESIS_GLOBAL_SLOT: u32 = 958440;
+pub const MAINNET_MESA_GENESIS_HASH: &str = "3NLntCRR9RvjtzP24Q1dRvdhmpjiPvfKGaJmAZuJgYoqGpevqDR7";
+pub const MAINNET_MESA_GENESIS_PREV_STATE_HASH: &str =
+    "3NKHyxzgM9z4C1wUz5ZhJBmNhtDzDQGr1PGvWRwiCUcFvsdTco2T";
+pub const MAINNET_MESA_GENESIS_LEDGER_HASH: &str =
+    "jwo3EM3zXkK5gpQYZHQP9KJVgH4ZCfv5bMgvyy3Gh2dAWU6AgyN";
+pub const MAINNET_MESA_GENESIS_LAST_VRF_OUTPUT: &str =
+    "XQbwLMtdlT44KsS3XWOe76ZLQs-JPE5vkvPkhBWd1g4=";
+// The live daemon's `daemonStatus.chainId`
+pub const MAINNET_MESA_CHAIN_ID: &str =
+    "0718f61ab88f9d0fa643ff4dc3a3d5998dd6d51a6008b2b0339b0dbb26133886";
 
 pub const HARDFORK_CONSTRAINT_SYSTEM_DIGESTS: &[&str] = &[
     HARDFORK_DIGEST_TXN_MERGE,
