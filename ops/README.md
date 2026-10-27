@@ -27,27 +27,26 @@ Nothing else is required. A volume on `/data` is optional but recommended so the
 fetched blocks survive restarts. The first boot of the devnet image decompresses the
 baked genesis ledger to `/data` (takes a few seconds).
 
-**The first boot is long.** After the ledger, devnet bulk-fetches its block backlog
-(devnet: ~32,000 heights) and then ingest it, so expect tens of minutes before `/readyz`
-returns 200. Port 8080 answers throughout — `/healthz` 200, everything else 503 with the
-current phase and block count — so you can watch progress:
+**The first boot is long.** After the ledger, the indexer fetches its block backlog
+in-process and ingests it, so expect tens of minutes before `/readyz` returns 200. Port
+8080 answers throughout — `/healthz` 200, everything else 503 — so you can watch progress:
 
 ```bash
 curl -s localhost:8080/readyz
-# {"status":"bootstrapping","ready":false,"phase":"fetching-blocks","blocks_on_disk":18342}
+# {"status":"catching_up","ready":false,"tip_height":551204,"tip_age_seconds":41207,...}
 ```
 
 On Kubernetes this needs a `startupProbe`, or the liveness probe kills the container
-mid-fetch and it never finishes. See
+mid-bootstrap and it never finishes. See
 [*Kubernetes probes*](../docs/operating.md#kubernetes-probes).
 
 ## What's inside
 
 - `mina-indexer` — the (network-agnostic) indexer binary.
 - A network entrypoint (`ops/entrypoints/<network>.sh`) that runs the indexer configless.
-- A block fetcher wired to `--fetch-new-blocks-exe` / `--missing-block-recovery-exe`:
-  - `block-pull` (`ops/block-pull.sh`) for the public networks — pulls from the
-    `mina_network_block_data` bucket (objects already named `<network>-<height>-<hash>.json`).
+- No external fetcher: the entrypoint passes `--block-source gs://mina_network_block_data`
+  (override with `MINA_BLOCK_SOURCE`), and the indexer fetches blocks in-process. See
+  [Block fetching](../docs/operating.md#block-fetching).
 - `bootstrap-health` (`ops/bootstrap-health.sh`) — holds port 8080 during the first-boot
   window, before `server start` binds it, so probes see
   `503 {"status":"bootstrapping","phase":…,"blocks_on_disk":…}` (and `/healthz` 200)
@@ -55,7 +54,7 @@ mid-fetch and it never finishes. See
   disables it.
 - `verify-block` — the trustless verify shim, baked but **dormant** (the images do not pass
   `--verify-block-exe`; trustless verification remains a separate opt-in + sidecar concern).
-- The devnet genesis ledger ships gzipped at `/genesis/<network>.json.gz`.
+- The devnet genesis ledger ships gzipped at `/genesis/devnet.json.gz`.
 
 ## Build locally
 

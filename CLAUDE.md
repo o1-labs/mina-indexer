@@ -60,14 +60,13 @@ ad-hoc `cargo build` pass any value). Set `ulimit -n` ≥ 4096 before running th
   `docs/README.md`.
 - `flake.nix` — toolchain, packages, and the per-network OCI image factory.
 - `.github/workflows/` — `debian.yml` (deb build/publish) and `oci-image.yml` (the
-  2-network image matrix). **There is no `cargo fmt` CI gate** — don't reflexively run
+  3-network image matrix). **There is no `cargo fmt` CI gate** — don't reflexively run
   `cargo fmt` across files; it produces large unrelated diffs. Format only what you touch.
 
 ## Key concepts (don't re-derive these)
 
 - **Network is selected by genesis HASH, not `--network`.** `bin/mina-indexer.rs` (~L389)
-  dispatches on `--genesis-hash`: `DEVNET_GENESIS_HASH` → V2/devnet,
-  `HARDFORK_GENESIS_HASH` → V2/v2, else → V1/mainnet. The `--network` string is
+  dispatches on `--genesis-hash`: `DEVNET_GENESIS_HASH` → V2/devnet, `HARDFORK_GENESIS_HASH` → V2/v2, else → V1/mainnet. The `--network` string is
   mostly cosmetic (and the filename prefix the fetcher writes). Genesis hashes live in
   `constants.rs`.
 - **Embedded vs supplied genesis ledger.** No `--genesis-ledger` ⇒ the embedded ledger for
@@ -80,9 +79,12 @@ ad-hoc `cargo build` pass any value). Set `ulimit -n` ≥ 4096 before running th
   height parsed as `u32` (`block/mod.rs` `extract_network_height_hash`). Fetchers must
   produce this exact shape. (The mesa-mut network was removed in Oct 2026; "mesa" in
   the code now means the mesa *protocol*, which devnet runs since its fork.)
-- **Block sources** (public GCS, no auth): mainnet/devnet from `gs://mina_network_block_data`
-  (already correctly named). The fetcher runs **synchronously** in the timer branch — a large fetch window
-  starves reconcile, so the window default is small (15).
+- **Block fetching is in-process** (`fetcher.rs`, `--block-source gs://<bucket>|file://<dir>`):
+  a `Block Fetcher` subsystem lists the source by height range and downloads into
+  `--blocks-dir` (gap fill + catch-up + follow); it never writes the DB — the watcher and
+  reconcile ingest the files. Public source: `gs://mina_network_block_data` (mainnet/devnet,
+  already correctly named; no mainnet blocks < 296166, no devnet blocks 239699–552016).
+  There are no fetch/recovery exe hooks any more.
 - **Ledgers are keyed by token:** `tokens: HashMap<TokenAddress, TokenLedger>`, each keyed
   by `(TokenAddress, PublicKey)`. Genesis accounts must be partitioned by token, not
   flattened into the MINA ledger.
@@ -103,8 +105,8 @@ ad-hoc `cargo build` pass any value). Set `ulimit -n` ≥ 4096 before running th
 ## CLI & environment (full reference: `docs/operating.md`)
 
 - Server-start flags of note: `--genesis-hash`, `--genesis-ledger`, `--database-dir`,
-  `--blocks-dir`, `--fetch-new-blocks-exe`/`--fetch-new-blocks-delay`,
-  `--missing-block-recovery-exe`/`-delay`, `--verify-block-exe`,
+  `--blocks-dir`, `--block-source`/`--block-fetch-interval`/`--block-fetch-workers`,
+  `--verify-block-exe`,
   `--restore-from-checkpoint`/`--restore-force`, `--web-port`/`--web-hostname`,
   `--log-level`.
 - Environment: `MINA_LOG_FORMAT=json`, `RUST_LOG=<env-filter>`, `MINA_CHECKPOINT_DIR`,

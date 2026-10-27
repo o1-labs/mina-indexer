@@ -8,9 +8,4 @@
 # common.sh at image-build time).
 NETWORK=devnet
 GENESIS_HASH=3NLT7n4LiVo6U4LXr9BjCEp9712fP61uXkRC6hnRnB682A8f4HrJ
-FETCH_EXE=/bin/block-pull
 GENESIS_GZ=/genesis/devnet.json.gz
-
-# First block after the fork genesis the indexer roots at (545434). Bulk-fetched
-# in parallel on first boot; the tip-follower would need hours for the same range.
-BOOTSTRAP_FROM=545435

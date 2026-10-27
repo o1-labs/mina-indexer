@@ -428,12 +428,10 @@ fn process_indexer_configuration(
     let ledger_cadence = args.db.ledger_cadence;
     let reporting_freq = args.db.reporting_freq;
     let do_not_ingest_orphan_blocks = args.db.do_not_ingest_orphan_blocks;
-    let fetch_new_blocks_exe = args.fetch_new_blocks_exe;
-    let fetch_new_blocks_delay = args.fetch_new_blocks_delay;
+    let block_source = args.block_source;
+    let block_fetch_interval = args.block_fetch_interval;
+    let block_fetch_workers = args.block_fetch_workers;
     let verify_block_exe = args.verify_block_exe;
-    let missing_block_recovery_exe = args.missing_block_recovery_exe;
-    let missing_block_recovery_delay = args.missing_block_recovery_delay;
-    let missing_block_recovery_batch = args.missing_block_recovery_batch.unwrap_or(false);
     let blocks_retention_length = args.blocks_retention_length;
     let check_mode = args.db.check_mode;
 
@@ -496,12 +494,10 @@ fn process_indexer_configuration(
         ledger_cadence,
         reporting_freq,
         domain_socket_path,
-        fetch_new_blocks_exe,
-        fetch_new_blocks_delay,
+        block_source,
+        block_fetch_interval,
+        block_fetch_workers,
         verify_block_exe,
-        missing_block_recovery_exe,
-        missing_block_recovery_delay,
-        missing_block_recovery_batch,
         blocks_retention_length,
         do_not_ingest_orphan_blocks,
         check_mode,

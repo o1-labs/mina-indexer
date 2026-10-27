@@ -9,6 +9,7 @@ pub mod client;
 pub mod command;
 pub mod constants;
 pub mod event;
+pub mod fetcher;
 pub mod ledger;
 pub mod logging;
 pub mod metrics;

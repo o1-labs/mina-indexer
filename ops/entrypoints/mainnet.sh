@@ -6,5 +6,4 @@
 # common.sh at image-build time).
 NETWORK=mainnet
 GENESIS_HASH=3NKeMoncuHab5ScarV5ViyF16cJPT4taWNSaTLS64Dp67wuXigPZ
-FETCH_EXE=/bin/block-pull
 # mainnet: no GENESIS_GZ — the genesis ledger is embedded in the binary.
