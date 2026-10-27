@@ -233,6 +233,12 @@ impl Branch {
         })
     }
 
+    /// Id of the node holding the block with `state_hash`, if any
+    pub fn node_id(&self, state_hash: &StateHash) -> Option<NodeId> {
+        self.traverse_level_order_ids()
+            .find(|node_id| &self.branches.get(node_id).unwrap().data().state_hash == state_hash)
+    }
+
     /// Merges two trees:
     /// the `incoming` tree is placed under `junction_id` in `self`
     ///
