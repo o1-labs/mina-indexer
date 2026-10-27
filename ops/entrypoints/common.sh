@@ -1,6 +1,6 @@
 # Shared body for the configless per-network image entrypoints.
 #
-# The per-network file (mainnet.sh / devnet.sh / mesa.sh) is concatenated AHEAD
+# The per-network file (mainnet.sh / devnet.sh) is concatenated AHEAD
 # of this one at image-build time (see flake.nix `mkEntry`) and sets:
 #   NETWORK       — --network value
 #   GENESIS_HASH  — --genesis-hash value
@@ -61,7 +61,7 @@ if [ "$BOOTSTRAP_HEALTH_PORT" -gt 0 ] 2>/dev/null; then
   trap 'stop_bootstrap_health' EXIT
 fi
 
-# Hardfork networks (mesa, devnet) ship a gzipped genesis ledger we decompress
+# Hardfork networks (devnet) ship a gzipped genesis ledger we decompress
 # to /data on first boot; mainnet's ledger is embedded in the binary.
 ledger_args=()
 if [ -n "${GENESIS_GZ:-}" ]; then

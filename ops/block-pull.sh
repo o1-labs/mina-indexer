@@ -8,8 +8,7 @@
 # Downloads EVERY block at each height in [height, height+WINDOW) from the public
 # `mina_network_block_data` bucket. Objects there are already named
 # `<network>-<height>-<hash>.json` — exactly the form the indexer's filename
-# parser expects — so no renaming is needed (unlike mesa-pull's multi-dash
-# prefix). Writes to a temp file and atomically renames so the directory watcher
+# parser expects — so no renaming is needed. Writes to a temp file and atomically renames so the directory watcher
 # never sees a half-written block. Retries transient GCS errors so it never
 # leaves a gap.
 set -uo pipefail
@@ -17,8 +16,8 @@ set -uo pipefail
 NET="${1:?usage: block-pull <network> <height> <blocks_dir>}"
 FROM="${2:?height}"
 DIR="${3:?blocks_dir}"
-# This puller serves the public networks only; mesa is sourced from its own
-# bucket by mesa-pull. Anything else is a no-op (exit 0 = nothing to fetch).
+# This puller serves the public networks only. Anything else is a no-op
+# (exit 0 = nothing to fetch).
 case "$NET" in
   mainnet | devnet) ;;
   *) exit 0 ;;

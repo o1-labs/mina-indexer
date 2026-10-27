@@ -13,12 +13,9 @@
 - [disaster-recovery.md](disaster-recovery.md) — DR runbook: RTO/RPO, off-host backups
   ([`ops/dr/`](../ops/dr/)), restore procedures, and the failover playbook.
 - [../ops/README.md](../ops/README.md) — the turnkey per-network configless OCI images
-  (mainnet / devnet / mesa-mut).
+  (mainnet / devnet).
 - [../ops/OBSERVABILITY.md](../ops/OBSERVABILITY.md) — Prometheus metrics, structured
   logging, and periodic checkpoints.
-- [../ops/mesa-mut/TRUSTLESS-DEMO.md](../ops/mesa-mut/TRUSTLESS-DEMO.md) — the trustless
-  (SNARK-proof-gated) ingestion demo and architecture.
-- [../ops/mesa-mut/README.md](../ops/mesa-mut/README.md) — running a local mesa-mut indexer.
 
 ## Design & internals
 

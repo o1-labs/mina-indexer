@@ -23,8 +23,6 @@ files-to-fetch.list
 /.build
 /result
 
-# Downloaded mesa-mut precomputed blocks (see ops/mesa-mut/)
-/mesa-mut-blocks/
 
 # Local indexer runtime dir (DB, blocks, sockets) — the images use /data; local
 # runs use ./data. Never commit it.

@@ -298,11 +298,9 @@ impl IndexerState {
             .indexer_store
             .set_chain_id_for_network(&config.version.chain_id, &config.version.network)?;
 
-        // Select the genesis block by genesis state hash so mesa-mut (also
+        // Select the genesis block by genesis state hash so devnet (also
         // PcbVersion::V2) gets its own fork block rather than the mainnet one.
-        let genesis_block = if config.version.genesis.state_hash.0 == MESA_GENESIS_HASH {
-            GenesisBlock::new_mesa()?
-        } else if config.version.genesis.state_hash.0 == DEVNET_GENESIS_HASH {
+        let genesis_block = if config.version.genesis.state_hash.0 == DEVNET_GENESIS_HASH {
             GenesisBlock::new_devnet()?
         } else {
             match config.version.version {
@@ -537,7 +535,6 @@ impl IndexerState {
                     };
 
                     if diff.state_hash.0 != HARDFORK_GENESIS_HASH
-                        && diff.state_hash.0 != MESA_GENESIS_HASH
                         && diff.state_hash.0 != DEVNET_GENESIS_HASH
                     {
                         ledger_diffs.push((diff.clone(), accounts_accessed));

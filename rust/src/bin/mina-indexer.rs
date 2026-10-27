@@ -457,16 +457,10 @@ fn process_indexer_configuration(
 
     // indexer version
     let network = args.db.network;
-    // mesa and devnet run the newer node, which writes currency as decimal MINA;
+    // devnet runs the newer node, which writes currency as decimal MINA;
     // the hardfork mainnet node writes nanomina. Nothing in a block distinguishes
     // them, so the genesis hash is what decides. See [CurrencyEncoding].
-    let (version, chain_id, genesis) = if genesis_hash == MESA_GENESIS_HASH {
-        (
-            PcbVersion::V2(CurrencyEncoding::DecimalMina),
-            ChainId::mesa(),
-            GenesisVersion::mesa(),
-        )
-    } else if genesis_hash == DEVNET_GENESIS_HASH {
+    let (version, chain_id, genesis) = if genesis_hash == DEVNET_GENESIS_HASH {
         (
             PcbVersion::V2(CurrencyEncoding::DecimalMina),
             ChainId::devnet(),

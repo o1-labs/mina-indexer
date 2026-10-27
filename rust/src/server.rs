@@ -574,7 +574,7 @@ async fn retry_parse_precomputed_block(
     for attempt in 1..num_attempts {
         // Parse with the indexer's configured network version, NOT
         // `from_path` (which guesses the version from blockchain length via the
-        // mainnet hardfork threshold). On a non-mainnet hardfork like mesa-mut
+        // mainnet hardfork threshold). On a non-mainnet hardfork like devnet
         // that guess is wrong — every live-fetched block would be parsed as the
         // pre-fork version and fail with "missing field protocol_state", so the
         // tip could only ever advance via the BuildDB scan, never live fetch.
@@ -1241,20 +1241,6 @@ impl GenesisVersion {
         }
     }
 
-    pub fn mesa() -> Self {
-        use std::str::FromStr;
-        let last_vrf_output =
-            VrfOutput::from_str(MESA_GENESIS_LAST_VRF_OUTPUT).expect("mesa last vrf output");
-
-        Self {
-            last_vrf_output,
-            state_hash: MESA_GENESIS_HASH.into(),
-            prev_hash: MESA_GENESIS_PREV_STATE_HASH.into(),
-            blockchain_lenth: MESA_GENESIS_BLOCKCHAIN_LENGTH,
-            global_slot: MESA_GENESIS_GLOBAL_SLOT,
-        }
-    }
-
     pub fn devnet() -> Self {
         use std::str::FromStr;
         let last_vrf_output =
@@ -1304,17 +1290,6 @@ impl IndexerVersion {
             network,
             chain_id: ChainId::v2(),
             genesis: GenesisVersion::v2(),
-        }
-    }
-
-    pub fn mesa() -> Self {
-        let network = Network::from("mesa");
-
-        Self {
-            version: PcbVersion::V2(CurrencyEncoding::for_network(&network)),
-            network,
-            chain_id: ChainId::mesa(),
-            genesis: GenesisVersion::mesa(),
         }
     }
 

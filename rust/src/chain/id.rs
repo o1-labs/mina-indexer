@@ -68,11 +68,6 @@ impl ChainId {
         Self(HARDFORK_CHAIN_ID.to_string())
     }
 
-    /// mesa-mut chain id
-    pub fn mesa() -> Self {
-        Self(MESA_CHAIN_ID.to_string())
-    }
-
     /// devnet chain id
     pub fn devnet() -> Self {
         Self(DEVNET_CHAIN_ID.to_string())

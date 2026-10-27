@@ -33,18 +33,12 @@ impl std::default::Default for ChainData {
         let v2_genesis_state_hash: StateHash = HARDFORK_GENESIS_HASH.into();
         let v2_chain_id = ChainId::v2();
 
-        // mesa-mut chain data (also PcbVersion::V2). Both the fork genesis hash
-        // and the pre-fork original genesis hash (which mesa blocks carry in
-        // their `genesis_state_hash` field) map to the mesa V2 chain.
-        let mesa_genesis_state_hash: StateHash = MESA_GENESIS_HASH.into();
-        let mesa_original_genesis_state_hash: StateHash = MESA_ORIGINAL_GENESIS_HASH.into();
-
         // devnet chain data (also PcbVersion::V2), rooted at its fork genesis,
         // which every devnet block carries in `genesis_state_hash`.
         let devnet_genesis_state_hash: StateHash = DEVNET_GENESIS_HASH.into();
 
         // The hardfork mainnet node writes currency as nanomina; the newer node
-        // devnet and mesa run writes it as decimal MINA. The block does not say
+        // devnet runs writes it as decimal MINA. The block does not say
         // which -- both declare protocol_version transaction 3 -- so the chain
         // it belongs to is the only thing that does. See [CurrencyEncoding].
         Self(HashMap::from([
@@ -52,14 +46,6 @@ impl std::default::Default for ChainData {
             (
                 v2_genesis_state_hash,
                 (PcbVersion::V2(CurrencyEncoding::Nanomina), v2_chain_id),
-            ),
-            (
-                mesa_genesis_state_hash,
-                (PcbVersion::V2(CurrencyEncoding::DecimalMina), ChainId::mesa()),
-            ),
-            (
-                mesa_original_genesis_state_hash,
-                (PcbVersion::V2(CurrencyEncoding::DecimalMina), ChainId::mesa()),
             ),
             (
                 devnet_genesis_state_hash,
