@@ -247,8 +247,10 @@ fn same_digit_ranges(from: u32, to: u32) -> Vec<(u32, u32)> {
 /// Height of a well-formed `<network>-<height>-<hash>.json` name, else `None`
 fn block_file_height(network: &str, name: &str) -> Option<u32> {
     // a source name becomes a path in blocks_dir: reject separators, then
-    // malformed names
-    if name.contains(['/', '\\']) || !is_valid_block_file(name) {
+    // malformed names. Only plain `.json`: `is_valid_block_file` also admits
+    // `.json.gz`, which block ingestion can't read (no decompression, and the
+    // state hash is taken from the file stem).
+    if name.contains(['/', '\\']) || !name.ends_with(".json") || !is_valid_block_file(name) {
         return None;
     }
 
@@ -468,6 +470,17 @@ mod tests {
         assert_eq!(block_file_height("mainnet", &name), None);
         assert_eq!(block_file_height("devnet", "devnet-545435-x.json"), None);
         assert_eq!(block_file_height("devnet", &format!("../{name}")), None);
+
+        // compressed objects are not block files: the bucket's bundles, a gzipped block
+        for other in [
+            format!("devnet-bundle-{HASH_A}.tar.gz"),
+            "mainnet-bundle-2024-03-20.tar.zst".to_string(),
+            "2024-03-20-zstd-dictionary".to_string(),
+            format!("{name}.gz"),
+        ] {
+            assert_eq!(block_file_height("devnet", &other), None, "{other}");
+            assert_eq!(block_file_height("mainnet", &other), None, "{other}");
+        }
     }
 
     #[test]
@@ -562,6 +575,62 @@ mod tests {
             format!("GET /storage/v1/b/blocks/o/{a}?alt=media HTTP/1.1")
         );
 
+        Ok(())
+    }
+
+    /// An object stored with `Content-Encoding: gzip` comes back gzipped to a
+    /// client that accepts gzip; the block file must still be the plain JSON.
+    #[test]
+    fn gcs_download_decodes_gzip_content_encoding() -> anyhow::Result<()> {
+        use flate2::{write::GzEncoder, Compression};
+
+        let block = r#"{"version":4,"data":{"block":true}}"#;
+        let mut encoder = GzEncoder::new(vec![], Compression::default());
+        encoder.write_all(block.as_bytes())?;
+        let gzipped = encoder.finish()?;
+
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let endpoint = format!("http://{}", listener.local_addr()?);
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut headers = vec![];
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+                headers.push(line.trim_end().to_lowercase());
+            }
+            let mut stream = stream;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                gzipped.len()
+            )
+            .unwrap();
+            stream.write_all(&gzipped).unwrap();
+            headers
+        });
+
+        let name = format!("mainnet-548148-{HASH_A}.json");
+        let source = BlockSource::Gcs {
+            endpoint,
+            bucket: "blocks".into(),
+        };
+        let dir = tempfile::tempdir()?;
+        let dest = dir.path().join(&name);
+        source.download(&name, &dest)?;
+        assert_eq!(fs::read_to_string(dest)?, block);
+
+        let headers = server.join().unwrap();
+        assert!(
+            headers
+                .iter()
+                .any(|h| h.starts_with("accept-encoding:") && h.contains("gzip")),
+            "{headers:?}"
+        );
         Ok(())
     }
 
