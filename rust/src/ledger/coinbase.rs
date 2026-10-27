@@ -19,8 +19,8 @@ pub struct Coinbase {
     pub is_new_account: bool,
     pub receiver_balance: Option<u64>,
 
-    /// The block's network coinbase reward: mesa-mut pays 360 MINA, mainnet and
-    /// devnet 720
+    /// The block's network coinbase reward: devnet (mesa protocol) pays 360
+    /// MINA, mainnet 720
     pub reward: u64,
 }
 
@@ -203,19 +203,19 @@ mod tests {
 
     #[test]
     fn coinbase_reward_is_per_network() -> anyhow::Result<()> {
-        // mesa-mut halved the coinbase to 360 MINA. Paying the mainnet reward on a
-        // mesa block over-credits the producer by 360 MINA per block it produces,
-        // and the drift never washes out.
-        let mesa = PrecomputedBlock::parse_file(
+        // The mesa protocol halved the coinbase to 360 MINA. Paying the mainnet
+        // reward on a post-fork devnet block over-credits the producer by 360 MINA
+        // per block it produces, and the drift never washes out.
+        let devnet = PrecomputedBlock::parse_file(
             std::path::Path::new(
-                "./tests/data/misc_blocks/mesa-297736-3NK6RWU4RvrLkCnsM8hcWykcr2FiAa6XJrBTGBuuzNUU5mBadseV.json",
+                "./tests/data/devnet/devnet-546365-3NLP4wdhHVC6iPJPui2yZhL2BWbLMMqJNyBBVzYTpYvp7HP878Bd.json",
             ),
-            PcbVersion::V2(CurrencyEncoding::Nanomina),
+            PcbVersion::V2(CurrencyEncoding::DecimalMina),
         )?;
 
-        assert_eq!(mesa.coinbase_reward(), MESA_COINBASE_REWARD);
+        assert_eq!(devnet.coinbase_reward(), MESA_COINBASE_REWARD);
         assert_eq!(
-            Coinbase::from_precomputed(&mesa).amount(),
+            Coinbase::from_precomputed(&devnet).amount(),
             MESA_COINBASE_REWARD
         );
 
