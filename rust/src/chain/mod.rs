@@ -37,8 +37,11 @@ impl std::default::Default for ChainData {
         // which every devnet block carries in `genesis_state_hash`.
         let devnet_genesis_state_hash: StateHash = DEVNET_GENESIS_HASH.into();
 
+        // mainnet mesa chain data, rooted at its fork genesis like devnet
+        let mainnet_mesa_genesis_state_hash: StateHash = MAINNET_MESA_GENESIS_HASH.into();
+
         // The hardfork mainnet node writes currency as nanomina; the newer node
-        // devnet runs writes it as decimal MINA. The block does not say
+        // devnet and mesa mainnet run writes it as decimal MINA. The block does not say
         // which -- both declare protocol_version transaction 3 -- so the chain
         // it belongs to is the only thing that does. See [CurrencyEncoding].
         Self(HashMap::from([
@@ -52,6 +55,13 @@ impl std::default::Default for ChainData {
                 (
                     PcbVersion::V2(CurrencyEncoding::DecimalMina),
                     ChainId::devnet(),
+                ),
+            ),
+            (
+                mainnet_mesa_genesis_state_hash,
+                (
+                    PcbVersion::V2(CurrencyEncoding::DecimalMina),
+                    ChainId::mainnet_mesa(),
                 ),
             ),
         ]))

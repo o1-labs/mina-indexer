@@ -66,24 +66,30 @@ ad-hoc `cargo build` pass any value). Set `ulimit -n` ≥ 4096 before running th
 ## Key concepts (don't re-derive these)
 
 - **Network is selected by genesis HASH, not `--network`.** `bin/mina-indexer.rs` (~L389)
-  dispatches on `--genesis-hash`: `DEVNET_GENESIS_HASH` → V2/devnet, `HARDFORK_GENESIS_HASH` → V2/v2, else → V1/mainnet. The `--network` string is
+  dispatches on `--genesis-hash`: `DEVNET_GENESIS_HASH` → V2/devnet, `MAINNET_MESA_GENESIS_HASH` →
+  V2/mesa mainnet, `HARDFORK_GENESIS_HASH` → V2/v2 (Berkeley), else → V1/mainnet. The `--network` string is
   mostly cosmetic (and the filename prefix the fetcher writes). Genesis hashes live in
   `constants.rs`.
 - **Embedded vs supplied genesis ledger.** No `--genesis-ledger` ⇒ the embedded ledger for
   that version (mainnet V1 = `rust/data/genesis_ledgers/mainnet.json`). Hardfork networks
-  (devnet) supply a **state-dump** ledger at runtime via `--genesis-ledger`; their
-  genesis *block* is embedded (transactions emptied). devnet roots at its 2026-08-19 fork genesis
-  (545434), which its blocks already carry, and rejects blocks of the retired pre-fork
-  chain as another chain (`IndexerState::is_other_chain`).
+  rooted at a mesa fork supply a **state-dump** ledger at runtime via `--genesis-ledger`;
+  their genesis *block* is embedded (transactions emptied). devnet roots at its 2026-08-19
+  fork genesis (545434), mainnet at its 2026-09-03 fork genesis (548147). Their blocks
+  already carry the root, and blocks of the retired pre-fork chain are rejected as another
+  chain (`IndexerState::is_other_chain`). Both write currency as decimal MINA
+  (`CurrencyEncoding::for_chain`) and pay the 360 MINA mesa coinbase.
 - **Block filename contract:** `<network>-<height>-<hash>.json`, split on the first dash,
   height parsed as `u32` (`block/mod.rs` `extract_network_height_hash`). Fetchers must
   produce this exact shape. (The mesa-mut network was removed in Oct 2026; "mesa" in
-  the code now means the mesa *protocol*, which devnet runs since its fork.)
+  the code now means the mesa *protocol*, which devnet and mainnet run since their forks.)
 - **Block fetching is in-process** (`fetcher.rs`, `--block-source gs://<bucket>|file://<dir>`):
   a `Block Fetcher` subsystem lists the source by height range and downloads into
   `--blocks-dir` (gap fill + catch-up + follow); it never writes the DB — the watcher and
   reconcile ingest the files. Public source: `gs://mina_network_block_data` (mainnet/devnet,
-  already correctly named; no mainnet blocks < 296166, no devnet blocks 239699–552016).
+  already correctly named). It keeps only recent blocks (devnet 1–2 months, mainnet 3–6):
+  the gitops `block-data-archiver` moves older ones into the PRIVATE
+  `gs://mina-network-block-data-archive` (tar.gz + manifest per segment). A cold start
+  past that window restores a published DB snapshot (`MINA_SNAPSHOT_URL`).
   There are no fetch/recovery exe hooks any more.
 - **Ledgers are keyed by token:** `tokens: HashMap<TokenAddress, TokenLedger>`, each keyed
   by `(TokenAddress, PublicKey)`. Genesis accounts must be partitioned by token, not
