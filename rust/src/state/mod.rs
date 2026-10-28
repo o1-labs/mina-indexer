@@ -908,7 +908,7 @@ impl IndexerState {
             }
         }
 
-        if !branches_to_update.is_empty() {
+        let (extended_branch_index, mut extension) = if !branches_to_update.is_empty() {
             let mut extended_branch = self.dangling_branches.remove(extended_branch_index);
 
             for (n, dangling_branch_index) in branches_to_update.iter().enumerate() {
@@ -926,13 +926,46 @@ impl IndexerState {
             }
 
             self.dangling_branches.push(extended_branch);
-            Ok(ExtensionType::DanglingComplex)
+            (
+                self.dangling_branches.len() - 1,
+                ExtensionType::DanglingComplex,
+            )
         } else {
-            match direction {
-                ExtensionDirection::Forward => Ok(ExtensionType::DanglingSimpleForward),
-                ExtensionDirection::Reverse => Ok(ExtensionType::DanglingSimpleReverse),
+            let extension = match direction {
+                ExtensionDirection::Forward => ExtensionType::DanglingSimpleForward,
+                ExtensionDirection::Reverse => ExtensionType::DanglingSimpleReverse,
+            };
+            (extended_branch_index, extension)
+        };
+
+        // the block that became the extended branch's new root can also extend
+        // another dangling branch forward: merge the extended branch under the
+        // block's parent there. Otherwise, once that other branch merges into the
+        // root branch, the extended branch hangs off a block already in the
+        // witness tree and never merges.
+        if matches!(direction, ExtensionDirection::Reverse) {
+            let parent_hash = precomputed_block.previous_state_hash();
+            let junction = self
+                .dangling_branches
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| *index != extended_branch_index)
+                .find_map(|(index, branch)| branch.node_id(&parent_hash).map(|id| (index, id)));
+
+            if let Some((index, junction_id)) = junction {
+                let extended_branch = self.dangling_branches.remove(extended_branch_index);
+                let index = if extended_branch_index < index {
+                    index - 1
+                } else {
+                    index
+                };
+
+                self.dangling_branches[index].merge_on(&junction_id, &extended_branch);
+                extension = ExtensionType::DanglingComplex;
             }
         }
+
+        Ok(extension)
     }
 
     /// Spawns a new dangling branch in the witness tree
