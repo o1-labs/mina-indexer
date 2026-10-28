@@ -35,6 +35,12 @@ private = { ignore = true }
 crate = "actix-governor"
 allow = ["GPL-3.0-or-later"]
 
+# webpki-roots (the Mozilla CA bundle, pulled in by ureq for the block fetcher)
+# is CDLA-Permissive-2.0, a permissive data license. Scoped to that crate.
+[[licenses.exceptions]]
+crate = "webpki-roots"
+allow = ["CDLA-Permissive-2.0"]
+
 [bans]
 # Duplicate transitive versions are common and benign in a large tree; surface
 # them but don't block CI.

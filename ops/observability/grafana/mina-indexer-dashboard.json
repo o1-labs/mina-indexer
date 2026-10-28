@@ -692,7 +692,7 @@
       "id": 13,
       "type": "timeseries",
       "title": "Fetch invocations vs failures",
-      "description": "fetch-new-blocks call rate and spawn-failure rate.",
+      "description": "Block fetcher cycle rate and failed source request rate.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -760,7 +760,7 @@
       "id": 14,
       "type": "timeseries",
       "title": "Fetch duration",
-      "description": "Fetcher wall time \u2014 runs synchronously in the timer branch, so a slow fetch starves reconcile.",
+      "description": "Block fetcher cycle wall time \u2014 long during catch-up, short at the tip.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"

@@ -109,7 +109,6 @@
             net,
             indexer,
             verifyBlock,
-            fetcher,
             entry,
             genesisGz ? null,
           }:
@@ -128,7 +127,6 @@
             contents =
               [
                 indexer
-                fetcher
                 verifyBlock
                 entry
               ]
@@ -226,40 +224,10 @@
             text = builtins.readFile ./ops/verify-block.sh;
           };
 
-          # In-image block puller for the --fetch-new-blocks-exe /
-          # --missing-block-recovery-exe hooks (self-contained: bundles its
-          # curl/grep/sed/coreutils deps, so the minimal image needs nothing).
-          # Pulls from gs://mina_network_block_data, whose objects are already
-          # named <network>-<height>-<hash>.json.
-          block-pull = pkgs.writeShellApplication {
-            name = "block-pull";
-            runtimeInputs = with pkgs; [ curl gnugrep gnused coreutils ];
-            bashOptions = [ "nounset" "pipefail" ];
-            text = builtins.readFile ./ops/block-pull.sh;
-          };
-
-          # One-shot bulk fetcher, used on first boot only. block-pull follows the
-          # tip and is deliberately slow (a small, synchronous window, so it never
-          # starves reconcile); bootstrapping a fresh instance with it would take
-          # hours. This lists by height prefix and downloads in parallel instead.
-          block-bootstrap = pkgs.writeShellApplication {
-            name = "block-bootstrap";
-            runtimeInputs = with pkgs; [
-              curl
-              gnugrep
-              gnused
-              gawk
-              coreutils
-              findutils
-            ];
-            bashOptions = [ "nounset" "pipefail" ];
-            text = builtins.readFile ./ops/block-bootstrap.sh;
-          };
-
           # Placeholder health endpoint held during the first-boot window, before
           # `server start` binds the port. Without it a probe sees `connection
           # refused` for minutes and a livenessProbe restarts the container
-          # mid-fetch, so the bootstrap never finishes.
+          # mid-bootstrap, so the bootstrap never finishes.
           bootstrap-health = pkgs.writeShellApplication {
             name = "bootstrap-health";
             runtimeInputs = with pkgs; [
@@ -273,7 +241,7 @@
 
           # Configless per-network entrypoints: each exec's mina-indexer with all
           # flags baked in (zero args/mounts needed). Each per-network file holds
-          # only its variables (NETWORK / GENESIS_HASH / FETCH_EXE / GENESIS_GZ);
+          # only its variables (NETWORK / GENESIS_HASH / GENESIS_GZ);
           # the shared body (checkpoints, genesis decompression, retention, the
           # server-start invocation) lives once in common.sh and is concatenated
           # at build time. devnet decompresses its baked genesis on first boot.
@@ -286,7 +254,6 @@
               name = "indexer-entry-${net}";
               runtimeInputs = [
                 mina-indexer
-                block-bootstrap
                 bootstrap-health
                 # snapshot restore: download + manifest read
                 pkgs.curl
@@ -310,18 +277,15 @@
             net = "mainnet";
             indexer = mina-indexer;
             verifyBlock = verify-block;
-            fetcher = block-pull;
             entry = indexer-entry-mainnet;
           };
           "dockerImage-devnet" = mkIndexerImage {
             net = "devnet";
             indexer = mina-indexer;
             verifyBlock = verify-block;
-            fetcher = block-pull;
             entry = indexer-entry-devnet;
             genesisGz = devnetGenesisGz;
           };
-
           # Production OCI image. Uses streamLayeredImage for cache-friendly
           # layers, ships only the runtime closure (no source tree), runs as a
           # non-root user, and is reproducible (pinned `created`).

@@ -42,14 +42,12 @@ SHELL_SCRIPTS = %W[
   ops/ci/tier3
   ops/ci/build-and-test
   tests/regression.bash
-  tests/recovery.sh
   ops/traverse-canonical-chain.sh
   ops/correct-file-names.sh
   ops/upload-staking-ledgers.sh
   ops/upload-snapshot.sh
   ops/upload-granola-blocks
   ops/calculate-archive-ledgers.sh
-  ops/recover-block
 ]
 
 def run(cmd, *args, dir: TOP)

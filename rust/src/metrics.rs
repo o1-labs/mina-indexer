@@ -77,22 +77,21 @@ pub static DANGLING_BRANCHES: LazyLock<IntGauge> = LazyLock::new(|| {
     .unwrap()
 });
 
-/// Wall time of each fetch-new-blocks invocation (surfaces a slow/blocking
-/// fetcher).
+/// Wall time of each block fetcher cycle (gap fill + catch-up/follow).
 pub static FETCH_SECONDS: LazyLock<Histogram> = LazyLock::new(|| {
     register_histogram!(
         "mina_indexer_fetch_seconds",
-        "Wall time of a fetch-new-blocks invocation",
+        "Wall time of a block fetcher cycle",
         vec![0.1, 0.5, 1.0, 5.0, 15.0, 30.0, 60.0, 120.0, 300.0]
     )
     .unwrap()
 });
 
-/// Total fetch-new-blocks invocations.
+/// Total block fetcher cycles.
 pub static FETCH_INVOCATIONS: LazyLock<IntCounter> = LazyLock::new(|| {
     register_int_counter!(
         "mina_indexer_fetch_invocations_total",
-        "Total fetch-new-blocks invocations"
+        "Total block fetcher cycles"
     )
     .unwrap()
 });
@@ -127,13 +126,22 @@ pub static BLOCKS_INGEST_FAILED: LazyLock<IntCounter> = LazyLock::new(|| {
     .unwrap()
 });
 
-/// Total fetch-new-blocks invocations that failed to run (the external fetcher
-/// could not be spawned). Pairs with `FETCH_INVOCATIONS` to give a fetch error
-/// rate; a stuck fetcher otherwise looks identical to "no new blocks".
+/// Total failed block source requests (a listing or a download that failed
+/// after retries). Pairs with `FETCH_INVOCATIONS` to give a fetch error rate;
+/// a stuck fetcher otherwise looks identical to "no new blocks".
 pub static FETCH_FAILURES: LazyLock<IntCounter> = LazyLock::new(|| {
     register_int_counter!(
         "mina_indexer_fetch_failures_total",
-        "Total fetch-new-blocks invocations that failed to run"
+        "Total failed block source listings and downloads"
+    )
+    .unwrap()
+});
+
+/// Total block files the block fetcher downloaded into `blocks_dir`.
+pub static FETCH_BLOCKS_DOWNLOADED: LazyLock<IntCounter> = LazyLock::new(|| {
+    register_int_counter!(
+        "mina_indexer_fetch_blocks_downloaded_total",
+        "Total block files downloaded into blocks_dir by the block fetcher"
     )
     .unwrap()
 });
@@ -242,6 +250,7 @@ pub fn init() {
     LazyLock::force(&HTTP_REQUEST_DURATION);
     LazyLock::force(&BLOCKS_INGEST_FAILED);
     LazyLock::force(&FETCH_FAILURES);
+    LazyLock::force(&FETCH_BLOCKS_DOWNLOADED);
     LazyLock::force(&DB_ESTIMATED_LIVE_DATA_BYTES);
     LazyLock::force(&DB_SST_FILES_BYTES);
     LazyLock::force(&DB_ESTIMATED_NUM_KEYS);

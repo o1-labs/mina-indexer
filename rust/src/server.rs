@@ -12,6 +12,7 @@ use crate::{
     chain::{ChainId, Network},
     cli::server::ServerArgsJson,
     constants::*,
+    fetcher::{BlockFetcher, BlockSource},
     ledger::{
         genesis::GenesisLedger, staking::StakingLedger, store::staking::StakingLedgerStore,
         LedgerHash,
@@ -26,7 +27,6 @@ use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watche
 use serde::{Deserialize, Serialize};
 use speedb::checkpoint::Checkpoint;
 use std::{
-    collections::HashSet,
     fs,
     path::{Path, PathBuf},
     process,
@@ -70,12 +70,10 @@ pub struct IndexerConfiguration {
     pub reporting_freq: u32,
     pub domain_socket_path: PathBuf,
     pub do_not_ingest_orphan_blocks: bool,
-    pub fetch_new_blocks_exe: Option<PathBuf>,
-    pub fetch_new_blocks_delay: Option<u64>,
+    pub block_source: Option<BlockSource>,
+    pub block_fetch_interval: u64,
+    pub block_fetch_workers: usize,
     pub verify_block_exe: Option<PathBuf>,
-    pub missing_block_recovery_exe: Option<PathBuf>,
-    pub missing_block_recovery_delay: Option<u64>,
-    pub missing_block_recovery_batch: bool,
     pub blocks_retention_length: Option<u32>,
     pub check_mode: bool,
 }
@@ -299,13 +297,10 @@ impl IndexerConfiguration {
         let staking_ledgers_dir = self.staking_ledgers_dir.clone();
         let domain_socket_path = self.domain_socket_path.clone();
 
-        let fetch_new_blocks_delay = self.fetch_new_blocks_delay;
-        let fetch_new_blocks_exe = self.fetch_new_blocks_exe.clone();
+        let block_source = self.block_source.clone();
+        let block_fetch_interval = Duration::from_secs(self.block_fetch_interval);
+        let block_fetch_workers = self.block_fetch_workers;
         let verify_block_exe = self.verify_block_exe.clone();
-
-        let missing_block_recovery_delay = self.missing_block_recovery_delay;
-        let missing_block_recovery_exe = self.missing_block_recovery_exe.clone();
-        let missing_block_recovery_batch = self.missing_block_recovery_batch;
         let blocks_retention_length = self.blocks_retention_length;
 
         // initialize witness tree & connect database
@@ -319,17 +314,23 @@ impl IndexerConfiguration {
         // read-only state
         start_uds_server(&subsys, state.clone(), &domain_socket_path).await?;
 
-        // modifies the state
-        let missing_block_recovery =
-            missing_block_recovery_exe.map(|exe| MissingBlockRecoveryOptions {
-                exe,
-                batch: missing_block_recovery_batch,
-                delay: missing_block_recovery_delay.unwrap_or(180),
-            });
-        let fetch_new_blocks = fetch_new_blocks_exe.map(|exe| FetchNewBlocksOptions {
-            exe,
-            delay: fetch_new_blocks_delay.unwrap_or(180),
-        });
+        // fetches blocks into the blocks dir; the watcher & reconcile ingest them
+        let reconcile_interval = match (block_source, blocks_dir.as_ref()) {
+            (Some(source), Some(blocks_dir)) => {
+                let fetcher = BlockFetcher {
+                    source,
+                    blocks_dir: blocks_dir.clone(),
+                    interval: block_fetch_interval,
+                    workers: block_fetch_workers,
+                };
+                let state = state.clone();
+                subsys.start(SubsystemBuilder::new("Block Fetcher", move |s| {
+                    fetcher.run(s, state)
+                }));
+                block_fetch_interval
+            }
+            _ => DEFAULT_RECONCILE_INTERVAL,
+        };
 
         // optional periodic DB checkpoints (opt-in via MINA_CHECKPOINT_DIR; the
         // configless images enable it so a crash resumes from a recent consistent
@@ -342,8 +343,7 @@ impl IndexerConfiguration {
             &subsys,
             blocks_dir,
             staking_ledgers_dir,
-            missing_block_recovery,
-            fetch_new_blocks,
+            reconcile_interval,
             verify_block_exe,
             blocks_retention_length,
             state.clone(),
@@ -428,16 +428,8 @@ fn matches_event_kind(kind: EventKind) -> bool {
     )
 }
 
-struct MissingBlockRecoveryOptions {
-    pub delay: u64,
-    pub exe: PathBuf,
-    pub batch: bool,
-}
-
-struct FetchNewBlocksOptions {
-    pub delay: u64,
-    pub exe: PathBuf,
-}
+/// Reconcile & retention cadence when no block fetcher runs
+const DEFAULT_RECONCILE_INTERVAL: Duration = Duration::from_secs(180);
 
 /// Starts filesystem watchers & runs the mina indexer
 #[allow(clippy::too_many_arguments)]
@@ -445,8 +437,7 @@ async fn run_indexer<P: AsRef<Path>>(
     subsys: &SubsystemHandle,
     blocks_dir: Option<P>,
     staking_ledgers_dir: Option<P>,
-    missing_block_recovery: Option<MissingBlockRecoveryOptions>,
-    fetch_new_blocks_opts: Option<FetchNewBlocksOptions>,
+    reconcile_interval: Duration,
     verify_block_exe: Option<PathBuf>,
     blocks_retention_length: Option<u32>,
     state: Arc<RwLock<IndexerState>>,
@@ -483,15 +474,6 @@ async fn run_indexer<P: AsRef<Path>>(
         );
     }
 
-    // fetch new block options
-    let fetch_new_blocks_delay = fetch_new_blocks_opts.as_ref().map(|f| f.delay);
-    let fetch_new_blocks_exe = fetch_new_blocks_opts.map(|f| f.exe);
-
-    // missing block recovery options
-    let missing_block_recovery_batch = missing_block_recovery.as_ref().is_some_and(|m| m.batch);
-    let missing_block_recovery_delay = missing_block_recovery.as_ref().map(|m| m.delay);
-    let missing_block_recovery_exe = missing_block_recovery.map(|m| m.exe);
-
     if let Some(retention) = blocks_retention_length {
         let effective = retention.max(MAINNET_TRANSITION_FRONTIER_K);
         info!(
@@ -518,24 +500,14 @@ async fn run_indexer<P: AsRef<Path>>(
                 }
             }
 
-            // fetch new blocks & recover missing blocks
-            _ = tokio::time::sleep(std::time::Duration::from_secs(
-                fetch_new_blocks_delay.unwrap_or(180).min(missing_block_recovery_delay.unwrap_or(180))
-            )) => {
+            // reconcile & prune the blocks dir
+            _ = tokio::time::sleep(reconcile_interval) => {
                 if let Some(ref blocks_dir) = blocks_dir {
-                    if let Some(ref fetch_new_blocks_exe) = fetch_new_blocks_exe {
-                        fetch_new_blocks(&state, &blocks_dir, fetch_new_blocks_exe).await?
-                    }
-
-                    if let Some(ref missing_block_recovery_exe) = missing_block_recovery_exe {
-                        recover_missing_blocks(&state, &blocks_dir, missing_block_recovery_exe, missing_block_recovery_batch).await?
-                    }
-
                     // Safety net: ingest any on-disk block the fs-watcher missed.
                     // inotify has a bounded event queue; a bulk fetch (hundreds
                     // of files at once) overflows it and silently drops events,
-                    // leaving connectable blocks orphaned on disk that the fetch
-                    // hook then skips (already downloaded) — wedging the tip.
+                    // leaving connectable blocks orphaned on disk that the
+                    // fetcher then skips (already downloaded) — wedging the tip.
                     reconcile_blocks_dir(&state, blocks_dir.as_ref(), verify_block_exe.as_deref()).await?;
 
                     // Retention: drop ingested block files below the window so
@@ -589,9 +561,9 @@ async fn retry_parse_precomputed_block(
     }
 
     // Don't panic on a single bad block — flag it and let the caller skip it so
-    // the indexer stays up. A transiently-bad block (e.g. a partial download) is
-    // re-fetched later by missing-block-recovery and inserted then; a
-    // permanently-incompatible one (e.g. a pre-fork block) stays skipped.
+    // the indexer stays up. The block fetcher only publishes complete downloads,
+    // so a block that fails here is permanently incompatible (e.g. a pre-fork
+    // block) and stays skipped.
     anyhow::bail!(
         "Failed to parse precomputed block {} after {num_attempts} attempts: {}",
         path.display(),
@@ -1083,135 +1055,7 @@ async fn check_staking_ledger(state: &Arc<RwLock<IndexerState>>, path: &Path) ->
 }
 
 /// Fetch new blocks
-async fn fetch_new_blocks(
-    state: &Arc<RwLock<IndexerState>>,
-    blocks_dir: impl AsRef<Path>,
-    fetch_new_blocks_exe: impl AsRef<Path>,
-) -> anyhow::Result<()> {
-    debug!("Fetching new blocks");
-    crate::metrics::FETCH_INVOCATIONS.inc();
-    let _fetch_timer = crate::metrics::FETCH_SECONDS.start_timer();
-
-    let state = state.read().await;
-    let network = state.version.network.clone();
-    let new_block_length = state.best_tip_block().blockchain_length + 1;
-
-    let mut cmd = std::process::Command::new(fetch_new_blocks_exe.as_ref().display().to_string());
-    let cmd = cmd.args([
-        &network.to_string(),
-        &new_block_length.to_string(),
-        &blocks_dir.as_ref().display().to_string(),
-    ]);
-
-    match cmd.output() {
-        Ok(output) => {
-            let stdout = String::from_utf8(output.stdout)?;
-            let stdout = stdout.trim_end();
-
-            if !stdout.is_empty() {
-                tracing::info!(network = %network, output = %stdout, "fetch-new-blocks output");
-            }
-
-            let stderr = String::from_utf8(output.stderr)?;
-            let stderr = stderr.trim_end();
-
-            if !stderr.is_empty() {
-                tracing::info!(network = %network, output = %stderr, "fetch-new-blocks stderr");
-            }
-        }
-        Err(e) => {
-            crate::metrics::FETCH_FAILURES.inc();
-            tracing::error!(
-                network = %network,
-                error = %e,
-                program = %cmd.get_program().to_string_lossy(),
-                args = ?cmd.get_args().map(|a| a.to_string_lossy()).collect::<Vec<_>>(),
-                "Error fetching new blocks"
-            );
-        }
-    }
-
-    Ok(())
-}
-
 /// Recovers missing blocks
-async fn recover_missing_blocks(
-    state: &Arc<RwLock<IndexerState>>,
-    blocks_dir: impl AsRef<Path>,
-    missing_block_recovery_exe: impl AsRef<Path>,
-    batch_recovery: bool,
-) -> anyhow::Result<()> {
-    debug!("Running missing block recovery");
-
-    let state = state.read().await;
-    let network = state.version.network.clone();
-    let missing_parent_lengths = state
-        .dangling_branches
-        .iter()
-        .map(|b| b.root_block().blockchain_length.saturating_sub(1))
-        .collect::<HashSet<_>>();
-
-    // exit early if no missing blocks
-    if missing_parent_lengths.is_empty() {
-        debug!("No missing blocks found");
-        return Ok(());
-    }
-
-    let run_missing_blocks_recovery = |blockchain_length: u32| {
-        let mut cmd =
-            std::process::Command::new(missing_block_recovery_exe.as_ref().display().to_string());
-        let cmd = cmd.args([
-            &network.to_string(),
-            &blockchain_length.to_string(),
-            &blocks_dir.as_ref().display().to_string(),
-        ]);
-
-        match cmd.output() {
-            Ok(output) => {
-                // non-UTF8 subprocess output must not crash the indexer
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stdout = stdout.trim_end();
-
-                if !stdout.is_empty() {
-                    info!("Missing block recovery: {}", stdout);
-                }
-
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let stderr = stderr.trim_end();
-
-                if !stderr.is_empty() {
-                    info!("Missing block recovery: {}", stderr);
-                }
-            }
-            Err(e) => error!(
-                "Error recovery missing block: {}, pgm: {}, args: {:?}",
-                e,
-                cmd.get_program().to_str().unwrap(),
-                cmd.get_args()
-                    .map(|arg| arg.to_str().unwrap())
-                    .collect::<Vec<_>>()
-            ),
-        }
-    };
-
-    debug!("Getting missing parent blocks of dangling roots");
-
-    if batch_recovery {
-        let min_missing_length = missing_parent_lengths.iter().min().cloned();
-        let max_missing_length = missing_parent_lengths.iter().max().cloned();
-
-        if let (Some(min), Some(max)) = (min_missing_length, max_missing_length) {
-            (min..=max).for_each(run_missing_blocks_recovery)
-        }
-    } else {
-        missing_parent_lengths
-            .into_iter()
-            .for_each(run_missing_blocks_recovery);
-    }
-
-    Ok(())
-}
-
 impl GenesisVersion {
     pub fn v1() -> Self {
         use std::str::FromStr;
@@ -1331,12 +1175,10 @@ impl From<(ServerArgsJson, PathBuf)> for IndexerConfiguration {
             ledger_cadence: value.0.ledger_cadence,
             reporting_freq: value.0.reporting_freq,
             do_not_ingest_orphan_blocks: value.0.do_not_ingest_orphan_blocks,
-            fetch_new_blocks_exe: value.0.fetch_new_blocks_exe.map(Into::into),
-            fetch_new_blocks_delay: value.0.fetch_new_blocks_delay,
+            block_source: value.0.block_source.and_then(|s| s.parse().ok()),
+            block_fetch_interval: value.0.block_fetch_interval,
+            block_fetch_workers: value.0.block_fetch_workers,
             verify_block_exe: value.0.verify_block_exe.map(Into::into),
-            missing_block_recovery_exe: value.0.missing_block_recovery_exe.map(Into::into),
-            missing_block_recovery_delay: value.0.missing_block_recovery_delay,
-            missing_block_recovery_batch: value.0.missing_block_recovery_batch.unwrap_or_default(),
             blocks_retention_length: value.0.blocks_retention_length,
             check_mode: value.0.check_mode,
         }

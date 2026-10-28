@@ -58,6 +58,7 @@ rust_decimal_macros = { version = "1.*", default-features = false }
 blake2 = { version = "0.*", default-features = false }
 bs58 = { version = "0.*", default-features = false, features = ["check", "std"]}
 tempfile = { version = "3.*", default-features = false }
+ureq = { version = "2", features = ["json"] }
 actix-web = { version = "4.9.0", default-features = false , features = ["macros"] }
 actix-cors = { version = "=0.7.0", default-features = false }
 async-graphql = { version = "7.*", default-features = false, features = ["graphiql"] }
@@ -78,7 +79,6 @@ flate2 = "1.0.35"
 actix-governor = "0.10.0"
 
 [dev-dependencies]
-ureq = { version = "2", features = ["json"] }
 quickcheck = "1.0.3"
 quickcheck_macros = "1.0.0"
 pretty_assertions = "1.4.1"
