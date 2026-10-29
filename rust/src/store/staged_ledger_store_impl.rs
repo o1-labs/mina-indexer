@@ -63,6 +63,19 @@ impl StagedLedgerStore for IndexerStore {
             )?
             .is_none()
         {
+            // A full staged ledger is stored here and the account is not in it:
+            // it did not exist yet, so a diff collected above creates it. Stop
+            // and reconstruct it from an empty base, as at the genesis base.
+            // Walking on to genesis would parse every block diff on the way, for
+            // each account created since the last stored ledger.
+            if self
+                .database
+                .get_cf(self.staged_ledgers_persisted_cf(), curr_state_hash.0.as_bytes())?
+                .is_some()
+            {
+                break;
+            }
+
             match self.get_block_parent_hash(&curr_state_hash)? {
                 Some(parent_hash) => {
                     apply_block_diffs.push(curr_state_hash.clone());

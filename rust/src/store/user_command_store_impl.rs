@@ -12,7 +12,7 @@ use crate::{
         BlockComparison,
     },
     command::{
-        signed::{SignedCommandWithData, TxnHash},
+        signed::{SignedCommand, SignedCommandWithData, TxnHash},
         store::UserCommandStore,
         UserCommandWithStatus, UserCommandWithStatusT,
     },
@@ -31,7 +31,7 @@ use crate::{
 use anyhow::{bail, Context, Result};
 use log::{trace, warn};
 use speedb::{DBIterator, Direction, IteratorMode, WriteBatch};
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
 impl UserCommandStore for IndexerStore {
     fn add_user_commands_batch(
@@ -148,18 +148,32 @@ impl UserCommandStore for IndexerStore {
             }
         }
 
+        // index the commands by public key in one pass: the keys of each
+        // command are computed once, not once per key in the block (a large
+        // zkApp block made keys x commands x command-clone dominate ingest)
+        let mut pk_commands: HashMap<PublicKey, Vec<usize>> = HashMap::new();
+        for (index, command) in user_commands.iter().enumerate() {
+            for pk in SignedCommand::from(command.clone()).all_command_public_keys() {
+                let indices = pk_commands.entry(pk).or_default();
+                if indices.last() != Some(&index) {
+                    indices.push(index);
+                }
+            }
+        }
+
         // per account
         // add: "pk -> linked list of signed commands with state hash"
         for pk in block.all_command_public_keys() {
             let n = self
                 .get_pk_num_user_commands_blocks(&pk)?
                 .unwrap_or_default();
-            let block_pk_commands: Vec<SignedCommandWithData> = user_commands
-                .iter()
-                .filter(|cmd| cmd.contains_public_key(&pk))
-                .map(|c| {
+            let block_pk_commands: Vec<SignedCommandWithData> = pk_commands
+                .get(&pk)
+                .into_iter()
+                .flatten()
+                .map(|&index| {
                     SignedCommandWithData::from(
-                        c.clone(),
+                        user_commands[index].clone(),
                         &state_hash.0,
                         block_height,
                         block.timestamp(),
