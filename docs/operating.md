@@ -153,7 +153,7 @@ mina-indexer database verify-integrity --database-dir /data/db || alert "indexer
 | `RUST_LOG` | unset | Standard `tracing`/`env_logger` filter; overrides `--log-level`. e.g. `warn,mina_indexer=debug`. |
 | `MINA_CHECKPOINT_DIR` | unset | Enables periodic speedb checkpoints to `<dir>/latest`. |
 | `MINA_CHECKPOINT_INTERVAL_SECS` | 3600 | Checkpoint cadence (hourly by default). |
-| `MINA_SNAPSHOT_URL` | unset | Images only: on first boot (no `/data/db`), restore this snapshot tar and catch up from its best tip instead of building from blocks. See [Cold start from a published snapshot](#cold-start-from-a-published-snapshot). |
+| `MINA_SNAPSHOT_URL` | the o1Labs snapshot (images) | Images only: on first boot (no `/data/db`), restore this snapshot tar and catch up from its best tip instead of building from blocks. Defaults to `https://storage.googleapis.com/mina-indexer-snapshots/<network>/<network>-latest.tar`; set it empty to always build from blocks. See [Cold start from a published snapshot](#cold-start-from-a-published-snapshot). |
 | `MINA_BLOCKS_RETENTION_LENGTH` | 1000 (images) | Block-file retention window the configless image entrypoints pass to `--blocks-retention-length`. Set `0` to disable and keep every block. |
 | `GIT_COMMIT_HASH` | — | Build-time version stamp (set by Nix). |
 
@@ -271,11 +271,26 @@ clobbered. For a corrupt-but-present DB, clear `/data/db` (or run once with `--r
 Building a database from blocks takes time in proportion to the chain since its root, and
 that grows every day. A snapshot makes a cold start one download plus a short catch-up.
 
-- **Operator:** publish snapshots on a schedule with [`ops/dr/backup.sh`](../ops/dr/backup.sh)
-  (it wraps `mina-indexer database snapshot`). Also copy the newest one to a fixed URL, for
-  example `REMOTE_CMD='rclone copyto {src} gcs:<bucket>/devnet/{name} && rclone copyto {src} gcs:<bucket>/devnet/latest.tar'`.
-- **Image:** set `MINA_SNAPSHOT_URL` to that fixed URL (a public GCS object URL works without
-  credentials). On first boot only (no `/data/db`), the entrypoint streams the download into
+- **Published snapshots:** o1Labs publishes one per network in the public bucket
+  `gs://mina-indexer-snapshots` (no credentials needed to read):
+  - `<network>/<network>-latest.tar` and `<network>-latest.manifest.json`: the newest one
+    (`Cache-Control: no-cache`);
+  - `<network>/<network>-<height>-<hash>-store-<version>.tar` and `.manifest.json`: each
+    published one, immutable. The manifest gives its size, `sha256`, the `SNAPSHOT_MANIFEST`
+    below and a restore command.
+- **Publisher:** the images ship `snapshot-publish`, a loop to run as a sidecar next to the
+  indexer (same pod, same `/data`). When the published `latest` is older than
+  `MINA_SNAPSHOT_PUBLISH_INTERVAL_SECS` (default 7 days) and `/readyz` is 200, it takes an
+  online snapshot over `/data/mi.sock`, checks that it belongs to the network's genesis and
+  uploads it with `rclone` (`GOOGLE_APPLICATION_CREDENTIALS` = a service account key that can
+  write the bucket; `MINA_SNAPSHOT_BUCKET` selects another bucket). It needs free space on
+  `/data` of about the database size. A failure is logged and retried; the loop never exits.
+  Keep the interval shorter than the block bucket's retention: a snapshot older than the
+  oldest block still in the bucket leaves a gap that a cold start cannot fill.
+  Outside Kubernetes, [`ops/dr/backup.sh`](../ops/dr/backup.sh) also wraps
+  `mina-indexer database snapshot`.
+- **Image:** `MINA_SNAPSHOT_URL` defaults to the network's published `latest` (set it to your
+  own URL, or empty to disable). On first boot only (no `/data/db`), the entrypoint streams the download into
   `database restore --snapshot-file - --genesis-hash <network genesis>` — the archive and the
   database are never on disk together — then bulk-fetches blocks from `k = 290` below the
   snapshot's best tip.

@@ -117,6 +117,7 @@
             indexer,
             verifyBlock,
             entry,
+            snapshotPublish,
             genesisGz ? null,
           }:
           let
@@ -136,6 +137,7 @@
                 indexer
                 verifyBlock
                 entry
+                snapshotPublish
               ]
               ++ (with pkgs; [
                 bash
@@ -272,6 +274,32 @@
                 builtins.readFile (./ops/entrypoints + "/${net}.sh")
                 + builtins.readFile ./ops/entrypoints/common.sh;
             };
+          # Snapshot publisher (ops/snapshot-publish.sh), per network like the
+          # entrypoints: run as a sidecar next to the indexer to keep the
+          # published cold-start snapshot fresh.
+          mkSnapshotPublish =
+            { net }:
+            pkgs.writeShellApplication {
+              name = "snapshot-publish";
+              runtimeInputs = [
+                mina-indexer
+                pkgs.rclone
+                pkgs.curl
+                pkgs.jq
+                pkgs.gnutar
+                pkgs.coreutils
+              ];
+              # never errexit: a failed publish is retried, the loop never exits
+              bashOptions = [ "nounset" "pipefail" ];
+              # the per-network file also sets GENESIS_GZ, which only the
+              # entrypoint reads
+              excludeShellChecks = [ "SC2034" ];
+              text =
+                builtins.readFile (./ops/entrypoints + "/${net}.sh")
+                + builtins.readFile ./ops/snapshot-publish.sh;
+            };
+          snapshot-publish-mainnet = mkSnapshotPublish { net = "mainnet"; };
+          snapshot-publish-devnet = mkSnapshotPublish { net = "devnet"; };
           indexer-entry-mainnet = mkEntry {
             net = "mainnet";
             needsGzip = true;
@@ -288,6 +316,7 @@
             indexer = mina-indexer;
             verifyBlock = verify-block;
             entry = indexer-entry-mainnet;
+            snapshotPublish = snapshot-publish-mainnet;
             genesisGz = mainnetGenesisGz;
           };
           "dockerImage-devnet" = mkIndexerImage {
@@ -295,6 +324,7 @@
             indexer = mina-indexer;
             verifyBlock = verify-block;
             entry = indexer-entry-devnet;
+            snapshotPublish = snapshot-publish-devnet;
             genesisGz = devnetGenesisGz;
           };
           # Production OCI image. Uses streamLayeredImage for cache-friendly

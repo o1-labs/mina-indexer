@@ -9,3 +9,6 @@
 NETWORK=mainnet
 GENESIS_HASH=3NLntCRR9RvjtzP24Q1dRvdhmpjiPvfKGaJmAZuJgYoqGpevqDR7
 GENESIS_GZ=/genesis/mainnet.json.gz
+# o1Labs publishes a mainnet snapshot here (ops/snapshot-publish.sh); the shared
+# body restores it on first boot unless MINA_SNAPSHOT_URL overrides it.
+DEFAULT_SNAPSHOT_URL=https://storage.googleapis.com/mina-indexer-snapshots/mainnet/mainnet-latest.tar
