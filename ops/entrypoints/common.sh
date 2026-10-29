@@ -81,13 +81,16 @@ fi
 # catch-up from the snapshot's best tip, however long the chain gets.
 #
 # MINA_SNAPSHOT_URL is a plain HTTP(S) URL of a snapshot tar (e.g. a public GCS
-# object the operator overwrites with the newest one). The download is streamed
+# object the operator overwrites with the newest one). It defaults to the
+# snapshot o1Labs publishes for this network (DEFAULT_SNAPSHOT_URL); set it to
+# an empty value to always build from blocks. The download is streamed
 # straight into the restore, so the archive and the database are never on disk
 # together. `database restore` rejects a snapshot from another store version or
 # another chain (--genesis-hash, e.g. one from before a hardfork) and removes what
 # it unpacked; any failure falls back to building from blocks below.
 first_boot=false
 [ -d /data/db ] || first_boot=true
+MINA_SNAPSHOT_URL="${MINA_SNAPSHOT_URL-${DEFAULT_SNAPSHOT_URL:-}}"
 
 if $first_boot && [ -n "${MINA_SNAPSHOT_URL:-}" ]; then
   echo "first boot: restoring the ${NETWORK} snapshot from ${MINA_SNAPSHOT_URL}..." >&2
