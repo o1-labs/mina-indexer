@@ -2,7 +2,9 @@
 
 use crate::{
     base::state_hash::StateHash,
-    block::store::BlockStore,
+    block::{precomputed::PrecomputedBlock, store::BlockStore},
+    canonicity::proof::{build_canonicity_proof, CanonicityProof},
+    constants::MAINNET_TRANSITION_FRONTIER_K,
     store::IndexerStore,
     web::graphql::{
         blocks::{block::Block, get_counts},
@@ -16,7 +18,7 @@ use actix_web::{
     HttpResponse,
 };
 use log::error;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 #[derive(Deserialize)]
@@ -91,6 +93,83 @@ pub async fn get_blocks(
             .body(format_blocks(best_chain));
     }
     HttpResponse::NotFound().finish()
+}
+
+#[derive(Deserialize)]
+pub struct ProofQuery {
+    /// How far above the target the canonical parent-chain reaches (bounded).
+    /// Defaults to the transition-frontier depth `k`.
+    anchor_span: Option<u32>,
+}
+
+/// Tier-1 verifiable response envelope. Self-contained: the client re-runs
+/// `mina-verify verify_block` on `block` and re-checks `canonicity` against a
+/// tip it independently trusts — it needs nothing from the (untrusted) indexer
+/// it hasn't verified. See `docs/trustless-responses.md`.
+#[derive(Serialize)]
+struct BlockProofResponse<'a> {
+    state_hash: String,
+    height: u32,
+    /// Depth below the best tip; lets the client apply k-finality for deep blocks
+    /// without walking `parent_chain`. `None` if the block is not canonical.
+    depth: Option<u32>,
+    /// The full precomputed block (incl. `protocol_state_proof`) — what the
+    /// client re-verifies.
+    block: &'a PrecomputedBlock,
+    /// Canonicity proof, or `null` if the block is not on the canonical chain.
+    /// A `null` here means the client MUST NOT treat the block as "the block at
+    /// this height" (it may be a valid-but-orphaned fork).
+    canonicity: Option<CanonicityProof>,
+}
+
+/// `GET /blocks/{state_hash}/proof[?anchor_span=N]` — Tier-1 verifiable block.
+#[get("/blocks/{state_hash}/proof")]
+pub async fn get_block_proof(
+    store: Data<Arc<IndexerStore>>,
+    state_hash: web::Path<String>,
+    query: web::Query<ProofQuery>,
+) -> HttpResponse {
+    let db = store.as_ref();
+
+    if !StateHash::is_valid(&state_hash) {
+        return HttpResponse::NotFound().finish();
+    }
+    let sh: StateHash = state_hash.clone().into();
+
+    let block = match db.get_block(&sh) {
+        Ok(Some((block, _))) => block,
+        Ok(None) => return HttpResponse::NotFound().finish(),
+        Err(e) => {
+            error!("GET /blocks/{{state_hash}}/proof get_block failed: {e:?}");
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+
+    let anchor_span = query.anchor_span.unwrap_or(MAINNET_TRANSITION_FRONTIER_K);
+    let canonicity = match build_canonicity_proof(db, &sh, anchor_span) {
+        Ok(canonicity) => canonicity,
+        Err(e) => {
+            error!("GET /blocks/{{state_hash}}/proof canonicity failed: {e:?}");
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+
+    let resp = BlockProofResponse {
+        state_hash: state_hash.into_inner(),
+        height: block.blockchain_length(),
+        depth: canonicity.as_ref().map(|c| c.depth),
+        block: &block,
+        canonicity,
+    };
+    match serde_json::to_string(&resp) {
+        Ok(body) => HttpResponse::Ok()
+            .content_type(ContentType::json())
+            .body(body),
+        Err(e) => {
+            error!("GET /blocks/{{state_hash}}/proof serialize failed: {e:?}");
+            HttpResponse::InternalServerError().finish()
+        }
+    }
 }
 
 #[get("/blocks/{state_hash}")]
