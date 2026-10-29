@@ -11,6 +11,7 @@ mod ledger;
 #[cfg(test)]
 mod protocol;
 mod snark_work;
+mod socket;
 mod state;
 mod store;
 mod usernames;
