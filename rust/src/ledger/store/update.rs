@@ -89,25 +89,13 @@ fn set_block_stated_fields(account: &mut Account, stated: Option<&Account>) {
     }
 }
 
-/// The account as the *parent* block left it. Used on unapply: the block-stated
-/// fields are not reversible from a diff, so they are rolled back to what the
-/// parent said. Without this an orphaned block's values stick.
-fn parent_stated_account(
-    db: &IndexerStore,
-    parent: Option<&StateHash>,
-    pk: &PublicKey,
-    token: &TokenAddress,
-) -> Option<Account> {
-    parent.and_then(|parent| db.get_staged_account(pk, token, parent).ok().flatten())
-}
-
 /// Roll the block-stated fields back for accounts the unapplied block merely
 /// *accessed* -- ones it touched without producing any ledger diff for them.
 fn unapply_accessed_only(
     db: &IndexerStore,
     accounts_accessed: &[AccountAccessed],
     diffed: &HashSet<(PublicKey, TokenAddress)>,
-    parent: Option<&StateHash>,
+    parent_staged: &HashMap<(PublicKey, TokenAddress), Option<Account>>,
 ) -> Result<()> {
     for accessed in accounts_accessed.iter() {
         let pk = accessed.account.public_key.to_owned();
@@ -119,7 +107,10 @@ fn unapply_accessed_only(
 
         if let Some(mut account) = db.get_best_account(&pk, &token)? {
             let before_values = Some((account.is_zkapp_account(), account.balance.0));
-            let stated = parent_stated_account(db, parent, &pk, &token);
+            let stated = parent_staged
+                .get(&(pk.clone(), token.clone()))
+                .cloned()
+                .flatten();
 
             set_block_stated_fields(&mut account, stated.as_ref());
             db.update_best_account(&pk, &token, before_values, Some(account), false)?;
@@ -371,6 +362,23 @@ impl DbAccountUpdate {
             // them from the parent block's staged account -- the state before this block.
             let parent = db.get_block_parent_hash(&unapplied_state_hash)?;
 
+            // the parent's staged accounts of every account rolled back here, in one
+            // walk: walking per account re-read each block diff once per account
+            let rolled_back: HashSet<(PublicKey, TokenAddress)> = token_account_diffs
+                .keys()
+                .cloned()
+                .chain(accounts_accessed.iter().map(|accessed| {
+                    (
+                        accessed.account.public_key.to_owned(),
+                        accessed.account.token.to_owned().unwrap_or_default(),
+                    )
+                }))
+                .collect();
+            let parent_staged = parent
+                .as_ref()
+                .and_then(|parent| db.get_staged_accounts(&rolled_back, parent).ok())
+                .unwrap_or_default();
+
             for ((pk, token), diffs) in token_account_diffs {
                 let before = db.get_best_account(&pk, &token)?;
                 let (before_values, mut after) = (
@@ -512,21 +520,19 @@ impl DbAccountUpdate {
                 // Roll the block-stated fields back to what the parent block said. A diff
                 // cannot reverse them, so without this the account keeps the *unapplied*
                 // (orphaned) block's values.
-                let stated_before = parent
-                    .as_ref()
-                    .and_then(|parent| db.get_staged_account(&pk, &token, parent).ok().flatten());
+                let stated = parent_staged
+                    .get(&(pk.clone(), token.clone()))
+                    .cloned()
+                    .flatten();
+                let stated_before = stated.as_ref();
 
-                after.receipt_chain_hash = stated_before
-                    .as_ref()
-                    .and_then(|a| a.receipt_chain_hash.to_owned());
-                after.voting_for = stated_before.as_ref().and_then(|a| a.voting_for.to_owned());
-                after.permissions = stated_before
-                    .as_ref()
-                    .and_then(|a| a.permissions.to_owned());
+                after.receipt_chain_hash =
+                    stated_before.and_then(|a| a.receipt_chain_hash.to_owned());
+                after.voting_for = stated_before.and_then(|a| a.voting_for.to_owned());
+                after.permissions = stated_before.and_then(|a| a.permissions.to_owned());
 
                 // roll the block-stated fields back to what the parent block said
-                let stated = parent_stated_account(db, parent.as_ref(), &pk, &token);
-                set_block_stated_fields(&mut after, stated.as_ref());
+                set_block_stated_fields(&mut after, stated_before);
 
                 if new_accounts.contains(&(pk.clone(), token.clone())) {
                     // Remove the staged account of the block being unapplied (the
@@ -541,7 +547,7 @@ impl DbAccountUpdate {
             }
 
             // ...and the same for accounts the orphaned block merely *accessed*
-            unapply_accessed_only(db, &accounts_accessed, &diffed, parent.as_ref())?;
+            unapply_accessed_only(db, &accounts_accessed, &diffed, &parent_staged)?;
 
             // unapply token diffs
             for diffs in aggregate_token_diffs(token_diffs).values() {
@@ -557,12 +563,15 @@ impl DbAccountUpdate {
             // account the canonical chain already created and credited. Deleting
             // unconditionally wiped live accounts and made the ledger depend on block
             // arrival order.
+            let created: HashSet<(PublicKey, TokenAddress)> =
+                new_accounts.iter().cloned().collect();
+            let best_staged = db
+                .get_staged_accounts(&created, best_state_hash)
+                .unwrap_or_default();
             for (pk, token) in new_accounts.iter() {
-                let on_best_chain = db
-                    .get_staged_account(pk, token, best_state_hash)
-                    .ok()
-                    .flatten()
-                    .is_some();
+                let on_best_chain = best_staged
+                    .get(&(pk.clone(), token.clone()))
+                    .is_some_and(Option::is_some);
 
                 if !on_best_chain {
                     db.update_best_account(pk, token, None, None, false)?;

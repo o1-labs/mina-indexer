@@ -14,7 +14,7 @@ use crate::{
             best::BestLedgerStore,
             staged::{StagedLedgerStore, StateHashWithHeight},
         },
-        token::{Token, TokenAddress, TokenSymbol},
+        token::{account::TokenAccount, Token, TokenAddress, TokenSymbol},
         Ledger, LedgerHash,
     },
     store::{zkapp::tokens::ZkappTokenStore, Result},
@@ -25,6 +25,7 @@ use crate::{
 use anyhow::bail;
 use log::{error, trace};
 use speedb::{DBIterator, Direction, IteratorMode, WriteBatch};
+use std::collections::{HashMap, HashSet};
 
 impl StagedLedgerStore for IndexerStore {
     fn get_staged_account(
@@ -70,7 +71,10 @@ impl StagedLedgerStore for IndexerStore {
             // each account created since the last stored ledger.
             if self
                 .database
-                .get_cf(self.staged_ledgers_persisted_cf(), curr_state_hash.0.as_bytes())?
+                .get_cf(
+                    self.staged_ledgers_persisted_cf(),
+                    curr_state_hash.0.as_bytes(),
+                )?
                 .is_some()
             {
                 break;
@@ -114,6 +118,112 @@ impl StagedLedgerStore for IndexerStore {
         }
 
         Ok(staged_account)
+    }
+
+    fn get_staged_accounts(
+        &self,
+        accounts: &HashSet<(PublicKey, TokenAddress)>,
+        state_hash: &StateHash,
+    ) -> Result<HashMap<(PublicKey, TokenAddress), Option<Account>>> {
+        trace!(
+            "Getting {} staged ledger {} accounts",
+            accounts.len(),
+            state_hash
+        );
+
+        // Same rules as `get_staged_account`, for all accounts in one walk: an
+        // account's base is its stored staged copy at the nearest block, or none
+        // at a stored full ledger without it (or at the genesis base); the diffs
+        // of the blocks above its base then apply to it, oldest first.
+        let mut staged = HashMap::with_capacity(accounts.len());
+        let mut pending: HashSet<(PublicKey, TokenAddress)> = HashSet::new();
+        for (pk, token) in accounts {
+            // the fast path of `get_staged_account`: never existed
+            if self.get_pk_min_staged_ledger_block(pk)?.is_none()
+                && self.get_best_account(pk, token)?.is_none()
+            {
+                staged.insert((pk.clone(), token.clone()), None);
+            } else {
+                pending.insert((pk.clone(), token.clone()));
+            }
+        }
+
+        // blocks above the walk position, newest first; an account's base depth is
+        // the number of these blocks whose diffs apply to it
+        let mut walked: Vec<StateHash> = vec![];
+        let mut base_depth: HashMap<(PublicKey, TokenAddress), usize> = HashMap::new();
+        let mut curr_state_hash = state_hash.clone();
+        while !pending.is_empty() {
+            let mut found = vec![];
+            for key in pending.iter() {
+                if let Some(bytes) = self.database.get_cf(
+                    self.staged_ledger_accounts_cf(),
+                    staged_account_key(&curr_state_hash, &key.1, &key.0),
+                )? {
+                    found.push((key.clone(), serde_json::from_slice::<Account>(&bytes)?));
+                }
+            }
+            for (key, account) in found {
+                pending.remove(&key);
+                base_depth.insert(key.clone(), walked.len());
+                staged.insert(key, Some(account));
+            }
+            if pending.is_empty() {
+                break;
+            }
+
+            let at_base = self
+                .database
+                .get_cf(
+                    self.staged_ledgers_persisted_cf(),
+                    curr_state_hash.0.as_bytes(),
+                )?
+                .is_some();
+            let parent = if at_base {
+                None
+            } else {
+                self.get_block_parent_hash(&curr_state_hash)?
+            };
+
+            match parent {
+                Some(parent_hash) => {
+                    walked.push(curr_state_hash.clone());
+                    curr_state_hash = parent_hash;
+                }
+                None if at_base || is_genesis_prev_state_hash(&curr_state_hash) => {
+                    for key in pending.drain() {
+                        base_depth.insert(key.clone(), walked.len());
+                        staged.insert(key, None);
+                    }
+                }
+                None => bail!("Block {} missing parent from store", curr_state_hash),
+            }
+        }
+
+        // apply each walked block's diff once, oldest first, to the accounts based
+        // below it that the diff touches
+        for (depth, block_hash) in walked.iter().enumerate().rev() {
+            if !base_depth.values().any(|base| *base > depth) {
+                continue;
+            }
+            if let Some(diff) = self.get_block_ledger_diff(block_hash)? {
+                let touched: HashSet<(PublicKey, TokenAddress)> = diff
+                    .account_diffs
+                    .iter()
+                    .flatten()
+                    .map(|acct_diff| (acct_diff.public_key(), acct_diff.token()))
+                    .filter(|key| base_depth.get(key).is_some_and(|base| *base > depth))
+                    .collect();
+                for (pk, token) in touched {
+                    let key = (pk, token);
+                    let base = staged.remove(&key).flatten();
+                    let account = Account::reconstruct_step(base, &key.0, &key.1, &diff);
+                    staged.insert(key, account);
+                }
+            }
+        }
+
+        Ok(staged)
     }
 
     fn get_staged_account_display(
@@ -705,9 +815,9 @@ impl IndexerStore {
     /// stored at a different balance does not overwrite its key -- it adds a
     /// second one. [`StagedLedgerStore::build_staged_ledger`] reads only this
     /// column family, descending, letting each account overwrite the last, so a
-    /// leftover key serves the *lowest* balance the account was ever written at.
-    /// An account gets re-written at the same state hash whenever its block is
-    /// applied more than once, which is what a reorg does.
+    /// leftover key serves the *lowest* balance the account was ever written
+    /// at. An account gets re-written at the same state hash whenever its
+    /// block is applied more than once, which is what a reorg does.
     ///
     /// The balance the account is currently stored under is only knowable from
     /// the stored account itself: a caller that computed a balance is not
