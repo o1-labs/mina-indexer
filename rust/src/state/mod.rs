@@ -1359,6 +1359,14 @@ impl IndexerState {
                     self.canonical_root = tip.clone();
                     self.best_tip = tip;
 
+                    // the ledger at the witness tree root, not the genesis ledger:
+                    // canonical diffs above the root apply to it, and it is
+                    // stored as the staged ledger at each ledger cadence
+                    match indexer_store.get_staged_ledger_at_state_hash(state_hash, false)? {
+                        Some(ledger) => self.ledger = ledger,
+                        None => bail!("Fatal sync error: no staged ledger at the witness tree root {state_hash}"),
+                    }
+
                     debug!("Witness tree root block (length {root_block_height}): {state_hash}");
 
                     // collect witness tree blocks

@@ -54,6 +54,12 @@ async fn test() -> anyhow::Result<()> {
         );
     }
 
+    // the ledger at the canonical root is restored, not left at genesis: the
+    // canonical diffs above the root apply to it, and it is stored as the
+    // staged ledger at each ledger cadence
+    assert!(state.ledger == state_sync.ledger);
+    assert!(state.best_ledger() == state_sync.best_ledger());
+
     // no dangling branches
     assert!(state.dangling_branches.is_empty());
     assert!(state_sync.dangling_branches.is_empty());
