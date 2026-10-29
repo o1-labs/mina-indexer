@@ -109,9 +109,10 @@ publish() {
 
   local remote=":gcs:${BUCKET}/${NETWORK}"
   log "uploading ${name}.tar (${bytes} bytes, sha256 ${sha256})"
-  # upload once, to the mutable latest object (a server-side copy keeps the
-  # default caching, so the no-cache header must come with the upload), then
-  # copy it server side to the immutable versioned name
+  # upload once, to the mutable latest object (a server-side copy ignores
+  # --header-upload and keeps its source's metadata, so the no-cache header
+  # must come with the upload), then copy it server side to the immutable
+  # versioned name
   rc --header-upload "Cache-Control: no-cache" copyto "$tar" "${remote}/${NETWORK}-latest.tar" || return 1
   rc copyto "${remote}/${NETWORK}-latest.tar" "${remote}/${name}.tar" || return 1
   rc copyto "${STAGING}/manifest.json" "${remote}/${name}.manifest.json" || return 1
