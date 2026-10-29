@@ -48,6 +48,12 @@ jobs:
         id: meta
         run: |
           if [ "${{ github.ref_type }}" = "tag" ]; then
+            # the binary reports the Cargo.toml version: a release tag must match it
+            base="$(grep -m1 '^version' rust/Cargo.toml | awk -F'"' '{print $2}')"
+            if [ "${GITHUB_REF_NAME}" != "v${base}" ]; then
+              echo "::error::tag ${GITHUB_REF_NAME} does not match rust/Cargo.toml version ${base}"
+              exit 1
+            fi
             echo "tag=${GITHUB_REF_NAME}-${{ matrix.network }}" >> "$GITHUB_OUTPUT"
             echo "push=true" >> "$GITHUB_OUTPUT"
           else
