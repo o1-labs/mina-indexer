@@ -11,6 +11,7 @@ use crate::{
     store::Result,
 };
 use speedb::{DBIterator, Direction, WriteBatch};
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct StateHashWithHeight {
@@ -26,6 +27,15 @@ pub trait StagedLedgerStore {
         token: &TokenAddress,
         state_hash: &StateHash,
     ) -> Result<Option<Account>>;
+
+    /// [Self::get_staged_account] for many accounts at once: one walk back from
+    /// `state_hash`, and each block diff on the way is read once, not once per
+    /// account
+    fn get_staged_accounts(
+        &self,
+        accounts: &HashSet<(PublicKey, TokenAddress)>,
+        state_hash: &StateHash,
+    ) -> Result<HashMap<(PublicKey, TokenAddress), Option<Account>>>;
 
     // Get the display view of `pk`'s `state_hash` staged ledger account
     /// ****************************************************************

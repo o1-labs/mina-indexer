@@ -5,6 +5,8 @@ mod best_ledger_balance_sorted_accounts;
 #[cfg(test)]
 mod genesis;
 #[cfg(test)]
+mod staged_accounts_batch;
+#[cfg(test)]
 mod staged_ledger_account_rewrite;
 #[cfg(test)]
 mod staged_ledger_balance_sorted_accounts;
