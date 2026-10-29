@@ -106,6 +106,8 @@ jobs:
           CODENAME: ${{ matrix.codename }}
           LANG: en_US.UTF-8
           LC_ALL: en_US.UTF-8
+        # the debian container's default `sh` (dash) has no `-o pipefail`
+        shell: bash
         run: |
           set -euo pipefail
           gem install deb-s3 --no-document
