@@ -259,38 +259,51 @@ impl BlockStore for IndexerStore {
 
     fn set_best_block(&self, state_hash: &StateHash) -> Result<()> {
         trace!("Setting best block {state_hash}");
-        if let Some(old) = self.get_best_block_hash()? {
-            if old == *state_hash {
-                return Ok(());
+
+        // One atomic write: the reorg's updates (canonicity, best ledger,
+        // counters, ...) read each other's writes, and a stop between them
+        // left a store whose best tip disagreed with its canonical chain
+        // (#149). Either all of them and the new best tip land, or none.
+        self.database.atomically(|| {
+            if let Some(old) = self.get_best_block_hash()? {
+                if old == *state_hash {
+                    return Ok(());
+                }
+
+                // reorg updates
+                let reorg_blocks = self.reorg_blocks(&old, state_hash)?;
+                self.update_block_canonicities(&reorg_blocks)?;
+                self.update_block_best_accounts(state_hash, &reorg_blocks)?;
+
+                #[cfg(test)]
+                if crate::store::database::STOP_MID_REORG.with(|stop| stop.get()) {
+                    anyhow::bail!("stopped mid-reorg (test)");
+                }
+
+                self.update_block_snarks(&reorg_blocks)?;
+                self.update_block_usernames(&reorg_blocks)?;
+                self.update_internal_commands(&reorg_blocks)?;
+                self.update_user_commands(&reorg_blocks)?;
             }
 
-            // reorg updates
-            let reorg_blocks = self.reorg_blocks(&old, state_hash)?;
-            self.update_block_canonicities(&reorg_blocks)?;
-            self.update_block_best_accounts(state_hash, &reorg_blocks)?;
-            self.update_block_snarks(&reorg_blocks)?;
-            self.update_block_usernames(&reorg_blocks)?;
-            self.update_internal_commands(&reorg_blocks)?;
-            self.update_user_commands(&reorg_blocks)?;
-        }
+            // set new best tip
+            self.database
+                .put(Self::BEST_TIP_STATE_HASH_KEY, state_hash.0.as_bytes())?;
 
-        // set new best tip
-        self.database
-            .put(Self::BEST_TIP_STATE_HASH_KEY, state_hash.0.as_bytes())?;
-
-        // record new best tip event
-        match self.get_block_height(state_hash)? {
-            Some(blockchain_length) => {
-                self.add_event(&IndexerEvent::Db(DbEvent::Block(
-                    DbBlockEvent::NewBestTip {
-                        state_hash: state_hash.clone(),
-                        blockchain_length,
-                    },
-                )))?;
+            // record new best tip event
+            match self.get_block_height(state_hash)? {
+                Some(blockchain_length) => {
+                    self.add_event(&IndexerEvent::Db(DbEvent::Block(
+                        DbBlockEvent::NewBestTip {
+                            state_hash: state_hash.clone(),
+                            blockchain_length,
+                        },
+                    )))?;
+                }
+                None => error!("Block missing from store: {state_hash}"),
             }
-            None => error!("Block missing from store: {state_hash}"),
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     fn reorg_blocks(

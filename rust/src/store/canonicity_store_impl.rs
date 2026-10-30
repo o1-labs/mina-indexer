@@ -95,7 +95,7 @@ impl CanonicityStore for IndexerStore {
         trace!("Getting known genesis state hashes");
         Ok(self
             .database
-            .get_pinned(Self::KNOWN_GENESIS_STATE_HASHES_KEY)?
+            .get(Self::KNOWN_GENESIS_STATE_HASHES_KEY)?
             .map_or(vec![], |bytes| {
                 serde_json::from_slice(&bytes).expect("known genesis state hashes")
             }))
@@ -105,7 +105,7 @@ impl CanonicityStore for IndexerStore {
         trace!("Getting known genesis prev state hashes");
         Ok(self
             .database
-            .get_pinned(Self::KNOWN_GENESIS_PREV_STATE_HASHES_KEY)?
+            .get(Self::KNOWN_GENESIS_PREV_STATE_HASHES_KEY)?
             .map_or(vec![], |bytes| {
                 serde_json::from_slice(&bytes).expect("known genesis prev state hashes")
             }))
