@@ -689,41 +689,44 @@ impl IndexerState {
         if let Some(db_event) = self.add_block_to_store(block, block_bytes, false)? {
             self.bytes_processed += block_bytes;
 
-            let (best_tip, new_canonical_blocks) = if db_event.is_new_block_event() {
-                crate::metrics::BLOCKS_PROCESSED.inc();
-                if let Some(wt_event) = self.add_block_to_witness_tree(block, true, true)?.1 {
-                    match wt_event {
-                        WitnessTreeEvent::UpdateBestTip {
-                            best_tip,
-                            canonical_blocks,
-                        } => (best_tip, canonical_blocks),
-                    }
-                } else {
-                    return Ok(true);
-                }
-            } else {
+            if !db_event.is_new_block_event() {
                 debug!("Block not added: {db_event:?}");
                 return Ok(false);
+            }
+
+            crate::metrics::BLOCKS_PROCESSED.inc();
+            return self.apply_stored_block(block, true);
+        }
+
+        Ok(true)
+    }
+
+    /// Adds a stored block to the witness tree, then stores the new best tip
+    /// and the blocks that became canonical
+    fn apply_stored_block(&mut self, block: &PrecomputedBlock, increment_blocks: bool) -> Result<bool> {
+        let (best_tip, new_canonical_blocks) =
+            match self.add_block_to_witness_tree(block, increment_blocks, true)?.1 {
+                Some(WitnessTreeEvent::UpdateBestTip {
+                    best_tip,
+                    canonical_blocks,
+                }) => (best_tip, canonical_blocks),
+                None => return Ok(true),
             };
 
-            if let Some(username_updates) =
-                self.update_best_block_in_store(&best_tip.state_hash)?
-            {
-                for (pk, username) in username_updates.iter() {
-                    // only use MINA token
-                    if let Some(account) = self.ledger.get_mut_account(pk, &TokenAddress::default())
-                    {
-                        account.username = Some(username.clone());
-                    }
+        if let Some(username_updates) = self.update_best_block_in_store(&best_tip.state_hash)? {
+            for (pk, username) in username_updates.iter() {
+                // only use MINA token
+                if let Some(account) = self.ledger.get_mut_account(pk, &TokenAddress::default()) {
+                    account.username = Some(username.clone());
                 }
             }
+        }
 
-            // Propagate store-write errors instead of panicking: a single store
-            // hiccup mid-pipeline must fail this block (the caller logs it), not
-            // crash the whole ingestion loop.
-            for block in new_canonical_blocks.iter() {
-                self.add_canonical_block_to_store(block, &block.genesis_state_hash, None)?;
-            }
+        // Propagate store-write errors instead of panicking: a single store
+        // hiccup mid-pipeline must fail this block (the caller logs it), not
+        // crash the whole ingestion loop.
+        for block in new_canonical_blocks.iter() {
+            self.add_canonical_block_to_store(block, &block.genesis_state_hash, None)?;
         }
 
         Ok(true)
@@ -1304,6 +1307,7 @@ impl IndexerState {
         let mut min_length_filter = None;
         let mut witness_tree_blocks = vec![];
         let mut staking_ledgers = HashSet::new();
+        let stored_best_height;
 
         if let Some(indexer_store) = self.indexer_store.as_ref() {
             debug!("Looking for witness tree root block");
@@ -1314,6 +1318,7 @@ impl IndexerState {
             // rooting there left every later block dangling, so the best tip
             // never advanced after a restart.
             let best_block_height = indexer_store.get_best_block_height()?.unwrap_or_default();
+            stored_best_height = best_block_height;
             let root_height = 1.max(best_block_height.saturating_sub(self.canonical_threshold));
             let mut root = indexer_store
                 .get_best_block_hash()?
@@ -1455,7 +1460,16 @@ impl IndexerState {
 
         for block in witness_tree_blocks {
             debug!("Sync: add block {}", block.summary());
-            self.add_block_to_witness_tree(&block, false, true)?;
+
+            // A stored block above the stored best tip was never processed: the
+            // indexer stopped after storing it, before its best tip and
+            // canonicity updates. Process it as the pipeline does after the
+            // store, or its canonicity is never written.
+            if block.blockchain_length() > stored_best_height {
+                self.apply_stored_block(&block, false)?;
+            } else {
+                self.add_block_to_witness_tree(&block, false, true)?;
+            }
         }
 
         Ok(min_length_filter)

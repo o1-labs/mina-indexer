@@ -131,3 +131,72 @@ async fn sync_roots_at_the_best_chain_not_a_reorged_fork() -> anyhow::Result<()>
     assert_eq!(state.best_tip_block().state_hash, block_21.state_hash());
     Ok(())
 }
+
+/// Many blocks stored but never processed (the indexer stopped between the
+/// store and the best tip & canonicity updates, block after block, e.g. during
+/// a crash loop): the restart processes them, so the best tip and the
+/// canonical chain in the store reach the tip
+#[tokio::test]
+async fn sync_processes_stored_but_unprocessed_blocks() -> anyhow::Result<()> {
+    use mina_indexer::{block::store::BlockStore, canonicity::store::CanonicityStore};
+
+    let source = Path::new("./tests/data/canonical_chain_discovery/contiguous");
+    let mut files: Vec<_> = fs::read_dir(source)?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<_, _>>()?;
+    let height = |path: &Path| -> u32 {
+        path.file_name().unwrap().to_str().unwrap().split('-').nth(1).unwrap().parse().unwrap()
+    };
+    files.sort_by_key(|path| height(path));
+
+    // process the blocks to 5
+    let blocks_dir = tempfile::tempdir()?;
+    for path in files.iter().filter(|path| height(path) <= 5) {
+        fs::copy(path, blocks_dir.path().join(path.file_name().unwrap()))?;
+    }
+    let store_dir = setup_new_db_dir("event-sync-unprocessed")?;
+    let mut state = mainnet_genesis_state(store_dir.as_ref())?;
+    state
+        .add_blocks(&mut BlockParser::new_testing(blocks_dir.path())?)
+        .await?;
+    let store = state.indexer_store.clone().unwrap();
+    assert_eq!(store.get_best_block_height()?, Some(5));
+
+    // 6..=21 reach the store only
+    let mut stored = vec![];
+    for path in files.iter().filter(|path| height(path) > 5) {
+        let block = PrecomputedBlock::parse_file(path, PcbVersion::V1)?;
+        state.add_block_to_store(&block, path.metadata()?.len(), true)?;
+        stored.push(block);
+    }
+    drop(state);
+    let tip = stored.last().unwrap().clone();
+
+    // restart
+    let config = IndexerStateConfig::new(
+        GenesisLedger::new_v1()?,
+        IndexerVersion::default(),
+        store.clone(),
+        MAINNET_CANONICAL_THRESHOLD,
+        10,
+        false,
+        false,
+    );
+    let mut state = IndexerState::new_without_genesis_events(config)?;
+    state.sync_from_db()?;
+
+    assert_eq!(state.best_tip_block().state_hash, tip.state_hash());
+    assert_eq!(store.get_best_block_hash()?, Some(tip.state_hash()));
+
+    // canonical to the canonical root (tip - threshold)
+    let root_height = tip.blockchain_length() - MAINNET_CANONICAL_THRESHOLD;
+    for block in stored.iter().filter(|block| block.blockchain_length() <= root_height) {
+        assert_eq!(
+            store.get_canonical_hash_at_height(block.blockchain_length())?,
+            Some(block.state_hash()),
+            "canonical at {}",
+            block.blockchain_length()
+        );
+    }
+    Ok(())
+}
