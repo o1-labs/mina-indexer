@@ -1308,31 +1308,36 @@ impl IndexerState {
         if let Some(indexer_store) = self.indexer_store.as_ref() {
             debug!("Looking for witness tree root block");
 
-            let next_seq_num = indexer_store.get_next_seq_num()?;
+            // The root: the best chain's block `canonical_threshold` below the
+            // best tip, found by following parents from the best tip. The last
+            // best tip event at that height can be a fork that was reorged away;
+            // rooting there left every later block dangling, so the best tip
+            // never advanced after a restart.
             let best_block_height = indexer_store.get_best_block_height()?.unwrap_or_default();
-            let witness_tree_root_block_event = indexer_store
-                .event_log_iterator(speedb::IteratorMode::From(
-                    &next_seq_num.to_be_bytes(),
-                    speedb::Direction::Reverse,
-                ))
-                .flatten()
-                .find_map(|(_, bytes)| {
-                    // value prefix == best block height or 0 BE bytes
-                    let height = u32::from_be_bytes(
-                        bytes[..4]
-                            .try_into()
-                            .expect("Byte length is incorrect. Unable to parse block height"),
-                    );
+            let root_height = 1.max(best_block_height.saturating_sub(self.canonical_threshold));
+            let mut root = indexer_store
+                .get_best_block_hash()?
+                .map(|state_hash| (state_hash, best_block_height));
+            while let Some((state_hash, height)) = root.clone() {
+                if height <= root_height {
+                    break;
+                }
 
-                    if bytes[4] == IndexerEvent::NEW_BEST_TIP_KIND
-                        && height
-                            == 1.max(best_block_height.saturating_sub(self.canonical_threshold))
-                    {
-                        return serde_json::from_slice::<IndexerEvent>(&bytes[5..]).ok();
-                    }
-
-                    None
-                });
+                // stop at a block whose parent is not stored (a fork genesis)
+                match indexer_store
+                    .get_block_parent_hash(&state_hash)?
+                    .filter(|parent| matches!(indexer_store.get_block_height(parent), Ok(Some(_))))
+                {
+                    Some(parent) => root = Some((parent, height - 1)),
+                    None => break,
+                }
+            }
+            let witness_tree_root_block_event = root.map(|(state_hash, blockchain_length)| {
+                IndexerEvent::Db(DbEvent::Block(DbBlockEvent::NewBestTip {
+                    state_hash,
+                    blockchain_length,
+                }))
+            });
 
             if let Some(IndexerEvent::Db(DbEvent::Block(DbBlockEvent::NewBestTip {
                 state_hash,
@@ -1378,7 +1383,9 @@ impl IndexerState {
                         .flatten()
                         .for_each(|(key, _)| {
                             if let (Ok(height), Ok(state_hash)) = (block_u32_prefix_from_key(&key), state_hash_suffix(&key)) {
-                                if height <= 1 || state_hash == root_block.state_hash() {
+                                // the root and its siblings: a sibling cannot attach
+                                // below the root
+                                if height <= 1 || height <= root_block.blockchain_length() {
                                     return;
                                 }
                                 if let Ok(Some((block, _))) = indexer_store.get_block(&state_hash) {

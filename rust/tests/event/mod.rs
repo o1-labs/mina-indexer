@@ -8,5 +8,6 @@ mod replay;
 mod store;
 #[cfg(test)]
 mod sync;
+mod sync_stored_block;
 #[cfg(test)]
 mod witness_tree;
