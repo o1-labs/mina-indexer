@@ -1175,7 +1175,7 @@ impl SnarkStore for IndexerStore {
         trace!("Getting total SNARKs count");
         Ok(self
             .database
-            .get_pinned(Self::TOTAL_NUM_SNARKS_KEY)?
+            .get(Self::TOTAL_NUM_SNARKS_KEY)?
             .map_or(0, |bytes| {
                 u32_from_be_bytes(&bytes).expect("total SNARK count")
             }))
@@ -1185,7 +1185,7 @@ impl SnarkStore for IndexerStore {
         trace!("Getting total canonical SNARKs count");
         Ok(self
             .database
-            .get_pinned(Self::TOTAL_NUM_CANONICAL_SNARKS_KEY)?
+            .get(Self::TOTAL_NUM_CANONICAL_SNARKS_KEY)?
             .map_or(0, |bytes| {
                 u32_from_be_bytes(&bytes).expect("total canonical SNARK count")
             }))

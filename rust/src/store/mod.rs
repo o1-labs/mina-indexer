@@ -3,6 +3,7 @@
 
 // traits
 pub mod column_families;
+pub mod database;
 pub mod fixed_keys;
 pub mod username;
 pub mod version;
@@ -24,12 +25,12 @@ pub mod username_store_impl;
 pub mod version_store_impl;
 pub mod zkapp_store_impl;
 
-use self::fixed_keys::FixedKeys;
+use self::{database::Database, fixed_keys::FixedKeys};
 use crate::base::username::off_chain::OffChainUsernames;
 use anyhow::{anyhow, bail, Context};
 use log::{debug, info};
 use serde::{Deserialize, Serialize};
-use speedb::{ColumnFamilyDescriptor, DBCompressionType, DB};
+use speedb::{ColumnFamilyDescriptor, DBCompressionType};
 use std::{
     fs::{self, read_dir, File},
     io::{self, BufReader, BufWriter, Write},
@@ -42,7 +43,7 @@ pub(crate) type Result<T> = anyhow::Result<T>;
 #[derive(Debug)]
 pub struct IndexerStore {
     pub db_path: PathBuf,
-    pub database: DB,
+    pub database: Database,
     pub is_primary: bool,
 }
 
@@ -308,11 +309,11 @@ impl IndexerStore {
         let primary = Self {
             is_primary: true,
             db_path: path.into(),
-            database: speedb::DBWithThreadMode::open_cf_descriptors(
+            database: Database::new(speedb::DBWithThreadMode::open_cf_descriptors(
                 &database_opts,
                 path,
                 column_families,
-            )?,
+            )?),
         };
 
         // set db version
@@ -384,12 +385,12 @@ impl IndexerStore {
         let read_only = Self {
             is_primary: false,
             db_path: secondary.into(),
-            database: speedb::DBWithThreadMode::open_cf_descriptors_as_secondary(
+            database: Database::new(speedb::DBWithThreadMode::open_cf_descriptors_as_secondary(
                 &database_opts,
                 primary,
                 secondary,
                 column_families,
-            )?,
+            )?),
         };
 
         Ok(read_only)
