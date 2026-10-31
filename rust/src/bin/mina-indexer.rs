@@ -751,6 +751,18 @@ fn remove_pid<P: AsRef<Path>>(database_dir: P) {
     }
 }
 
+/// The PID in `pid_path` if it names another running process. A PID file left
+/// by a process that did not shut down cleanly is stale; so is one naming this
+/// process -- in a container the indexer runs as PID 1 every time, so after an
+/// unclean stop (OOM kill, node loss) the file names the new process itself.
+fn running_owner(pid_path: &Path) -> Option<i32> {
+    use mina_indexer::platform;
+
+    read_pid_from_file(pid_path)
+        .ok()
+        .filter(|pid| *pid != process::id() as i32 && platform::is_process_running(*pid))
+}
+
 /// Checks if the current process is the owner of the database by verifying the
 /// presence of a PID file. If another process is already running as the owner
 /// of the database, the function stops the indexer. Otherwise, it claims
@@ -766,7 +778,6 @@ fn remove_pid<P: AsRef<Path>>(database_dir: P) {
 /// * `database_dir` - A reference to the path of the database directory where
 ///   the PID file will be located.
 fn check_or_write_pid_file<P: AsRef<Path>>(database_dir: P) {
-    use mina_indexer::platform;
     let database_dir = database_dir.as_ref();
     let pid_path = database_dir.join("PID");
 
@@ -775,16 +786,43 @@ fn check_or_write_pid_file<P: AsRef<Path>>(database_dir: P) {
         process::exit(1);
     }
 
-    if let Ok(pid) = read_pid_from_file(&pid_path) {
-        if platform::is_process_running(pid) {
-            error!("Will not start due to a running Indexer with PID {pid}");
-            process::exit(130);
-        }
+    if let Some(pid) = running_owner(&pid_path) {
+        error!("Will not start due to a running Indexer with PID {pid}");
+        process::exit(130);
     }
 
     if let Err(e) = write_pid_to_file(&pid_path) {
         error!("Error writing PID to {pid_path:?}: {e}");
         process::exit(131);
+    }
+}
+
+#[cfg(test)]
+mod pid_file_tests {
+    use super::running_owner;
+    use std::{fs, process};
+
+    #[test]
+    fn own_or_dead_pid_is_stale_live_pid_owns() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_path = dir.path().join("PID");
+
+        // no PID file
+        assert_eq!(running_owner(&pid_path), None);
+
+        // our own PID: a container restarted after an unclean stop
+        fs::write(&pid_path, process::id().to_string()).unwrap();
+        assert_eq!(running_owner(&pid_path), None);
+
+        // another running process owns the database
+        let mut other = process::Command::new("sleep").arg("30").spawn().unwrap();
+        fs::write(&pid_path, other.id().to_string()).unwrap();
+        assert_eq!(running_owner(&pid_path), Some(other.id() as i32));
+
+        // ...until it is gone
+        other.kill().unwrap();
+        other.wait().unwrap();
+        assert_eq!(running_owner(&pid_path), None);
     }
 }
 
