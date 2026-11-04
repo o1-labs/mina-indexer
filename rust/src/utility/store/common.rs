@@ -78,6 +78,33 @@ pub fn token_pk_index_key(
     key
 }
 
+/// Seek key and bounds to iterate one token account's [token_pk_index_key]
+/// rows. Returns `(start, lower, upper)`, with `lower` inclusive and `upper`
+/// exclusive.
+///
+/// `index` is where to start, inclusive. With no index, a forward scan starts
+/// at the first row and a reverse scan at the last.
+pub fn token_pk_index_bounds(
+    token: &TokenAddress,
+    pk: &PublicKey,
+    index: Option<u32>,
+    forward: bool,
+) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let lower = token_pk_index_key(token, pk, 0).to_vec();
+
+    // past every row of this account, including index u32::MAX
+    let mut upper = token_pk_index_key(token, pk, u32::MAX).to_vec();
+    upper.push(1);
+
+    let start = match index {
+        Some(index) => token_pk_index_key(token, pk, index).to_vec(),
+        None if forward => lower.clone(),
+        None => upper.clone(),
+    };
+
+    (start, lower, upper)
+}
+
 /// Key format
 /// ```
 /// {hash}{index}
