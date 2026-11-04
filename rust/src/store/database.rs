@@ -7,7 +7,7 @@
 //! tip) depends on them, while other threads keep reading the committed state.
 
 use log::error;
-use speedb::{AsColumnFamilyRef, DBIterator, IteratorMode, WriteBatch, DB};
+use speedb::{AsColumnFamilyRef, DBIterator, IteratorMode, ReadOptions, WriteBatch, DB};
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
@@ -213,11 +213,7 @@ impl Database {
     /// An iterator does not see the pending writes of an atomic scope, so
     /// iterating a column family with pending writes inside one reads stale
     /// data
-    pub fn iterator_cf<'a>(
-        &'a self,
-        cf: &impl AsColumnFamilyRef,
-        mode: IteratorMode,
-    ) -> DBIterator<'a> {
+    fn check_no_pending_writes(&self, cf: &impl AsColumnFamilyRef) {
         if self
             .pending(|p| p.column_families.contains(&cf_id(cf)))
             .unwrap_or(false)
@@ -228,7 +224,31 @@ impl Database {
                 "iterating a column family with pending writes inside an atomic scope"
             );
         }
+    }
+
+    pub fn iterator_cf<'a>(
+        &'a self,
+        cf: &impl AsColumnFamilyRef,
+        mode: IteratorMode,
+    ) -> DBIterator<'a> {
+        self.check_no_pending_writes(cf);
         self.0.iterator_cf(cf, mode)
+    }
+
+    /// [Self::iterator_cf] over the keys in `[lower, upper)`
+    pub fn iterator_cf_bounded<'a>(
+        &'a self,
+        cf: &impl AsColumnFamilyRef,
+        mode: IteratorMode,
+        lower: Vec<u8>,
+        upper: Vec<u8>,
+    ) -> DBIterator<'a> {
+        self.check_no_pending_writes(cf);
+
+        let mut read_options = ReadOptions::default();
+        read_options.set_iterate_lower_bound(lower);
+        read_options.set_iterate_upper_bound(upper);
+        self.0.iterator_cf_opt(cf, read_options, mode)
     }
 }
 

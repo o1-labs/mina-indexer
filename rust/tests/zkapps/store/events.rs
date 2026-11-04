@@ -9,8 +9,10 @@ use mina_indexer::{
     },
     mina_blocks::v2::{zkapp::event::ZkappEventWithMeta, ZkappEvent},
     store::{zkapp::events::ZkappEventStore, IndexerStore},
+    utility::store::zkapp::events::zkapp_event_index,
 };
 use quickcheck::Arbitrary;
+use speedb::Direction;
 
 #[test]
 fn event_store_test() -> anyhow::Result<()> {
@@ -201,6 +203,53 @@ fn apply_updates_keys_events_to_their_own_block() -> anyhow::Result<()> {
     assert_eq!(e1.state_hash, BLOCK_B.into(), "event 1 keeps block 531668");
     assert_eq!(e1.block_height, 531_668);
     assert_ne!(e0.state_hash, best_tip, "not keyed to the best tip");
+
+    Ok(())
+}
+
+/// Keys sort by (token, pk, index), so an iterator with no bound runs into the
+/// neighbouring accounts. It must only yield the requested token account.
+#[test]
+fn events_iterator_stays_inside_the_token_account() -> anyhow::Result<()> {
+    let store_dir = setup_new_db_dir("zkapp-events-iterator-bound")?;
+    let indexer_store = IndexerStore::new(store_dir.path(), true)?;
+    let g = &mut gen();
+
+    let token = TokenAddress::default();
+    // in key order
+    let [before, emitter, silent, after] = [
+        "B62qjSytpSK7aEauBprjXDSZwc9ai4YMv9tpmXLQK14Vy941YV36rMz",
+        "B62qjYanmV7y9njVeH5UHkz3GYBm7xKir1rAnoY4KsEYUGLMiU45FSM",
+        "B62qjwDWxjf4LtJ4YWJQDdTNPqZ69ZyeCzbpAFKN7EoZzYig5ZRz8JE",
+        "B62qjzJvc59DdG9ahht9rwxkEz7GedKuUMsnaVTuXFUeANKqfBeWpRE",
+    ]
+    .map(PublicKey::from);
+
+    let state_hash = StateHash::default();
+    let txn_hash = TxnHash::default();
+    for pk in [&before, &emitter, &after] {
+        let events: Vec<ZkappEvent> = (0..3)
+            .map(|_| <TestGen<ZkappEvent>>::arbitrary(g).0)
+            .collect();
+        indexer_store.add_events(pk, &token, &events, &state_hash, 1, &txn_hash)?;
+    }
+
+    let indices = |pk: &PublicKey, index, direction| -> Vec<u32> {
+        indexer_store
+            .events_iterator(pk, &token, index, direction)
+            .flatten()
+            .map(|(key, _)| zkapp_event_index(&key))
+            .collect()
+    };
+
+    assert_eq!(indices(&emitter, None, Direction::Forward), [0, 1, 2]);
+    assert_eq!(indices(&emitter, None, Direction::Reverse), [2, 1, 0]);
+    assert_eq!(indices(&emitter, Some(1), Direction::Forward), [1, 2]);
+    assert_eq!(indices(&emitter, Some(1), Direction::Reverse), [1, 0]);
+
+    // an account with no events has no rows, in either direction
+    assert!(indices(&silent, None, Direction::Forward).is_empty());
+    assert!(indices(&silent, None, Direction::Reverse).is_empty());
 
     Ok(())
 }

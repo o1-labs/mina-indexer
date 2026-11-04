@@ -9,7 +9,7 @@ use crate::{
         column_families::ColumnFamilyHelpers, zkapp::events::ZkappEventStore, IndexerStore, Result,
     },
     utility::store::{
-        common::{from_be_bytes, U32_LEN},
+        common::{from_be_bytes, token_pk_index_bounds},
         zkapp::events::{zkapp_events_key, zkapp_events_pk_num_key},
     },
 };
@@ -142,27 +142,14 @@ impl ZkappEventStore for IndexerStore {
         index: Option<u32>,
         direction: Direction,
     ) -> speedb::DBIterator<'_> {
-        const LEN: usize = TokenAddress::LEN + PublicKey::LEN + U32_LEN;
+        let forward = matches!(direction, Direction::Forward);
+        let (start, lower, upper) = token_pk_index_bounds(token, pk, index, forward);
 
-        let mut start = [0; LEN + 1];
-        match direction {
-            Direction::Forward => {
-                let index = index.unwrap_or_default();
-                start[..LEN].copy_from_slice(&zkapp_events_key(token, pk, index))
-            }
-            Direction::Reverse => {
-                let index = index.unwrap_or(u32::MAX);
-                start[..LEN].copy_from_slice(&zkapp_events_key(token, pk, index));
-
-                if index == u32::MAX {
-                    start[LEN] = 1;
-                }
-            }
-        };
-
-        self.database.iterator_cf(
+        self.database.iterator_cf_bounded(
             self.zkapp_events_cf(),
             speedb::IteratorMode::From(&start, direction),
+            lower,
+            upper,
         )
     }
 }
