@@ -825,18 +825,22 @@ impl AccountDiff {
         let voting_for = elt.account_update.body.update.voting_for.to_owned().into();
 
         // update actions
-        let actions = if let Some(actions) = elt.account_update.body.actions.first() {
-            actions.0.iter().cloned().map(Into::into).collect()
-        } else {
-            vec![]
-        };
+        let actions = elt
+            .account_update
+            .body
+            .actions
+            .iter()
+            .flat_map(|actions| actions.0.iter().cloned().map(Into::into))
+            .collect();
 
         // update events
-        let events = if let Some(events) = elt.account_update.body.events.first() {
-            events.0.iter().cloned().map(Into::into).collect()
-        } else {
-            vec![]
-        };
+        let events = elt
+            .account_update
+            .body
+            .events
+            .iter()
+            .flat_map(|events| events.0.iter().cloned().map(Into::into))
+            .collect();
 
         // update app state
         let app_state_diff = elt
@@ -1484,6 +1488,36 @@ mod tests {
             panic!("Expected a zkapp command")
         }
 
+        Ok(())
+    }
+
+    /// An account update can emit several events, and each one counts
+    #[test]
+    fn zkapp_diffs_keep_every_event_of_an_update() -> Result<()> {
+        let path = PathBuf::from("./tests/data/misc_blocks/mainnet-419989-3NKhZKc1HrEexmpvcbx4eqAtrsbwmfLXcjukF9CJ8Y2y7FEjFWg5.json");
+        let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2(CurrencyEncoding::Nanomina))?;
+        let global_slot = block.global_slot_since_genesis();
+
+        let mut fields = 0;
+        for cmd in block.zkapp_commands() {
+            let txn_hash = cmd.txn_hash()?;
+            if let UserCommandWithStatus::V2(box_cmd) = &cmd {
+                if let UserCommand {
+                    data: (_, UserCommandData::ZkappCommandData(zkapp)),
+                    ..
+                } = box_cmd.as_ref()
+                {
+                    let diffs = AccountDiff::from_zkapp(zkapp, global_slot, txn_hash);
+                    for diff in AccountDiff::expand(diffs).into_iter().flatten() {
+                        if let AccountDiff::ZkappEvents(diff) = diff {
+                            fields += diff.events.len();
+                        }
+                    }
+                }
+            }
+        }
+
+        assert_eq!(fields, 14);
         Ok(())
     }
 

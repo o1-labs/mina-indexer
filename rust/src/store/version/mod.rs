@@ -34,7 +34,10 @@ impl IndexerStoreVersion {
     // VK change log, keyed by block height + state hash). Databases built before
     // this have no VK-history index and must be rebuilt to serve
     // `verificationKeyHistory` / `lastVerificationKeyChange`.
-    pub const MINOR: u32 = 19;
+    // 20: a zkApp account update keeps all of its events and actions. Databases
+    // built before this kept only the first of each update, and the rest cannot
+    // be recovered without replaying the blocks.
+    pub const MINOR: u32 = 20;
     pub const PATCH: u32 = 0;
 
     /// Output as `MAJOR`.`MINOR`.`PATCH`
