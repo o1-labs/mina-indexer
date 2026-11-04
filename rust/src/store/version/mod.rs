@@ -36,7 +36,8 @@ impl IndexerStoreVersion {
     // `verificationKeyHistory` / `lastVerificationKeyChange`.
     // 20: a zkApp account update keeps all of its events and actions. Databases
     // built before this kept only the first of each update, and the rest cannot
-    // be recovered without replaying the blocks.
+    // be recovered without replaying the blocks. zkApp commands are also keyed
+    // by the protocol's transaction hash, where they had a stand-in digest.
     pub const MINOR: u32 = 20;
     pub const PATCH: u32 = 0;
 

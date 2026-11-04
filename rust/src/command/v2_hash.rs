@@ -2,11 +2,10 @@
 //!
 //! Mirrors mina's `Signed_command.Stable.V2.t` as a set of tagless leaf types,
 //! bin_prot-serializes them, and Blake2b's the result — exactly what mina's
-//! `Transaction_hash.hash_signed_command` does. zkApp commands use a different
-//! (`Zkapp_command`) hasher that isn't ported yet; they fall back to the prior
-//! JSON digest so their behavior is unchanged.
+//! `Transaction_hash.hash_signed_command` does. zkApp commands have their own
+//! hasher, in [super::zkapp_hash].
 
-use super::TxnHash;
+use super::{zkapp_hash::hash_zkapp_command, TxnHash};
 use crate::{
     mina_blocks::v2::staged_ledger_diff::{SignedCommandPayloadBody, UserCommandData},
     proof_systems::signer::pubkey::CompressedPubKey,
@@ -20,6 +19,7 @@ use crate::{
 };
 use anyhow::Result;
 use blake2::{digest::VariableOutput, Blake2bVar};
+use log::error;
 use std::io::Write;
 
 // Tagless mirror of mina's `Signed_command.Stable.V2.t`, which is what the v2
@@ -129,9 +129,13 @@ fn build_v2_hashable(v2: &UserCommandData) -> Result<V2HashSignedCommand> {
 }
 
 pub fn hash_command_v2(v2: &UserCommandData) -> Result<TxnHash> {
-    // zkApp commands use a different (Zkapp_command) hasher — not yet ported.
-    if matches!(v2, UserCommandData::ZkappCommandData(_)) {
-        return hash_command_v2_zkapp_fallback(v2);
+    if let UserCommandData::ZkappCommandData(zkapp) = v2 {
+        // callers treat a hash failure as fatal, and an unhashable command must
+        // not stop ingest: serve a stand-in and say so
+        return hash_zkapp_command(zkapp).or_else(|e| {
+            error!("Cannot hash zkApp command, using a stand-in digest: {e:#}");
+            hash_command_v2_zkapp_fallback(v2)
+        });
     }
     let sc = build_v2_hashable(v2)?;
 
@@ -150,9 +154,8 @@ pub fn hash_command_v2(v2: &UserCommandData) -> Result<TxnHash> {
     ))
 }
 
-/// Placeholder for zkApp-command hashing (mina's `Zkapp_command` hasher). Kept
-/// as the previous JSON digest so behavior for zkApps is unchanged until
-/// ported.
+/// A stand-in for a zkApp command the hasher cannot serialize. It is not the
+/// protocol's transaction hash.
 fn hash_command_v2_zkapp_fallback(v2: &UserCommandData) -> Result<TxnHash> {
     let bytes = serde_json::to_vec(v2)?;
     let mut hasher = Blake2bVar::new(32)?;
