@@ -2,6 +2,7 @@ pub mod internal;
 pub mod signed;
 pub mod store;
 pub mod v2_hash;
+pub mod zkapp_hash;
 pub mod zkapp;
 
 use crate::{

@@ -495,14 +495,14 @@ pub enum Precondition<T> {
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct NumericBoundsU32 {
-    lower: Numeric<u32>,
-    upper: Numeric<u32>,
+    pub lower: Numeric<u32>,
+    pub upper: Numeric<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct NumericBoundsU64 {
-    lower: Numeric<u64>,
-    upper: Numeric<u64>,
+    pub lower: Numeric<u64>,
+    pub upper: Numeric<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
