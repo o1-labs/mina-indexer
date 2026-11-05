@@ -1,11 +1,136 @@
 //! zkApp command transaction hash.
 //!
-//! Mirrors mina's `Transaction_hash.hash_zkapp_command`: replace every
-//! signature and proof with a dummy, serialize `Zkapp_command.Stable.Latest`
-//! with bin_prot, and Blake2b the result.
+//! Mirrors mina's `Transaction_hash.hash_zkapp_command`
+//! (`src/lib/transaction/transaction_hash.ml`). This module exists for one
+//! reason: the precomputed block JSON does not contain the hash of a zkApp
+//! command, so the indexer must calculate it, and the result must be equal to
+//! the hash that the archive node and explorers show.
 //!
-//! The app state vectors keep the length the block gives, so this covers both
+//! # The hash
+//!
+//! 1. Replace every signature and proof with a dummy value.
+//! 2. Serialize `Zkapp_command.Stable.Latest` with bin_prot.
+//! 3. Calculate Blake2b-256 of those bytes.
+//! 4. Encode the digest as base58check.
+//!
+//! One wrong byte gives a completely different hash. There is no partial
+//! success, so the tests compare against hashes from real blocks.
+//!
+//! # Why bin_prot
+//!
+//! bin_prot is the binary format of the OCaml `Stable` types. The protocol
+//! defines the hash over those bytes, so no other format can give the same
+//! hash. The JSON in a block is only a view of the same data.
+//!
+//! # Why dummy signatures and proofs
+//!
+//! Mina's reason, from the comment in `transaction_hash.ml`: this lets it
+//! "reproduce the transaction hashes if signatures, proofs omitted in archive
+//! db". The hash covers the *kind* of authorization, not its content. A proof
+//! stays a proof, a signature stays a signature, and `None_given` stays
+//! `None_given`.
+//!
+//! `DUMMY_PROOF` is stored as ready-made bytes. It is
+//! `Proof.transaction_dummy`, and the indexer has no prover to make it.
+//!
+//! # Why this module does not use `bin_prot::to_writer`
+//!
+//! There are two levels of bin_prot in this crate:
+//!
+//! | Level | Location | Needs |
+//! |---|---|---|
+//! | Primitives | `protocol::bin_prot::WriteBinProtExt` | any `io::Write` |
+//! | Serde serializer | `protocol::bin_prot::to_writer` | Rust types with the shape of the OCaml types |
+//!
+//! The types in `mina_blocks::v2` have the shape of the JSON, not the shape of
+//! the wire format. `to_writer` needs a complete set of mirror types for zkApp
+//! commands, so `Writer` walks the JSON types by hand.
+//!
+//! **Do not write bin_prot primitives here.** `Writer` uses `WriteBinProtExt`
+//! for those, and adds only what the primitives cannot know: the Mina rule
+//! that selects an encoding for each field.
+//!
+//! # The format has no field names
+//!
+//! bin_prot writes no field names and no field count: a record is its fields,
+//! in the order of the OCaml definition. The order of the calls in `Writer`
+//! *is* the format. If you move one call, the hash changes.
+//!
+//! # Encoding rules
+//!
+//! `cargo nextest` does not run doctests, so these examples are plain text. The
+//! test `doc_examples` checks the slot, unsigned, string and `Vector.t` bytes:
+//! change the two places together. The real blocks in `mesa_block_hashes` and
+//! `berkeley_block_hashes` cover the variant and call forest rules.
+//!
+//! **Variants** are a one-byte constructor index, then the value. The index is
+//! the position in the OCaml definition, so read that definition. The value
+//! with no data is not always first:
+//!
+//! ```text
+//! Option:      None = 00             Some x    = 01 x
+//! Set_or_keep: Set x  = 00 x         Keep      = 01
+//! Or_ignore:   Check x = 00 x        Ignore    = 01
+//! ```
+//!
+//! **Single-constructor variants** still write the index. This includes
+//! `Global_slot_since_genesis` and `Global_slot_span`. The JSON shows only a
+//! number:
+//!
+//! ```text
+//! slot 5:      00 05
+//! ```
+//!
+//! **Unsigned values** are `Unsigned_extended.UInt32` and `UInt64`, which
+//! bin_prot stores as its signed `int32` and `int64`. Wrap the value to signed
+//! first, because the shortest encoding depends on the signed value:
+//!
+//! ```text
+//! uint32 40,000:          fd 40 9c 00 00
+//! uint32 3,000,000,000:   fd 00 5e d0 b2     (without the wrap: fc + 8 bytes)
+//! uint64 u64::MAX:        ff ff              (it wraps to -1)
+//! ```
+//!
+//! **Lists and strings** have a nat0 length first, then the content:
+//!
+//! ```text
+//! list [a, b]:   02 a b
+//! string "hi":   02 68 69
+//! ```
+//!
+//! **`Vector.t`** has no length. Mina writes it as nested pairs that end in
+//! unit, `(a, (b, ()))` (`src/lib/crypto/plonkish_prelude/vector.ml`). A pair
+//! writes nothing itself and unit is a zero byte, so:
+//!
+//! ```text
+//! Vector [a, b]: a b 00
+//! ```
+//!
+//! This code writes the elements that the block gives, so the same path covers
 //! the 8 field Berkeley format and the 32 field mesa format.
+//!
+//! **Digests are unit.** The hash uses `Zkapp_command.Call_forest` with the
+//! digests forgotten, so each `account_update_digest` and `stack_hash` field
+//! is unit, which is a zero byte:
+//!
+//! ```text
+//! forest:  nat0 count, then each (tree, 00)
+//! tree:    account_update, 00, forest of calls
+//! ```
+//!
+//! # Field elements
+//!
+//! A field is 32 little-endian bytes on the wire. The JSON has three forms,
+//! which `Writer::field` handles: decimal, `0x` big-endian hex, and base58check
+//! with the field as the last 32 payload bytes.
+//!
+//! # When the protocol changes
+//!
+//! A new `Stable` version can add or move fields. Compare the OCaml types with
+//! `Writer`, then add a block from the new version to
+//! `rust/tests/data/zkapp_hash`. A hash that does not match means that a byte
+//! is wrong: compare the output of `zkapp_command_bytes` with
+//! `Binable.to_string` from the Mina code.
 
 use super::TxnHash;
 use crate::{
@@ -66,12 +191,10 @@ fn zkapp_command_bytes(zkapp: &ZkappCommandData) -> Result<Vec<u8>> {
     w.uint64(fee_payer.body.fee.0)?;
     match &fee_payer.body.valid_until {
         Some(slot) => {
-            w.out.bin_write_variant_index(1)?;
+            w.tag(1)?;
             w.slot(slot.0 as u32)?;
         }
-        None => {
-            w.out.bin_write_variant_index(0)?;
-        }
+        None => w.tag(0)?,
     }
     w.uint32(fee_payer.body.nonce.0)?;
     w.out.extend(DUMMY_SIGNATURE);
@@ -104,6 +227,8 @@ fn decimal_to_le_bytes(value: &str) -> Result<[u8; FIELD_LEN]> {
     Ok(bytes)
 }
 
+/// Writes `Zkapp_command.Stable.Latest` from the block JSON types. The order of
+/// the calls is the wire format: see the module docs.
 struct Writer {
     out: Vec<u8>,
 }
@@ -112,6 +237,12 @@ impl Writer {
     ///////////////////
     // mina encoding //
     ///////////////////
+
+    /// A constructor index. See "Variants" in the module docs.
+    fn tag(&mut self, tag: u8) -> Result<()> {
+        self.out.bin_write_variant_index(tag)?;
+        Ok(())
+    }
 
     /// `Unsigned_extended.UInt32`, which is bin_prot's `int32`
     fn uint32(&mut self, value: u32) -> Result<()> {
@@ -127,11 +258,12 @@ impl Writer {
 
     /// `Global_slot_since_genesis.Stable.V1 = Since_genesis of uint32`
     fn slot(&mut self, value: u32) -> Result<()> {
-        self.out.bin_write_variant_index(0)?;
+        self.tag(0)?;
         self.uint32(value)
     }
 
-    /// `Vector.t` has no length prefix: its elements, then a zero byte
+    /// `Vector.t` has no length prefix: its elements, then a zero byte. See the
+    /// module docs.
     fn vector_end(&mut self) -> Result<()> {
         self.out.bin_write_unit()?;
         Ok(())
@@ -219,17 +351,15 @@ impl Writer {
         use Authorization::*;
         match auth {
             Proof_((ProofOrSignature::Proof, _)) | Signature_((ProofOrSignature::Proof, _)) => {
-                self.out.bin_write_variant_index(0)?;
+                self.tag(0)?;
                 self.out.extend(DUMMY_PROOF);
             }
             Proof_((ProofOrSignature::Signature, _))
             | Signature_((ProofOrSignature::Signature, _)) => {
-                self.out.bin_write_variant_index(1)?;
+                self.tag(1)?;
                 self.out.extend(DUMMY_SIGNATURE);
             }
-            NoneGiven(_) | Either(_) | Proof(_) | Signature(_) => {
-                self.out.bin_write_variant_index(2)?;
-            }
+            NoneGiven(_) | Either(_) | Proof(_) | Signature(_) => self.tag(2)?,
         }
         Ok(())
     }
@@ -240,18 +370,14 @@ impl Writer {
         match kind {
             NoneGiven((name,)) | Either((name,)) | Proof((name,)) | Signature((name,)) => {
                 match name.as_str() {
-                    "Signature" => {
-                        self.out.bin_write_variant_index(0)?;
-                    }
-                    "None_given" => {
-                        self.out.bin_write_variant_index(2)?;
-                    }
+                    "Signature" => self.tag(0)?,
+                    "None_given" => self.tag(2)?,
                     other => bail!("unexpected authorization kind {other}"),
                 }
                 Ok(())
             }
             Proof_((_, vk_hash)) | Signature_((_, vk_hash)) => {
-                self.out.bin_write_variant_index(1)?;
+                self.tag(1)?;
                 self.field(vk_hash)
             }
         }
@@ -311,11 +437,11 @@ impl Writer {
     ) -> Result<()> {
         match value {
             UpdateKind::Set((_, value)) => {
-                self.out.bin_write_variant_index(0)?;
+                self.tag(0)?;
                 f(self, value)
             }
             UpdateKind::Keep(_) => {
-                self.out.bin_write_variant_index(1)?;
+                self.tag(1)?;
                 Ok(())
             }
         }
@@ -330,23 +456,19 @@ impl Writer {
 
         match &update.verification_key {
             UpdateVerificationKey::Set((_, vk)) => {
-                self.out.bin_write_variant_index(0)?;
+                self.tag(0)?;
                 let decoded = bs58::decode(&vk.data.0).with_check(None).into_vec()?;
                 self.out.extend(&decoded[1..]);
             }
-            UpdateVerificationKey::Keep(_) => {
-                self.out.bin_write_variant_index(1)?;
-            }
+            UpdateVerificationKey::Keep(_) => self.tag(1)?,
         }
 
         match &update.permissions {
             UpdatePermissions::Set((_, permissions)) => {
-                self.out.bin_write_variant_index(0)?;
+                self.tag(0)?;
                 self.permissions(permissions)?;
             }
-            UpdatePermissions::Keep(_) => {
-                self.out.bin_write_variant_index(1)?;
-            }
+            UpdatePermissions::Keep(_) => self.tag(1)?,
         }
 
         self.set_or_keep(&update.zkapp_uri, |w, uri| {
@@ -360,7 +482,7 @@ impl Writer {
 
         match &update.timing {
             UpdateTiming::Set((_, timing)) => {
-                self.out.bin_write_variant_index(0)?;
+                self.tag(0)?;
                 self.uint64(timing.initial_minimum_balance.0)?;
                 self.slot(timing.cliff_time.0)?;
                 self.uint64(timing.cliff_amount.0)?;
@@ -368,16 +490,14 @@ impl Writer {
                 self.slot(timing.vesting_period.0)?;
                 self.uint64(timing.vesting_increment.0)?;
             }
-            UpdateTiming::Keep(_) => {
-                self.out.bin_write_variant_index(1)?;
-            }
+            UpdateTiming::Keep(_) => self.tag(1)?,
         }
 
         self.set_or_keep(&update.voting_for, Self::field)
     }
 
     fn permission(&mut self, permission: &Permission) -> Result<()> {
-        self.out.bin_write_variant_index(match permission.0 {
+        self.tag(match permission.0 {
             PermissionKind::None => 0,
             PermissionKind::Either => 1,
             PermissionKind::Proof => 2,
@@ -417,11 +537,11 @@ impl Writer {
     ) -> Result<()> {
         match value {
             Precondition::Check((_, value)) => {
-                self.out.bin_write_variant_index(0)?;
+                self.tag(0)?;
                 f(self, value)
             }
             Precondition::Ignore(_) => {
-                self.out.bin_write_variant_index(1)?;
+                self.tag(1)?;
                 Ok(())
             }
         }
@@ -542,19 +662,46 @@ mod tests {
 
     /// Mesa blocks carry no hash. Expected values come from the devnet daemon
     /// and archive-node-api.
+    /// Each byte example in the module docs. Change the two places together.
     #[test]
-    fn unsigned_values_wrap_to_signed() -> Result<()> {
-        let bytes = |value: u32| -> Result<Vec<u8>> {
+    fn doc_examples() -> Result<()> {
+        fn bytes(f: impl FnOnce(&mut Writer) -> Result<()>) -> Result<Vec<u8>> {
             let mut w = Writer { out: vec![] };
-            w.uint32(value)?;
+            f(&mut w)?;
             Ok(w.out)
-        };
-        assert_eq!(bytes(40_000)?, [0xfd, 0x40, 0x9c, 0x00, 0x00]);
-        assert_eq!(bytes(3_000_000_000)?, [0xfd, 0x00, 0x5e, 0xd0, 0xb2]);
+        }
 
-        let mut w = Writer { out: vec![] };
-        w.uint64(u64::MAX)?;
-        assert_eq!(w.out, [0xff, 0xff]);
+        // single-constructor variant
+        assert_eq!(bytes(|w| w.slot(5))?, [0x00, 0x05]);
+
+        // unsigned values
+        assert_eq!(bytes(|w| w.uint32(40_000))?, [0xfd, 0x40, 0x9c, 0x00, 0x00]);
+        assert_eq!(
+            bytes(|w| w.uint32(3_000_000_000))?,
+            [0xfd, 0x00, 0x5e, 0xd0, 0xb2]
+        );
+        assert_eq!(bytes(|w| w.uint64(u64::MAX))?, [0xff, 0xff]);
+
+        // the wrap matters: the unwrapped value takes the 8 byte form
+        let unwrapped = bytes(|w| {
+            w.out.bin_write_integer(3_000_000_000_i64)?;
+            Ok(())
+        })?;
+        assert_eq!(unwrapped[0], 0xfc);
+        assert_eq!(unwrapped.len(), 9);
+
+        // string
+        assert_eq!(bytes(|w| w.string(b"hi"))?, [0x02, 0x68, 0x69]);
+
+        // vector: elements, then a zero byte
+        assert_eq!(
+            bytes(|w| {
+                w.tag(0xa)?;
+                w.tag(0xb)?;
+                w.vector_end()
+            })?,
+            [0x0a, 0x0b, 0x00]
+        );
         Ok(())
     }
 
