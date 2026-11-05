@@ -20,7 +20,7 @@ use crate::{
         },
         Permission, PermissionKind, Permissions,
     },
-    protocol::serialization_types::version_bytes::V2_TXN_HASH,
+    protocol::{bin_prot::WriteBinProtExt, serialization_types::version_bytes::V2_TXN_HASH},
 };
 use anyhow::{anyhow, bail, Context, Result};
 use blake2::{digest::VariableOutput, Blake2bVar};
@@ -63,22 +63,24 @@ fn zkapp_command_bytes(zkapp: &ZkappCommandData) -> Result<Vec<u8>> {
     // fee payer
     let fee_payer = &zkapp.fee_payer;
     w.public_key(&fee_payer.body.public_key.0)?;
-    w.uint64(fee_payer.body.fee.0);
+    w.uint64(fee_payer.body.fee.0)?;
     match &fee_payer.body.valid_until {
         Some(slot) => {
-            w.tag(1);
-            w.slot(slot.0 as u32);
+            w.out.bin_write_variant_index(1)?;
+            w.slot(slot.0 as u32)?;
         }
-        None => w.tag(0),
+        None => {
+            w.out.bin_write_variant_index(0)?;
+        }
     }
-    w.uint32(fee_payer.body.nonce.0);
+    w.uint32(fee_payer.body.nonce.0)?;
     w.out.extend(DUMMY_SIGNATURE);
 
     // call forest
-    w.nat0(zkapp.account_updates.len());
+    w.out.bin_write_nat0(zkapp.account_updates.len() as u64)?;
     for update in &zkapp.account_updates {
         w.tree(&update.elt)?;
-        w.unit();
+        w.out.bin_write_unit()?;
     }
 
     w.memo(&zkapp.memo)?;
@@ -107,76 +109,38 @@ struct Writer {
 }
 
 impl Writer {
-    /////////////////
-    // bin_prot    //
-    /////////////////
-
-    fn tag(&mut self, tag: u8) {
-        self.out.push(tag);
-    }
-
-    fn unit(&mut self) {
-        self.tag(0);
-    }
-
-    fn bool(&mut self, value: bool) {
-        self.tag(value as u8);
-    }
-
-    fn nat0(&mut self, value: usize) {
-        if value < 0x80 {
-            self.out.push(value as u8);
-        } else if value < 0x1_0000 {
-            self.out.push(0xfe);
-            self.out.extend((value as u16).to_le_bytes());
-        } else {
-            self.out.push(0xfd);
-            self.out.extend((value as u32).to_le_bytes());
-        }
-    }
-
-    fn int(&mut self, value: i64) {
-        if (0..0x80).contains(&value) {
-            self.out.push(value as u8);
-        } else if value < 0 && value >= i8::MIN as i64 {
-            self.out.push(0xff);
-            self.out.extend((value as i8).to_le_bytes());
-        } else if value >= i16::MIN as i64 && value <= i16::MAX as i64 {
-            self.out.push(0xfe);
-            self.out.extend((value as i16).to_le_bytes());
-        } else if value >= i32::MIN as i64 && value <= i32::MAX as i64 {
-            self.out.push(0xfd);
-            self.out.extend((value as i32).to_le_bytes());
-        } else {
-            self.out.push(0xfc);
-            self.out.extend(value.to_le_bytes());
-        }
-    }
+    ///////////////////
+    // mina encoding //
+    ///////////////////
 
     /// `Unsigned_extended.UInt32`, which is bin_prot's `int32`
-    fn uint32(&mut self, value: u32) {
-        self.int(value as i32 as i64);
+    fn uint32(&mut self, value: u32) -> Result<()> {
+        self.out.bin_write_integer(value as i32)?;
+        Ok(())
     }
 
     /// `Unsigned_extended.UInt64`, which is bin_prot's `int64`
-    fn uint64(&mut self, value: u64) {
-        self.int(value as i64);
+    fn uint64(&mut self, value: u64) -> Result<()> {
+        self.out.bin_write_integer(value as i64)?;
+        Ok(())
     }
 
     /// `Global_slot_since_genesis.Stable.V1 = Since_genesis of uint32`
-    fn slot(&mut self, value: u32) {
-        self.tag(0);
-        self.uint32(value);
+    fn slot(&mut self, value: u32) -> Result<()> {
+        self.out.bin_write_variant_index(0)?;
+        self.uint32(value)
     }
 
     /// `Vector.t` has no length prefix: its elements, then a zero byte
-    fn vector_end(&mut self) {
-        self.unit();
+    fn vector_end(&mut self) -> Result<()> {
+        self.out.bin_write_unit()?;
+        Ok(())
     }
 
-    fn string(&mut self, value: &[u8]) {
-        self.nat0(value.len());
+    fn string(&mut self, value: &[u8]) -> Result<()> {
+        self.out.bin_write_nat0(value.len() as u64)?;
         self.out.extend(value);
+        Ok(())
     }
 
     ///////////////////
@@ -215,7 +179,7 @@ impl Writer {
         let point: crate::protocol::serialization_types::signatures::CompressedCurvePoint =
             (&pk).into();
         self.out.extend(point.x);
-        self.bool(point.is_odd);
+        self.out.bin_write_bool(point.is_odd)?;
         Ok(())
     }
 
@@ -224,7 +188,7 @@ impl Writer {
         if decoded.len() < 1 + BASE58_CHECKSUM_LEN {
             bail!("memo {value} is too short");
         }
-        self.string(&decoded[1..decoded.len() - BASE58_CHECKSUM_LEN]);
+        self.string(&decoded[1..decoded.len() - BASE58_CHECKSUM_LEN])?;
         Ok(())
     }
 
@@ -235,36 +199,39 @@ impl Writer {
     /// `{account_update; account_update_digest = (); calls}`
     fn tree(&mut self, elt: &Elt) -> Result<()> {
         self.account_update(&elt.account_update)?;
-        self.unit();
-        self.nat0(elt.calls.len());
+        self.out.bin_write_unit()?;
+        self.out.bin_write_nat0(elt.calls.len() as u64)?;
         for call in &elt.calls {
             self.tree(&call.elt)?;
-            self.unit();
+            self.out.bin_write_unit()?;
         }
         Ok(())
     }
 
     fn account_update(&mut self, update: &AccountUpdate) -> Result<()> {
         self.body(&update.body)?;
-        self.control(&update.authorization);
+        self.control(&update.authorization)?;
         Ok(())
     }
 
     /// `Control`: `Proof of _ | Signature of _ | None_given`, all dummied
-    fn control(&mut self, auth: &Authorization) {
+    fn control(&mut self, auth: &Authorization) -> Result<()> {
         use Authorization::*;
         match auth {
             Proof_((ProofOrSignature::Proof, _)) | Signature_((ProofOrSignature::Proof, _)) => {
-                self.tag(0);
+                self.out.bin_write_variant_index(0)?;
                 self.out.extend(DUMMY_PROOF);
             }
             Proof_((ProofOrSignature::Signature, _))
             | Signature_((ProofOrSignature::Signature, _)) => {
-                self.tag(1);
+                self.out.bin_write_variant_index(1)?;
                 self.out.extend(DUMMY_SIGNATURE);
             }
-            NoneGiven(_) | Either(_) | Proof(_) | Signature(_) => self.tag(2),
+            NoneGiven(_) | Either(_) | Proof(_) | Signature(_) => {
+                self.out.bin_write_variant_index(2)?;
+            }
         }
+        Ok(())
     }
 
     /// `Authorization_kind`: `Signature | Proof of field | None_given`
@@ -273,14 +240,18 @@ impl Writer {
         match kind {
             NoneGiven((name,)) | Either((name,)) | Proof((name,)) | Signature((name,)) => {
                 match name.as_str() {
-                    "Signature" => self.tag(0),
-                    "None_given" => self.tag(2),
+                    "Signature" => {
+                        self.out.bin_write_variant_index(0)?;
+                    }
+                    "None_given" => {
+                        self.out.bin_write_variant_index(2)?;
+                    }
                     other => bail!("unexpected authorization kind {other}"),
                 }
                 Ok(())
             }
             Proof_((_, vk_hash)) | Signature_((_, vk_hash)) => {
-                self.tag(1);
+                self.out.bin_write_variant_index(1)?;
                 self.field(vk_hash)
             }
         }
@@ -291,37 +262,40 @@ impl Writer {
         self.field(&body.token_id.0)?;
         self.update(&body.update)?;
 
-        self.uint64(body.balance_change.magnitude.0);
-        self.tag(match body.balance_change.sgn.0 {
-            SupplyAdjustmentSign::Pos => 0,
-            SupplyAdjustmentSign::Neg => 1,
-        });
+        self.uint64(body.balance_change.magnitude.0)?;
+        self.out
+            .bin_write_variant_index(match body.balance_change.sgn.0 {
+                SupplyAdjustmentSign::Pos => 0,
+                SupplyAdjustmentSign::Neg => 1,
+            })?;
 
-        self.bool(body.increment_nonce);
+        self.out.bin_write_bool(body.increment_nonce)?;
 
-        self.nat0(body.events.len());
+        self.out.bin_write_nat0(body.events.len() as u64)?;
         for event in &body.events {
             self.fields(&event.0)?;
         }
-        self.nat0(body.actions.len());
+        self.out.bin_write_nat0(body.actions.len() as u64)?;
         for action in &body.actions {
             self.fields(&action.0)?;
         }
 
         self.field(&body.call_data)?;
         self.preconditions(&body.preconditions)?;
-        self.bool(body.use_full_commitment);
-        self.bool(body.implicit_account_creation_fee);
-        self.tag(match body.may_use_token.0 {
-            MayUseToken::No => 0,
-            MayUseToken::ParentsOwnToken => 1,
-            MayUseToken::InheritFromParent => 2,
-        });
+        self.out.bin_write_bool(body.use_full_commitment)?;
+        self.out
+            .bin_write_bool(body.implicit_account_creation_fee)?;
+        self.out
+            .bin_write_variant_index(match body.may_use_token.0 {
+                MayUseToken::No => 0,
+                MayUseToken::ParentsOwnToken => 1,
+                MayUseToken::InheritFromParent => 2,
+            })?;
         self.authorization_kind(&body.authorization_kind)
     }
 
     fn fields(&mut self, fields: &[String]) -> Result<()> {
-        self.nat0(fields.len());
+        self.out.bin_write_nat0(fields.len() as u64)?;
         fields.iter().try_for_each(|field| self.field(field))
     }
 
@@ -337,11 +311,11 @@ impl Writer {
     ) -> Result<()> {
         match value {
             UpdateKind::Set((_, value)) => {
-                self.tag(0);
+                self.out.bin_write_variant_index(0)?;
                 f(self, value)
             }
             UpdateKind::Keep(_) => {
-                self.tag(1);
+                self.out.bin_write_variant_index(1)?;
                 Ok(())
             }
         }
@@ -351,76 +325,83 @@ impl Writer {
         for state in &update.app_state {
             self.set_or_keep(state, Self::field)?;
         }
-        self.vector_end();
+        self.vector_end()?;
         self.set_or_keep(&update.delegate, Self::public_key)?;
 
         match &update.verification_key {
             UpdateVerificationKey::Set((_, vk)) => {
-                self.tag(0);
+                self.out.bin_write_variant_index(0)?;
                 let decoded = bs58::decode(&vk.data.0).with_check(None).into_vec()?;
                 self.out.extend(&decoded[1..]);
             }
-            UpdateVerificationKey::Keep(_) => self.tag(1),
+            UpdateVerificationKey::Keep(_) => {
+                self.out.bin_write_variant_index(1)?;
+            }
         }
 
         match &update.permissions {
             UpdatePermissions::Set((_, permissions)) => {
-                self.tag(0);
+                self.out.bin_write_variant_index(0)?;
                 self.permissions(permissions)?;
             }
-            UpdatePermissions::Keep(_) => self.tag(1),
+            UpdatePermissions::Keep(_) => {
+                self.out.bin_write_variant_index(1)?;
+            }
         }
 
         self.set_or_keep(&update.zkapp_uri, |w, uri| {
-            w.string(uri.as_bytes());
+            w.string(uri.as_bytes())?;
             Ok(())
         })?;
         self.set_or_keep(&update.token_symbol, |w, symbol| {
-            w.string(symbol.as_bytes());
+            w.string(symbol.as_bytes())?;
             Ok(())
         })?;
 
         match &update.timing {
             UpdateTiming::Set((_, timing)) => {
-                self.tag(0);
-                self.uint64(timing.initial_minimum_balance.0);
-                self.slot(timing.cliff_time.0);
-                self.uint64(timing.cliff_amount.0);
+                self.out.bin_write_variant_index(0)?;
+                self.uint64(timing.initial_minimum_balance.0)?;
+                self.slot(timing.cliff_time.0)?;
+                self.uint64(timing.cliff_amount.0)?;
                 // `Global_slot_span` is a single-constructor variant too
-                self.slot(timing.vesting_period.0);
-                self.uint64(timing.vesting_increment.0);
+                self.slot(timing.vesting_period.0)?;
+                self.uint64(timing.vesting_increment.0)?;
             }
-            UpdateTiming::Keep(_) => self.tag(1),
+            UpdateTiming::Keep(_) => {
+                self.out.bin_write_variant_index(1)?;
+            }
         }
 
         self.set_or_keep(&update.voting_for, Self::field)
     }
 
-    fn permission(&mut self, permission: &Permission) {
-        self.tag(match permission.0 {
+    fn permission(&mut self, permission: &Permission) -> Result<()> {
+        self.out.bin_write_variant_index(match permission.0 {
             PermissionKind::None => 0,
             PermissionKind::Either => 1,
             PermissionKind::Proof => 2,
             PermissionKind::Signature => 3,
             PermissionKind::Impossible => 4,
-        });
+        })?;
+        Ok(())
     }
 
     fn permissions(&mut self, p: &Permissions) -> Result<()> {
-        self.permission(&p.edit_state);
-        self.permission(&p.access);
-        self.permission(&p.send);
-        self.permission(&p.receive);
-        self.permission(&p.set_delegate);
-        self.permission(&p.set_permissions);
-        self.permission(&p.set_verification_key.0);
-        self.uint32(p.set_verification_key.1.parse()?);
-        self.permission(&p.set_zkapp_uri);
-        self.permission(&p.edit_action_state);
-        self.permission(&p.set_token_symbol);
-        self.permission(&p.increment_nonce);
-        self.permission(&p.set_voting_for);
-        self.permission(&p.set_timing);
+        self.permission(&p.edit_state)?;
+        self.permission(&p.access)?;
+        self.permission(&p.send)?;
+        self.permission(&p.receive)?;
+        self.permission(&p.set_delegate)?;
+        self.permission(&p.set_permissions)?;
+        self.permission(&p.set_verification_key.0)?;
+        self.uint32(p.set_verification_key.1.parse()?)?;
+        self.permission(&p.set_zkapp_uri)?;
+        self.permission(&p.edit_action_state)?;
+        self.permission(&p.set_token_symbol)?;
+        self.permission(&p.increment_nonce)?;
+        self.permission(&p.set_voting_for)?;
+        self.permission(&p.set_timing)?;
         Ok(())
     }
 
@@ -436,11 +417,11 @@ impl Writer {
     ) -> Result<()> {
         match value {
             Precondition::Check((_, value)) => {
-                self.tag(0);
+                self.out.bin_write_variant_index(0)?;
                 f(self, value)
             }
             Precondition::Ignore(_) => {
-                self.tag(1);
+                self.out.bin_write_variant_index(1)?;
                 Ok(())
             }
         }
@@ -452,24 +433,24 @@ impl Writer {
 
     fn length(&mut self, value: &Precondition<NumericBoundsU32>) -> Result<()> {
         self.or_ignore(value, |w, bounds| {
-            w.uint32(bounds.lower.0);
-            w.uint32(bounds.upper.0);
+            w.uint32(bounds.lower.0)?;
+            w.uint32(bounds.upper.0)?;
             Ok(())
         })
     }
 
     fn global_slot(&mut self, value: &Precondition<NumericBoundsU32>) -> Result<()> {
         self.or_ignore(value, |w, bounds| {
-            w.slot(bounds.lower.0);
-            w.slot(bounds.upper.0);
+            w.slot(bounds.lower.0)?;
+            w.slot(bounds.upper.0)?;
             Ok(())
         })
     }
 
     fn amount(&mut self, value: &Precondition<NumericBoundsU64>) -> Result<()> {
         self.or_ignore(value, |w, bounds| {
-            w.uint64(bounds.lower.0);
-            w.uint64(bounds.upper.0);
+            w.uint64(bounds.lower.0)?;
+            w.uint64(bounds.upper.0)?;
             Ok(())
         })
     }
@@ -506,15 +487,15 @@ impl Writer {
         for state in &account.state {
             self.or_ignore(state, |w, state| w.field(&state.0))?;
         }
-        self.vector_end();
+        self.vector_end()?;
 
         self.hash_check(&account.action_state)?;
         self.or_ignore(&account.proved_state, |w, value| {
-            w.bool(*value);
+            w.out.bin_write_bool(*value)?;
             Ok(())
         })?;
         self.or_ignore(&account.is_new, |w, value| {
-            w.bool(*value);
+            w.out.bin_write_bool(*value)?;
             Ok(())
         })
     }
@@ -561,6 +542,22 @@ mod tests {
 
     /// Mesa blocks carry no hash. Expected values come from the devnet daemon
     /// and archive-node-api.
+    #[test]
+    fn unsigned_values_wrap_to_signed() -> Result<()> {
+        let bytes = |value: u32| -> Result<Vec<u8>> {
+            let mut w = Writer { out: vec![] };
+            w.uint32(value)?;
+            Ok(w.out)
+        };
+        assert_eq!(bytes(40_000)?, [0xfd, 0x40, 0x9c, 0x00, 0x00]);
+        assert_eq!(bytes(3_000_000_000)?, [0xfd, 0x00, 0x5e, 0xd0, 0xb2]);
+
+        let mut w = Writer { out: vec![] };
+        w.uint64(u64::MAX)?;
+        assert_eq!(w.out, [0xff, 0xff]);
+        Ok(())
+    }
+
     #[test]
     fn mesa_block_hashes() -> Result<()> {
         for (path, expected) in [
