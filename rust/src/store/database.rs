@@ -235,6 +235,16 @@ impl Database {
         self.0.iterator_cf(cf, mode)
     }
 
+    /// [Self::iterator_cf] for a caller that reads only keys with no pending
+    /// write of the atomic scope. The caller must show why this is true.
+    pub fn iterator_cf_ignore_pending<'a>(
+        &'a self,
+        cf: &impl AsColumnFamilyRef,
+        mode: IteratorMode,
+    ) -> DBIterator<'a> {
+        self.0.iterator_cf(cf, mode)
+    }
+
     /// [Self::iterator_cf] over the keys in `[lower, upper)`
     pub fn iterator_cf_bounded<'a>(
         &'a self,
