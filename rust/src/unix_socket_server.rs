@@ -157,8 +157,7 @@ async fn handle_command(
                         block_missing_from_db(&best_tip.state_hash().0)
                     };
 
-                if path.is_some() {
-                    let path = &path.unwrap();
+                if let Some(path) = &path {
                     debug!("Writing best tip block to {path:?}");
                     std::fs::write(path, block_str)?;
                     ServerCliResponse::Success(format!("Best block written to {path:?}"))
@@ -193,8 +192,7 @@ async fn handle_command(
                         } else {
                             block_missing_from_db(&block.state_hash().0)
                         };
-                        if path.is_some() {
-                            let path = &path.unwrap();
+                        if let Some(path) = &path {
                             debug!("Writing block {state_hash} to {path:?}");
                             std::fs::write(path, block_str)?;
                             ServerCliResponse::Success(format!(
@@ -261,11 +259,7 @@ async fn handle_command(
                 format_vec_jq_compatible(&blocks)
             };
 
-            if path.is_none() {
-                debug!("Writing blocks at height {height} to stdout");
-                ServerCliResponse::Success(blocks_str)
-            } else {
-                let path = path.unwrap();
+            if let Some(path) = path {
                 if !path.is_dir() {
                     debug!("Writing blocks at height {height} to {path:?}");
                     std::fs::write(path.clone(), blocks_str)?;
@@ -275,6 +269,9 @@ async fn handle_command(
                 } else {
                     file_must_not_be_a_directory(&path)
                 }
+            } else {
+                debug!("Writing blocks at height {height} to stdout");
+                ServerCliResponse::Success(blocks_str)
             }
         }
         ClientCli::Blocks(Blocks::GlobalSlot {
@@ -323,11 +320,7 @@ async fn handle_command(
                 format_vec_jq_compatible(&blocks)
             };
 
-            if path.is_none() {
-                debug!("Writing blocks at slot {slot} to stdout");
-                ServerCliResponse::Success(blocks_str)
-            } else {
-                let path = path.unwrap();
+            if let Some(path) = path {
                 if !path.is_dir() {
                     debug!("Writing blocks at slot {slot} to {path:?}");
 
@@ -336,6 +329,9 @@ async fn handle_command(
                 } else {
                     file_must_not_be_a_directory(&path)
                 }
+            } else {
+                debug!("Writing blocks at slot {slot} to stdout");
+                ServerCliResponse::Success(blocks_str)
             }
         }
         ClientCli::Blocks(Blocks::PublicKey {
@@ -390,11 +386,7 @@ async fn handle_command(
                     format_vec_jq_compatible(&blocks)
                 };
 
-                if path.is_none() {
-                    debug!("Writing blocks at public key {pk} to stdout");
-                    ServerCliResponse::Success(blocks_str)
-                } else {
-                    let path = path.unwrap();
+                if let Some(path) = path {
                     if !path.is_dir() {
                         debug!("Writing blocks at public key {pk} to {path:?}");
 
@@ -405,6 +397,9 @@ async fn handle_command(
                     } else {
                         file_must_not_be_a_directory(&path)
                     }
+                } else {
+                    debug!("Writing blocks at public key {pk} to stdout");
+                    ServerCliResponse::Success(blocks_str)
                 }
             }
         }
@@ -453,11 +448,7 @@ async fn handle_command(
                 format_vec_jq_compatible(&blocks)
             };
 
-            if path.is_none() {
-                debug!("Writing children of block {state_hash} to stdout");
-                ServerCliResponse::Success(blocks_str)
-            } else {
-                let path = path.unwrap();
+            if let Some(path) = path {
                 if !path.is_dir() {
                     debug!("Writing children of block {state_hash} to {path:?}");
                     std::fs::write(path.clone(), blocks_str)?;
@@ -467,6 +458,9 @@ async fn handle_command(
                 } else {
                     file_must_not_be_a_directory(&path)
                 }
+            } else {
+                debug!("Writing children of block {state_hash} to stdout");
+                ServerCliResponse::Success(blocks_str)
             }
         }
         ClientCli::Chain(Chain::Best {
@@ -558,11 +552,7 @@ async fn handle_command(
                         format_vec_jq_compatible(&best_chain)
                     };
 
-                    if path.is_none() {
-                        debug!("Writing best chain to stdout");
-                        ServerCliResponse::Success(best_chain_str)
-                    } else {
-                        let path = path.unwrap();
+                    if let Some(path) = path {
                         if !path.is_dir() {
                             debug!("Writing best chain to {path:?}");
 
@@ -571,6 +561,9 @@ async fn handle_command(
                         } else {
                             file_must_not_be_a_directory(&path)
                         }
+                    } else {
+                        debug!("Writing best chain to stdout");
+                        ServerCliResponse::Success(best_chain_str)
                     }
                 } else {
                     ServerCliResponse::Success("No results".to_string())
@@ -590,11 +583,7 @@ async fn handle_command(
             debug!("Received best-ledger command");
             if let Some(ledger) = db.get_best_ledger(memoize)? {
                 let ledger = ledger.to_string_pretty();
-                if path.is_none() {
-                    debug!("Writing best ledger to stdout");
-                    ServerCliResponse::Success(ledger)
-                } else {
-                    let path = path.unwrap();
+                if let Some(path) = path {
                     if path.is_dir() {
                         file_must_not_be_a_directory(&path)
                     } else {
@@ -602,6 +591,9 @@ async fn handle_command(
                         std::fs::write(path.clone(), ledger)?;
                         ServerCliResponse::Success(format!("Best ledger written to {path:?}"))
                     }
+                } else {
+                    debug!("Writing best ledger to stdout");
+                    ServerCliResponse::Success(ledger)
                 }
             } else {
                 ServerCliResponse::Error("Best ledger cannot be calculated".to_string())
@@ -619,11 +611,7 @@ async fn handle_command(
                 hash: &str,
             ) -> ServerCliResponse {
                 let ledger = ledger.to_string_pretty();
-                if path.is_none() {
-                    debug!("Writing staged ledger at hash {hash} to stdout");
-                    ServerCliResponse::Success(ledger)
-                } else {
-                    let path = path.unwrap();
+                if let Some(path) = path {
                     if !path.is_dir() {
                         debug!("Writing staged ledger at {hash} to {path:?}");
                         std::fs::write(path.clone(), ledger).ok();
@@ -633,6 +621,9 @@ async fn handle_command(
                     } else {
                         file_must_not_be_a_directory(&path)
                     }
+                } else {
+                    debug!("Writing staged ledger at hash {hash} to stdout");
+                    ServerCliResponse::Success(ledger)
                 }
             }
 
@@ -679,11 +670,7 @@ async fn handle_command(
                         .get_staged_ledger_at_block_height(height, memoize)?
                         .unwrap()
                         .to_string_pretty();
-                    if path.is_none() {
-                        debug!("Writing ledger at height {height} to stdout");
-                        ServerCliResponse::Success(ledger_str)
-                    } else {
-                        let path = path.unwrap();
+                    if let Some(path) = path {
                         if !path.is_dir() {
                             debug!("Writing ledger at height {height} to {path:?}");
                             std::fs::write(&path, ledger_str)?;
@@ -693,6 +680,9 @@ async fn handle_command(
                         } else {
                             file_must_not_be_a_directory(&path)
                         }
+                    } else {
+                        debug!("Writing ledger at height {height} to stdout");
+                        ServerCliResponse::Success(ledger_str)
                     }
                 }
             } else {
@@ -707,11 +697,7 @@ async fn handle_command(
                     db.get_staking_ledger(&hash.clone().into(), None, None)?
                 {
                     let ledger_json = serde_json::to_string_pretty(&staking_ledger)?;
-                    if path.is_none() {
-                        debug!("Writing staking ledger at hash {hash} to stdout");
-                        ServerCliResponse::Success(ledger_json)
-                    } else {
-                        let path = path.unwrap();
+                    if let Some(path) = path {
                         if !path.is_dir() {
                             debug!("Writing ledger at {hash} to {path:?}");
 
@@ -722,6 +708,9 @@ async fn handle_command(
                         } else {
                             file_must_not_be_a_directory(&path)
                         }
+                    } else {
+                        debug!("Writing staking ledger at hash {hash} to stdout");
+                        ServerCliResponse::Success(ledger_json)
                     }
                 } else {
                     ServerCliResponse::Error(format!(
@@ -744,11 +733,7 @@ async fn handle_command(
                 db.build_staking_ledger(epoch, &genesis_state_hash.into())?
             {
                 let ledger_json = serde_json::to_string_pretty(&staking_ledger)?;
-                if path.is_none() {
-                    debug!("Writing staking ledger at epoch {epoch} to stdout");
-                    ServerCliResponse::Success(ledger_json)
-                } else {
-                    let path = path.unwrap();
+                if let Some(path) = path {
                     if !path.is_dir() {
                         debug!("Writing ledger at epoch {epoch} to {path:?}");
                         std::fs::write(path.clone(), ledger_json)?;
@@ -758,6 +743,9 @@ async fn handle_command(
                     } else {
                         file_must_not_be_a_directory(&path)
                     }
+                } else {
+                    debug!("Writing staking ledger at epoch {epoch} to stdout");
+                    ServerCliResponse::Success(ledger_json)
                 }
             } else {
                 ServerCliResponse::Error(format!(
@@ -831,11 +819,7 @@ async fn handle_command(
             if let Some(agg_del_str) = aggregated_delegations
                 .map(|agg_del| serde_json::to_string_pretty(&agg_del).unwrap())
             {
-                if path.is_none() {
-                    debug!("Writing aggregated staking delegations epoch {epoch} to stdout");
-                    ServerCliResponse::Success(agg_del_str)
-                } else {
-                    let path = path.unwrap();
+                if let Some(path) = path {
                     if !path.is_dir() {
                         debug!("Writing aggregated staking delegations epoch {epoch} to {path:?}");
                         std::fs::write(&path, agg_del_str)?;
@@ -845,6 +829,9 @@ async fn handle_command(
                     } else {
                         file_must_not_be_a_directory(&path)
                     }
+                } else {
+                    debug!("Writing aggregated staking delegations epoch {epoch} to stdout");
+                    ServerCliResponse::Success(agg_del_str)
                 }
             } else {
                 ServerCliResponse::Error(format!(
@@ -864,12 +851,7 @@ async fn handle_command(
                 let snarks = db.get_snark_work_by_public_key(&pk.clone().into())?;
                 let snarks_str = format_vec_jq_compatible(&snarks);
 
-                if path.is_none() {
-                    debug!("Writing SNARK work for public key {pk} to stdout");
-                    ServerCliResponse::Success(snarks_str)
-                } else {
-                    let path = path.unwrap();
-
+                if let Some(path) = path {
                     if !path.is_dir() {
                         debug!("Writing SNARK work for public key {pk} to {path:?}");
                         std::fs::write(&path, snarks_str)?;
@@ -879,6 +861,9 @@ async fn handle_command(
                     } else {
                         file_must_not_be_a_directory(&path)
                     }
+                } else {
+                    debug!("Writing SNARK work for public key {pk} to stdout");
+                    ServerCliResponse::Success(snarks_str)
                 }
             }
         }
@@ -891,11 +876,7 @@ async fn handle_command(
                 match db.get_block_snark_work(&state_hash.clone().into())? {
                     Some(snarks) => {
                         let snarks_str = format_vec_jq_compatible(&snarks);
-                        if path.is_none() {
-                            debug!("Writing SNARK work for block {state_hash} to stdout");
-                            ServerCliResponse::Success(snarks_str)
-                        } else {
-                            let path = path.unwrap();
+                        if let Some(path) = path {
                             if !path.is_dir() {
                                 debug!("Writing SNARK work for block {state_hash} to {path:?}");
                                 std::fs::write(&path, snarks_str).unwrap();
@@ -905,6 +886,9 @@ async fn handle_command(
                             } else {
                                 file_must_not_be_a_directory(&path)
                             }
+                        } else {
+                            debug!("Writing SNARK work for block {state_hash} to stdout");
+                            ServerCliResponse::Success(snarks_str)
                         }
                     }
                     None => ServerCliResponse::Success(format!(
@@ -946,11 +930,7 @@ async fn handle_command(
                 format_json(&summary, json)
             };
 
-            if path.is_none() {
-                debug!("Writing summary to stdout");
-                ServerCliResponse::Success(summary_str)
-            } else {
-                let path = path.unwrap();
+            if let Some(path) = path {
                 if !path.is_dir() {
                     debug!("Writing summary to {path:?}");
                     std::fs::write(&path, summary_str)?;
@@ -958,6 +938,9 @@ async fn handle_command(
                 } else {
                     file_must_not_be_a_directory(&path)
                 }
+            } else {
+                debug!("Writing summary to stdout");
+                ServerCliResponse::Success(summary_str)
             }
         }
         ClientCli::Transactions(Transactions::PublicKey {
@@ -983,10 +966,7 @@ async fn handle_command(
                 invalid_public_key(&pk)
             } else if !StateHash::is_valid(&start_state_hash.0) {
                 invalid_state_hash(&start_state_hash.0)
-            } else if end_state_hash_result.is_err() {
-                best_tip_missing_from_db()
-            } else {
-                let end_state_hash = end_state_hash_result.unwrap();
+            } else if let Ok(end_state_hash) = end_state_hash_result {
                 if !StateHash::is_valid(&end_state_hash.0) {
                     invalid_state_hash(&end_state_hash.0)
                 } else if csv {
@@ -1010,11 +990,7 @@ async fn handle_command(
                         format_vec_jq_compatible(&txs)
                     };
 
-                    if path.is_none() {
-                        debug!("Writing transactions for {pk} to stdout");
-                        ServerCliResponse::Success(transaction_str)
-                    } else {
-                        let path = path.unwrap();
+                    if let Some(path) = path {
                         if !path.is_dir() {
                             debug!("Writing transactions for {pk} to {path:?}");
                             std::fs::write(&path, transaction_str)?;
@@ -1024,8 +1000,13 @@ async fn handle_command(
                         } else {
                             file_must_not_be_a_directory(&path)
                         }
+                    } else {
+                        debug!("Writing transactions for {pk} to stdout");
+                        ServerCliResponse::Success(transaction_str)
                     }
                 }
+            } else {
+                best_tip_missing_from_db()
             }
         }
         ClientCli::Transactions(Transactions::Hash { hash, verbose }) => {
@@ -1068,11 +1049,7 @@ async fn handle_command(
                             format_vec_jq_compatible(&cmds)
                         };
 
-                        if path.is_none() {
-                            debug!("Writing transactions for {state_hash} to stdout");
-                            ServerCliResponse::Success(transaction_str)
-                        } else {
-                            let path = path.unwrap();
+                        if let Some(path) = path {
                             if !path.is_dir() {
                                 debug!("Writing transactions for {state_hash} to {path:?}");
                                 std::fs::write(&path, transaction_str).unwrap();
@@ -1082,6 +1059,9 @@ async fn handle_command(
                             } else {
                                 file_must_not_be_a_directory(&path)
                             }
+                        } else {
+                            debug!("Writing transactions for {state_hash} to stdout");
+                            ServerCliResponse::Success(transaction_str)
                         }
                     }
                     None => ServerCliResponse::Success(format!(
@@ -1132,11 +1112,7 @@ async fn handle_command(
                     db.get_internal_commands_public_key(&pk.clone().into(), 0, effective_limit)?;
                 let internal_cmds_str = serde_json::to_string_pretty(&internal_cmds)?;
 
-                if path.is_none() {
-                    debug!("Writing internal commands for {pk} to stdout");
-                    ServerCliResponse::Success(internal_cmds_str)
-                } else {
-                    let path = path.unwrap();
+                if let Some(path) = path {
                     if !path.is_dir() {
                         debug!("Writing internal commands for {pk} to {path:?}");
                         std::fs::write(&path, internal_cmds_str)?;
@@ -1146,6 +1122,9 @@ async fn handle_command(
                     } else {
                         file_must_not_be_a_directory(&path)
                     }
+                } else {
+                    debug!("Writing internal commands for {pk} to stdout");
+                    ServerCliResponse::Success(internal_cmds_str)
                 }
             }
         }
@@ -1158,11 +1137,7 @@ async fn handle_command(
                 let internal_cmds_str =
                     serde_json::to_string_pretty(&db.get_internal_commands(&state_hash)?)?;
 
-                if path.is_none() {
-                    debug!("Writing block internal commands for {state_hash} to stdout");
-                    ServerCliResponse::Success(internal_cmds_str)
-                } else {
-                    let path = path.unwrap();
+                if let Some(path) = path {
                     if !path.is_dir() {
                         debug!("Writing block internal commands for {state_hash} to {path:?}");
 
@@ -1173,6 +1148,9 @@ async fn handle_command(
                     } else {
                         file_must_not_be_a_directory(&path)
                     }
+                } else {
+                    debug!("Writing block internal commands for {state_hash} to stdout");
+                    ServerCliResponse::Success(internal_cmds_str)
                 }
             }
         }

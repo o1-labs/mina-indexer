@@ -76,7 +76,7 @@ impl Branch {
         self.branches.height() == 0
     }
 
-    fn traverse_level_order_ids(&self) -> LevelOrderTraversalIds<Block> {
+    fn traverse_level_order_ids(&self) -> LevelOrderTraversalIds<'_, Block> {
         let root = self.branches.root_node_id().expect("root node id");
         self.branches
             .traverse_level_order_ids(root)

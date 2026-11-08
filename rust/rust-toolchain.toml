@@ -1,5 +1,5 @@
 [toolchain]
-channel = "1.85.1"
+channel = "1.89.0"
 # llvm-tools-preview provides llvm-cov / llvm-profdata for `cargo llvm-cov`
 # (coverage). rust-src / rust-analyzer are for editor tooling.
 components = ["rust-src", "rust-analyzer", "llvm-tools-preview"]

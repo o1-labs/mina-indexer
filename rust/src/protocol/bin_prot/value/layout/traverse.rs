@@ -107,7 +107,7 @@ impl BinProtRuleIterator {
 
     // Drop a custom rule onto the stack n times
     pub fn push_n(&mut self, rule: BinProtRule, n: usize) {
-        self.stack.extend(std::iter::repeat(rule).take(n));
+        self.stack.extend(std::iter::repeat_n(rule, n));
     }
 }
 
