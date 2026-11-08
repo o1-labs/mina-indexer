@@ -219,74 +219,12 @@ impl SnarkStore for IndexerStore {
             genesis_state_hash,
         );
 
-
         let mut old_prover_fees = HashMap::new();
         for snark in snarks.iter() {
             if !old_prover_fees.contains_key(&snark.prover) {
-                // delete old all-time fees
-                let old_total = self
-                    .get_snark_prover_total_fees(&snark.prover, None)?
-                    .unwrap_or_default();
-                let old_max = self
-                    .get_snark_prover_max_fee(&snark.prover, None)?
-                    .unwrap_or_default();
-                let old_min = self
-                    .get_snark_prover_min_fee(&snark.prover, None)?
-                    .unwrap_or(u64::MAX);
-
-                self.delete_old_all_time_snark_fees(&snark.prover, old_total, old_max, old_min)?;
-
-                // delete old epoch fees
-                let old_epoch_total = self
-                    .get_snark_prover_epoch_fees(
-                        &snark.prover,
-                        Some(epoch),
-                        Some(genesis_state_hash),
-                        None,
-                    )?
-                    .unwrap_or_default();
-                let old_epoch_max = self
-                    .get_snark_prover_epoch_max_fee(
-                        &snark.prover,
-                        Some(epoch),
-                        Some(genesis_state_hash),
-                        None,
-                    )?
-                    .unwrap_or_default();
-                let old_epoch_min = self
-                    .get_snark_prover_epoch_min_fee(
-                        &snark.prover,
-                        Some(epoch),
-                        Some(genesis_state_hash),
-                        None,
-                    )?
-                    .unwrap_or(u64::MAX);
-
-                self.delete_old_epoch_snark_fees(
-                    epoch,
-                    genesis_state_hash,
-                    &snark.prover,
-                    old_epoch_total,
-                    old_epoch_max,
-                    old_epoch_min,
-                )?;
-
-                // update the old SNARK fee table
-                old_prover_fees.insert(
-                    snark.prover.clone(),
-                    (
-                        SnarkAllTimeFees {
-                            total: old_total,
-                            max: old_max,
-                            min: old_min,
-                        },
-                        SnarkEpochFees {
-                            total: old_epoch_total,
-                            max: old_epoch_max,
-                            min: old_epoch_min,
-                        },
-                    ),
-                );
+                let old_fees =
+                    self.take_old_snark_fees(&snark.prover, epoch, genesis_state_hash)?;
+                old_prover_fees.insert(snark.prover.clone(), old_fees);
             }
         }
 
@@ -1348,6 +1286,63 @@ impl SnarkStore for IndexerStore {
     }
 }
 
+impl IndexerStore {
+    /// Reads the current all-time and epoch fees of `prover` and deletes their
+    /// rows. A missing value reads as total 0, max 0, min `u64::MAX`.
+    fn take_old_snark_fees(
+        &self,
+        prover: &PublicKey,
+        epoch: u32,
+        genesis_state_hash: &StateHash,
+    ) -> Result<(SnarkAllTimeFees, SnarkEpochFees)> {
+        // delete old all-time fees
+        let old_total = self
+            .get_snark_prover_total_fees(prover, None)?
+            .unwrap_or_default();
+        let old_max = self
+            .get_snark_prover_max_fee(prover, None)?
+            .unwrap_or_default();
+        let old_min = self
+            .get_snark_prover_min_fee(prover, None)?
+            .unwrap_or(u64::MAX);
+
+        self.delete_old_all_time_snark_fees(prover, old_total, old_max, old_min)?;
+
+        // delete old epoch fees
+        let old_epoch_total = self
+            .get_snark_prover_epoch_fees(prover, Some(epoch), Some(genesis_state_hash), None)?
+            .unwrap_or_default();
+        let old_epoch_max = self
+            .get_snark_prover_epoch_max_fee(prover, Some(epoch), Some(genesis_state_hash), None)?
+            .unwrap_or_default();
+        let old_epoch_min = self
+            .get_snark_prover_epoch_min_fee(prover, Some(epoch), Some(genesis_state_hash), None)?
+            .unwrap_or(u64::MAX);
+
+        self.delete_old_epoch_snark_fees(
+            epoch,
+            genesis_state_hash,
+            prover,
+            old_epoch_total,
+            old_epoch_max,
+            old_epoch_min,
+        )?;
+
+        Ok((
+            SnarkAllTimeFees {
+                total: old_total,
+                max: old_max,
+                min: old_min,
+            },
+            SnarkEpochFees {
+                total: old_epoch_total,
+                max: old_epoch_max,
+                min: old_epoch_min,
+            },
+        ))
+    }
+}
+
 fn start_key(
     genesis_state_hash: &StateHash,
     epoch: u32,
@@ -1428,10 +1423,7 @@ mod tests {
         // the last block of the epoch goes: no fees are left in that epoch, and
         // the sorted views have one row with the restored all-time total
         store.update_snark_prover_fees(2, 11, &genesis, &work(50), SnarkApplication::Unapply)?;
-        assert_eq!(
-            fees(2)?,
-            (Some(30), Some(30), Some(30), None, None, None)
-        );
+        assert_eq!(fees(2)?, (Some(30), Some(30), Some(30), None, None, None));
         let sorted: Vec<_> = store
             .snark_prover_total_fees_iterator(speedb::IteratorMode::Start)
             .flatten()
