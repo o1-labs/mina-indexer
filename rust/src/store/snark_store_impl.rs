@@ -219,78 +219,12 @@ impl SnarkStore for IndexerStore {
             genesis_state_hash,
         );
 
-        let block_height_opt = match apply {
-            SnarkApplication::Apply => None,
-            SnarkApplication::Unapply => Some(block_height),
-        };
-
         let mut old_prover_fees = HashMap::new();
         for snark in snarks.iter() {
             if !old_prover_fees.contains_key(&snark.prover) {
-                // delete old all-time fees
-                let old_total = self
-                    .get_snark_prover_total_fees(&snark.prover, None)?
-                    .unwrap_or_default();
-                let old_max = self
-                    .get_snark_prover_max_fee(&snark.prover, None)?
-                    .unwrap_or_default();
-                let old_min = self
-                    .get_snark_prover_min_fee(&snark.prover, None)?
-                    .unwrap_or(u64::MAX);
-
-                self.delete_old_all_time_snark_fees(&snark.prover, old_total, old_max, old_min)?;
-
-                // delete old epoch fees
-                let old_epoch_total = self
-                    .get_snark_prover_epoch_fees(
-                        &snark.prover,
-                        Some(epoch),
-                        Some(genesis_state_hash),
-                        block_height_opt,
-                    )?
-                    .unwrap_or_default();
-                let old_epoch_max = self
-                    .get_snark_prover_epoch_max_fee(
-                        &snark.prover,
-                        Some(epoch),
-                        Some(genesis_state_hash),
-                        block_height_opt,
-                    )?
-                    .unwrap_or_default();
-                let old_epoch_min = self
-                    .get_snark_prover_epoch_min_fee(
-                        &snark.prover,
-                        Some(epoch),
-                        Some(genesis_state_hash),
-                        block_height_opt,
-                    )?
-                    .unwrap_or(u64::MAX);
-
-                self.delete_old_epoch_snark_fees(
-                    epoch,
-                    genesis_state_hash,
-                    &snark.prover,
-                    old_epoch_total,
-                    old_epoch_max,
-                    old_epoch_min,
-                )?;
-
-                // update the old SNARK fee table
-                old_prover_fees.insert(
-                    snark.prover.clone(),
-                    (
-                        SnarkAllTimeFees {
-                            total: old_total,
-                            max: old_max,
-                            min: old_min,
-                        },
-                        SnarkEpochFees {
-                            total: old_epoch_total,
-                            max: old_epoch_max,
-                            min: old_epoch_min,
-                        },
-                    ),
-                );
+                let old_fees =
+                    self.take_old_snark_fees(&snark.prover, epoch, genesis_state_hash)?;
+                old_prover_fees.insert(snark.prover.clone(), old_fees);
             }
         }
 
@@ -311,20 +245,45 @@ impl SnarkStore for IndexerStore {
                         min: old_epoch_min,
                     },
                 )) => {
-                    // all-time fees
-                    let total_fees = *old_total + *total;
-                    let max_fee = *old_max.max(max);
-                    let min_fee = *old_min.min(min);
+                    // Fees after this update. Apply adds the fees of the block.
+                    // Unapply restores the values from before the block: a sum
+                    // cannot reverse max and min.
+                    let (all_time_fees, epoch_fees) = match apply {
+                        SnarkApplication::Apply => (
+                            Some(SnarkAllTimeFees {
+                                total: *old_total + *total,
+                                max: *old_max.max(max),
+                                min: *old_min.min(min),
+                            }),
+                            Some(SnarkEpochFees {
+                                total: *old_epoch_total + *total,
+                                max: *old_epoch_max.max(max),
+                                min: *old_epoch_min.min(min),
+                            }),
+                        ),
+                        SnarkApplication::Unapply => (
+                            self.get_snark_prover_prev_fees(prover, block_height, None, None)?
+                                .map(|bytes| serde_json::from_slice(&bytes))
+                                .transpose()?,
+                            self.get_snark_prover_prev_fees(
+                                prover,
+                                block_height,
+                                Some(epoch),
+                                Some(genesis_state_hash),
+                            )?
+                            .map(|bytes| serde_json::from_slice(&bytes))
+                            .transpose()?,
+                        ),
+                    };
 
+                    // all-time fees
                     self.delete_old_all_time_snark_fees(prover, *old_total, *old_max, *old_min)?;
-                    self.store_all_time_snark_fees(prover, total_fees, max_fee, min_fee)?;
-                    self.sort_all_time_snark_fees(prover, total_fees, max_fee, min_fee)?;
+                    if let Some(SnarkAllTimeFees { total, max, min }) = all_time_fees {
+                        self.store_all_time_snark_fees(prover, total, max, min)?;
+                        self.sort_all_time_snark_fees(prover, total, max, min)?;
+                    }
 
                     // epoch fees
-                    let epoch_total_fees = *old_epoch_total + *total;
-                    let epoch_max_fee = *old_epoch_max.max(max);
-                    let epoch_min_fee = *old_epoch_min.min(min);
-
                     self.delete_old_epoch_snark_fees(
                         epoch,
                         genesis_state_hash,
@@ -333,49 +292,47 @@ impl SnarkStore for IndexerStore {
                         *old_epoch_max,
                         *old_epoch_min,
                     )?;
-                    self.store_epoch_snark_fees(
-                        epoch,
-                        genesis_state_hash,
-                        prover,
-                        epoch_total_fees,
-                        epoch_max_fee,
-                        epoch_min_fee,
-                    )?;
-                    self.sort_epoch_snark_fees(
-                        epoch,
-                        genesis_state_hash,
-                        prover,
-                        epoch_total_fees,
-                        epoch_max_fee,
-                        epoch_min_fee,
-                    )?;
+                    if let Some(SnarkEpochFees { total, max, min }) = epoch_fees {
+                        self.store_epoch_snark_fees(
+                            epoch,
+                            genesis_state_hash,
+                            prover,
+                            total,
+                            max,
+                            min,
+                        )?;
+                        self.sort_epoch_snark_fees(
+                            epoch,
+                            genesis_state_hash,
+                            prover,
+                            total,
+                            max,
+                            min,
+                        )?;
+                    }
 
                     match apply {
                         // record new historical fees on apply
                         SnarkApplication::Apply => {
-                            self.database.put_cf(
-                                self.snark_prover_fees_historical_cf(),
-                                pk_index_key(prover, block_height),
-                                serde_json::to_vec(&SnarkAllTimeFees {
-                                    total: total_fees,
-                                    max: max_fee,
-                                    min: min_fee,
-                                })?,
-                            )?;
-                            self.database.put_cf(
-                                self.snark_prover_fees_epoch_historical_cf(),
-                                snarks_epoch_pk_height_key(
-                                    genesis_state_hash,
-                                    epoch,
-                                    prover,
-                                    block_height,
-                                ),
-                                serde_json::to_vec(&SnarkEpochFees {
-                                    total: epoch_total_fees,
-                                    max: epoch_max_fee,
-                                    min: epoch_min_fee,
-                                })?,
-                            )?;
+                            if let Some(fees) = all_time_fees {
+                                self.database.put_cf(
+                                    self.snark_prover_fees_historical_cf(),
+                                    pk_index_key(prover, block_height),
+                                    serde_json::to_vec(&fees)?,
+                                )?;
+                            }
+                            if let Some(fees) = epoch_fees {
+                                self.database.put_cf(
+                                    self.snark_prover_fees_epoch_historical_cf(),
+                                    snarks_epoch_pk_height_key(
+                                        genesis_state_hash,
+                                        epoch,
+                                        prover,
+                                        block_height,
+                                    ),
+                                    serde_json::to_vec(&fees)?,
+                                )?;
+                            }
                         }
 
                         // delete old historical fees on unapply
@@ -964,12 +921,15 @@ impl SnarkStore for IndexerStore {
         epoch: Option<u32>,
         genesis_state_hash: Option<&StateHash>,
     ) -> Result<Option<Vec<u8>>> {
+        // A reorg unapplies the newest block first and reads only below it, so
+        // its pending deletes are all above the rows that this reads.
+        //
         // use appropriate CF for iteration
         match (epoch, genesis_state_hash) {
             (None, _) | (_, None) => {
                 if let Some((key, value)) = self
                     .database
-                    .iterator_cf(
+                    .iterator_cf_ignore_pending(
                         self.snark_prover_fees_historical_cf(),
                         IteratorMode::From(
                             &pk_index_key(prover, block_height - 1),
@@ -1006,7 +966,7 @@ impl SnarkStore for IndexerStore {
             (Some(epoch), Some(genesis_state_hash)) => {
                 if let Some((key, value)) = self
                     .database
-                    .iterator_cf(
+                    .iterator_cf_ignore_pending(
                         self.snark_prover_fees_epoch_historical_cf(),
                         IteratorMode::From(
                             &snarks_epoch_pk_height_key(
@@ -1030,21 +990,8 @@ impl SnarkStore for IndexerStore {
                         return Ok(None);
                     }
 
-                    let block_height =
-                        u32_from_be_bytes(&key[StateHash::LEN..][U32_LEN..][PublicKey::LEN..])
-                            .expect("u32 block height");
-                    if let Some(state_hash) = self.get_canonical_hash_at_height(block_height)? {
-                        if let Some(block_epoch) = self.get_block_epoch(&state_hash)? {
-                            if block_epoch != epoch {
-                                return Ok(None);
-                            }
-                        } else {
-                            return Ok(None);
-                        }
-                    } else {
-                        return Ok(None);
-                    }
-
+                    // The key holds the epoch. Do not look at canonicity: the
+                    // recent blocks of the best chain are not canonical yet.
                     return Ok(Some(value.to_vec()));
                 }
             }
@@ -1339,6 +1286,63 @@ impl SnarkStore for IndexerStore {
     }
 }
 
+impl IndexerStore {
+    /// Reads the current all-time and epoch fees of `prover` and deletes their
+    /// rows. A missing value reads as total 0, max 0, min `u64::MAX`.
+    fn take_old_snark_fees(
+        &self,
+        prover: &PublicKey,
+        epoch: u32,
+        genesis_state_hash: &StateHash,
+    ) -> Result<(SnarkAllTimeFees, SnarkEpochFees)> {
+        // delete old all-time fees
+        let old_total = self
+            .get_snark_prover_total_fees(prover, None)?
+            .unwrap_or_default();
+        let old_max = self
+            .get_snark_prover_max_fee(prover, None)?
+            .unwrap_or_default();
+        let old_min = self
+            .get_snark_prover_min_fee(prover, None)?
+            .unwrap_or(u64::MAX);
+
+        self.delete_old_all_time_snark_fees(prover, old_total, old_max, old_min)?;
+
+        // delete old epoch fees
+        let old_epoch_total = self
+            .get_snark_prover_epoch_fees(prover, Some(epoch), Some(genesis_state_hash), None)?
+            .unwrap_or_default();
+        let old_epoch_max = self
+            .get_snark_prover_epoch_max_fee(prover, Some(epoch), Some(genesis_state_hash), None)?
+            .unwrap_or_default();
+        let old_epoch_min = self
+            .get_snark_prover_epoch_min_fee(prover, Some(epoch), Some(genesis_state_hash), None)?
+            .unwrap_or(u64::MAX);
+
+        self.delete_old_epoch_snark_fees(
+            epoch,
+            genesis_state_hash,
+            prover,
+            old_epoch_total,
+            old_epoch_max,
+            old_epoch_min,
+        )?;
+
+        Ok((
+            SnarkAllTimeFees {
+                total: old_total,
+                max: old_max,
+                min: old_min,
+            },
+            SnarkEpochFees {
+                total: old_epoch_total,
+                max: old_epoch_max,
+                min: old_epoch_min,
+            },
+        ))
+    }
+}
+
 fn start_key(
     genesis_state_hash: &StateHash,
     epoch: u32,
@@ -1362,13 +1366,76 @@ fn start_key(
 #[cfg(test)]
 mod tests {
     use super::SnarkStore;
-    use crate::store::IndexerStore;
+    use crate::{
+        base::{amount::Amount, public_key::PublicKey, state_hash::StateHash},
+        snark_work::{store::SnarkApplication, SnarkWorkSummary},
+        store::IndexerStore,
+    };
     use std::env;
     use tempfile::TempDir;
 
     fn create_indexer_store() -> anyhow::Result<IndexerStore> {
         let temp_dir = TempDir::with_prefix(env::current_dir()?)?;
         IndexerStore::new(temp_dir.path(), true)
+    }
+
+    #[test]
+    fn unapply_restores_snark_fees() -> anyhow::Result<()> {
+        let store = create_indexer_store()?;
+        let prover = PublicKey::new("B62qoXucNXRjjG1SHuq2FA4ct7MmQtgnfGq5Dj6dzSuvFgSdTM7N3HU")?;
+        let genesis = StateHash::new("3NLT7n4LiVo6U4LXr9BjCEp9712fP61uXkRC6hnRnB682A8f4HrJ")?;
+        let work = |fee| {
+            [SnarkWorkSummary {
+                fee: Amount(fee),
+                prover: prover.clone(),
+            }]
+        };
+        let fees = |epoch| -> anyhow::Result<_> {
+            Ok((
+                store.get_snark_prover_total_fees(&prover, None)?,
+                store.get_snark_prover_max_fee(&prover, None)?,
+                store.get_snark_prover_min_fee(&prover, None)?,
+                store.get_snark_prover_epoch_fees(&prover, Some(epoch), Some(&genesis), None)?,
+                store.get_snark_prover_epoch_max_fee(&prover, Some(epoch), Some(&genesis), None)?,
+                store.get_snark_prover_epoch_min_fee(&prover, Some(epoch), Some(&genesis), None)?,
+            ))
+        };
+
+        store.update_snark_prover_fees(1, 10, &genesis, &work(30), SnarkApplication::Apply)?;
+        store.update_snark_prover_fees(2, 11, &genesis, &work(50), SnarkApplication::Apply)?;
+        store.update_snark_prover_fees(2, 12, &genesis, &work(4), SnarkApplication::Apply)?;
+        store.update_snark_prover_fees(2, 13, &genesis, &work(9), SnarkApplication::Apply)?;
+        assert_eq!(
+            fees(2)?,
+            (Some(93), Some(50), Some(4), Some(63), Some(50), Some(4))
+        );
+
+        // a reorg of 2 blocks, as one atomic write
+        store.database.atomically(|| {
+            store.update_snark_prover_fees(2, 13, &genesis, &work(9), SnarkApplication::Unapply)?;
+            store.update_snark_prover_fees(2, 12, &genesis, &work(4), SnarkApplication::Unapply)
+        })?;
+        assert_eq!(
+            fees(2)?,
+            (Some(80), Some(50), Some(30), Some(50), Some(50), Some(50))
+        );
+
+        // the last block of the epoch goes: no fees are left in that epoch, and
+        // the sorted views have one row with the restored all-time total
+        store.update_snark_prover_fees(2, 11, &genesis, &work(50), SnarkApplication::Unapply)?;
+        assert_eq!(fees(2)?, (Some(30), Some(30), Some(30), None, None, None));
+        let sorted: Vec<_> = store
+            .snark_prover_total_fees_iterator(speedb::IteratorMode::Start)
+            .flatten()
+            .collect();
+        assert_eq!(sorted.len(), 1);
+        assert_eq!(sorted[0].0[..8], 30u64.to_be_bytes());
+
+        // the first block goes: no fees are left at all
+        store.update_snark_prover_fees(1, 10, &genesis, &work(30), SnarkApplication::Unapply)?;
+        assert_eq!(fees(1)?, (None, None, None, None, None, None));
+
+        Ok(())
     }
 
     #[test]
