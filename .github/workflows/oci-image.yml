@@ -2,7 +2,8 @@
 # and push them to the GitHub Container Registry: ghcr.io/<owner>/mina-indexer.
 #
 # Per-network configless images, single repo with a tag suffix:
-#   tag v*  -> :<tag>-<network> and :latest-<network>   (mainnet | devnet)
+#   tag vX.Y.Z       -> :<tag>-<network> and :latest-<network>   (mainnet | devnet)
+#   tag vX.Y.Z-rc.N  -> :<tag>-<network> only (a release candidate never moves latest)
 #   PRs     -> build only (no push)
 #
 # Auth uses the built-in GITHUB_TOKEN (packages: write) — no extra secrets.
@@ -50,8 +51,13 @@ jobs:
           if [ "${{ github.ref_type }}" = "tag" ]; then
             # the binary reports the Cargo.toml version: a release tag must match it
             base="$(grep -m1 '^version' rust/Cargo.toml | awk -F'"' '{print $2}')"
-            if [ "${GITHUB_REF_NAME}" != "v${base}" ]; then
-              echo "::error::tag ${GITHUB_REF_NAME} does not match rust/Cargo.toml version ${base}"
+            # (a release candidate vX.Y.Z-rc.N is built from the X.Y.Z commit)
+            if [ "${GITHUB_REF_NAME}" = "v${base}" ]; then
+              echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            elif echo "${GITHUB_REF_NAME}" | grep -Eq "^v${base//./\\.}-rc\.[0-9]+$"; then
+              echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "::error::tag ${GITHUB_REF_NAME} does not match rust/Cargo.toml version ${base} (or ${base}-rc.N)"
               exit 1
             fi
             echo "tag=${GITHUB_REF_NAME}-${{ matrix.network }}" >> "$GITHUB_OUTPUT"
@@ -72,8 +78,8 @@ jobs:
           DRY_RUN: ${{ steps.meta.outputs.push == 'true' && '0' || '1' }}
         run: ops/build-and-push-oci.sh
 
-      - name: Also tag :latest-${{ matrix.network }} (on release tag)
-        if: github.ref_type == 'tag'
+      - name: Also tag :latest-${{ matrix.network }} (on final release tag)
+        if: github.ref_type == 'tag' && steps.meta.outputs.prerelease == 'false'
         run: |
           skopeo copy \
             "docker://${REGISTRY}/${IMAGE}:${{ steps.meta.outputs.tag }}" \

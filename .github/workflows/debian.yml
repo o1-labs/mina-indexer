@@ -2,7 +2,8 @@
 # packages.o1test.net apt repo via deb-s3 (unsigned multichannel repo, same as
 # MinaFoundation/minimina).
 #
-#   tag v*  -> publish to component "stable"
+#   tag vX.Y.Z       -> publish X.Y.Z to component "stable"
+#   tag vX.Y.Z-rc.N  -> publish X.Y.Z~rc.N to component "unstable"
 #   PRs     -> build the .deb only (no publish)
 #
 # Each codename builds inside that distro's container so the binary links the
@@ -79,11 +80,24 @@ jobs:
           base="$(grep -m1 '^version' Cargo.toml | awk -F'\"' '{print $2}')"
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             ver="${GITHUB_REF_NAME#v}"
-            # the binary reports the Cargo.toml version: a release tag must match it
-            if [ "$ver" != "$base" ]; then
-              echo "::error::tag ${GITHUB_REF_NAME} does not match rust/Cargo.toml version ${base}"
-              exit 1
-            fi
+            # the binary reports the Cargo.toml version: a release tag must match it.
+            # A release candidate X.Y.Z-rc.N becomes X.Y.Z~rc.N: `~` sorts before
+            # X.Y.Z in Debian, `-` would sort after it.
+            component=stable
+            case "$ver" in
+              "$base") ;;
+              "$base"-rc.*)
+                n="${ver#"$base"-rc.}"
+                case "$n" in ''|*[!0-9]*) echo "::error::bad release candidate tag ${GITHUB_REF_NAME}"; exit 1 ;; esac
+                ver="${base}~rc.${n}"
+                component=unstable
+                ;;
+              *)
+                echo "::error::tag ${GITHUB_REF_NAME} does not match rust/Cargo.toml version ${base} (or ${base}-rc.N)"
+                exit 1
+                ;;
+            esac
+            echo "component=${component}" >> "$GITHUB_OUTPUT"
           else
             ver="${base}~git$(git rev-parse --short=8 HEAD)"
           fi
@@ -112,7 +126,7 @@ jobs:
           set -euo pipefail
           gem install deb-s3 --no-document
 
-          COMPONENT=stable
+          COMPONENT="${{ steps.deb.outputs.component }}"
 
           echo "Publishing ${{ steps.deb.outputs.file }} -> packages.o1test.net / $CODENAME / $COMPONENT"
           deb-s3 upload \
