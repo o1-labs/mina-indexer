@@ -1282,7 +1282,7 @@ mod tests {
 
     // any 52-char "3N…" string is a structurally valid state hash
     fn hash(seed: char) -> String {
-        format!("3N{}", std::iter::repeat(seed).take(50).collect::<String>())
+        format!("3N{}", std::iter::repeat_n(seed, 50).collect::<String>())
     }
 
     fn write_block(dir: &std::path::Path, height: u32, seed: char) -> PathBuf {

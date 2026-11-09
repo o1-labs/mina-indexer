@@ -29,7 +29,7 @@ async fn test() -> anyhow::Result<()> {
             })) => Some(state_hash.clone()),
             _ => None,
         })
-        .last()
+        .next_back()
         .unwrap();
     assert_eq!(
         last_best_tip.0,

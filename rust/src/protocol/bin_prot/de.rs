@@ -304,7 +304,7 @@ impl<'de, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<R, Strongl
         // we can't know the field names (and don't need to) if we are deserializing in
         // stronly typed mode. To make everything work just add some dummy field names
         let len: usize = self.rdr.bin_read_nat0()?;
-        let dummy_fields = std::iter::repeat("".to_string()).take(len).collect();
+        let dummy_fields = std::iter::repeat_n("".to_string(), len).collect();
         visitor.visit_map(MapAccess::new(self, dummy_fields))
     }
 
