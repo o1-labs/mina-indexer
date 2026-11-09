@@ -181,13 +181,11 @@ impl PrecomputedBlock {
         let state_hash = block_file_contents.state_hash;
         let blockchain_length = block_file_contents.blockchain_length;
 
-        // Precomputed blocks emitted by the OCaml daemon are NOT strictly UTF-8:
-        // the `sok_digest` field (inside staged_ledger_diff, present on any block
-        // carrying SNARK work) contains raw bytes. `serde_json::from_slice`
-        // rejects those, which would wedge ingestion on the first canonical
-        // SNARK-work block. Decode lossily — the replaced bytes only ever land in
-        // `sok_digest`, which the indexer does not read.
-        let contents = String::from_utf8_lossy(&block_file_contents.contents);
+        // Precomputed blocks are not always valid UTF-8: `sok_digest` holds raw
+        // bytes, and a token symbol or a zkApp URI can be any bytes. Strict
+        // decoding rejects those blocks, and a lossy decode changes the bytes
+        // that the zkApp hash needs, so keep them.
+        let contents = crate::utility::raw_text::decode(&block_file_contents.contents);
 
         match version {
             PcbVersion::V1 => {
@@ -1620,11 +1618,11 @@ mod tests {
     }
 
     #[test]
-    fn lossy_decodes_non_utf8_block() -> anyhow::Result<()> {
+    fn parses_non_utf8_block() -> anyhow::Result<()> {
         // Real precomputed blocks carry raw (non-UTF-8) bytes — e.g. `sok_digest`
         // on any block with SNARK work. Strict `from_slice` rejects those, which
         // would wedge ingestion on the first canonical SNARK-work block, so
-        // `from_file_contents` must decode lossily. (Regression.)
+        // `from_file_contents` must accept them. (Regression.)
         let path = PathBuf::from("./tests/data/misc_blocks/mainnet-360930-3NL3mVAEwJuBS8F3fMWBZZRjQC4JBzdGTD7vN5SqizudnkPKsRyi.json");
         let (network, blockchain_length, state_hash) = extract_network_height_hash(&path);
 
@@ -1640,7 +1638,7 @@ mod tests {
 
         // the bytes are now invalid UTF-8 (strict from_slice would fail) ...
         assert!(std::str::from_utf8(&bytes).is_err());
-        // ... but the block must still parse via lossy decode
+        // ... but the block must still parse
         let block =
             PrecomputedBlock::new(network, blockchain_length, state_hash, bytes, PcbVersion::V2(CurrencyEncoding::Nanomina))?;
         assert_eq!(block.blockchain_length(), 360930);

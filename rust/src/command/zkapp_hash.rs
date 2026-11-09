@@ -146,6 +146,7 @@ use crate::{
         Permission, PermissionKind, Permissions,
     },
     protocol::{bin_prot::WriteBinProtExt, serialization_types::version_bytes::V2_TXN_HASH},
+    utility::raw_text,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use blake2::{digest::VariableOutput, Blake2bVar};
@@ -472,11 +473,11 @@ impl Writer {
         }
 
         self.set_or_keep(&update.zkapp_uri, |w, uri| {
-            w.string(uri.as_bytes())?;
+            w.string(&raw_text::encode(uri))?;
             Ok(())
         })?;
         self.set_or_keep(&update.token_symbol, |w, symbol| {
-            w.string(symbol.as_bytes())?;
+            w.string(&raw_text::encode(symbol))?;
             Ok(())
         })?;
 
@@ -702,6 +703,23 @@ mod tests {
             })?,
             [0x0a, 0x0b, 0x00]
         );
+        Ok(())
+    }
+
+    /// The token symbol is the byte `0xff`, so the block is not valid UTF-8.
+    /// The expected hash comes from Mina Rosetta.
+    #[test]
+    fn non_utf8_token_symbol_hash() -> Result<()> {
+        let path = "./tests/data/zkapp_hash/mainnet-565083-3NLSAECx1Z9wsk7EWNjtf8LZp4fyHq2ruffw1f8SBU9MTwYAHV6T.json";
+        assert!(std::str::from_utf8(&std::fs::read(path)?).is_err());
+
+        let hashes = zkapp_hashes(path, CurrencyEncoding::DecimalMina)?;
+        assert_eq!(hashes.len(), 1);
+        assert_eq!(
+            hashes[0].0,
+            TxnHash::V2("5Ju49WwjVPgPv4CZPuXEw1g18rYoxbCVAoD85KdLDVh7EuqkA9Ce".to_string())
+        );
+
         Ok(())
     }
 
