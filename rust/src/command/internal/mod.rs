@@ -3,10 +3,12 @@ pub mod store;
 use crate::{
     base::{public_key::PublicKey, state_hash::StateHash},
     block::precomputed::PrecomputedBlock,
-    ledger::{coinbase::Coinbase, diff::account::*},
+    command::{UserCommandWithStatus, UserCommandWithStatusT},
+    ledger::coinbase::{Coinbase, CoinbaseFeeTransfer, CoinbaseKind},
+    snark_work::SnarkWorkSummary,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum InternalCommandKind {
@@ -40,95 +42,103 @@ pub enum InternalCommand {
 }
 
 impl InternalCommand {
-    /// Compute the internal commands for the given precomputed block
+    /// Compute the internal commands for the given precomputed block, as the
+    /// protocol does (`Staged_ledger.Pre_diff_info.get_transaction_data`):
+    /// the coinbase first, then for each staged ledger pre-diff its fee
+    /// transfers via coinbase and its fee transfers.
     ///
-    /// See [crate::ledger::diff::LedgerDiff::from_precomputed]
+    /// The fee transfers are net amounts, not the gross fee flows the ledger
+    /// diffs use: the coinbase receiver gets the user command fees minus the
+    /// SNARK work fees it pays from them, and each prover gets its work fees
+    /// minus the part paid via coinbase. Both give the same balances.
     pub fn from_precomputed(block: &PrecomputedBlock) -> Vec<Self> {
-        let mut all_account_diff_fees: Vec<Vec<AccountDiff>> = AccountDiff::from_block_fees(block);
-
-        // replace Fee_transfer with Fee_transfer_via_coinbase, if any
-        let coinbase = Coinbase::from_precomputed(block);
-        if coinbase.has_fee_transfer() {
-            coinbase.account_diffs_coinbase_mut(&mut all_account_diff_fees);
-        }
-
         let mut internal_cmds = vec![];
-        for account_diff_pairs in all_account_diff_fees {
-            if let [credit, debit] = &account_diff_pairs[..] {
-                if debit.amount() + credit.amount() != 0 {
-                    panic!(
-                        "Credit/Debit pairs do not sum to zero.\nDebit: {:#?}\nCredit: {:#?}\nBlock Height: {:#?}",
-                        debit, credit, block.blockchain_length()
-                    )
-                }
 
-                match (credit, debit) {
-                    (
-                        AccountDiff::FeeTransfer(fee_transfer_receiver),
-                        AccountDiff::FeeTransfer(fee_transfer_sender),
-                    ) => {
-                        if let Some(Self::FeeTransfer { amount, .. }) =
-                            internal_cmds.iter_mut().find(|cmd| match cmd {
-                                Self::FeeTransfer {
-                                    sender, receiver, ..
-                                } => {
-                                    sender.0 == fee_transfer_sender.public_key.0
-                                        && receiver.0 == fee_transfer_receiver.public_key.0
-                                }
-                                _ => false,
-                            })
-                        {
-                            *amount += fee_transfer_receiver.amount.0;
-                        } else {
-                            internal_cmds.push(Self::FeeTransfer {
-                                sender: fee_transfer_sender.public_key.clone(),
-                                receiver: fee_transfer_receiver.public_key.clone(),
-                                amount: fee_transfer_sender.amount.0,
-                            })
-                        }
-                    }
-                    (
-                        AccountDiff::FeeTransferViaCoinbase(fee_transfer_receiver),
-                        AccountDiff::FeeTransferViaCoinbase(fee_transfer_sender),
-                    ) => internal_cmds.push(Self::FeeTransferViaCoinbase {
-                        sender: fee_transfer_sender.public_key.clone(),
-                        receiver: fee_transfer_receiver.public_key.clone(),
-                        amount: fee_transfer_sender.amount.0,
-                    }),
-                    (_, _) => panic!(
-                        "Unrecognized credit/debit comination. Block: {:#?}, hash: {:#?}",
-                        block.blockchain_length(),
-                        block.state_hash(),
-                    ),
-                }
-            } else if let [imbalanced_diff] = &account_diff_pairs[..] {
-                match imbalanced_diff {
-                    AccountDiff::Coinbase(coinbase) => internal_cmds.push(Self::Coinbase {
-                        receiver: coinbase.public_key.clone(),
-                        amount: coinbase.amount.0,
-                    }),
-                    _ => {
-                        panic!(
-                            "Unmatched AccountDiff::{:#?}. (Block: {:#?}, hash: {:#?})",
-                            imbalanced_diff,
-                            block.blockchain_length(),
-                            block.state_hash(),
-                        );
-                    }
-                };
-            } else {
-                panic!(
-                    "Unrecognized accounting arrangement. {:#?}",
-                    &account_diff_pairs[..]
-                );
-            }
+        let coinbase = Coinbase::from_precomputed(block);
+        if coinbase.is_applied() {
+            internal_cmds.push(coinbase.as_internal_cmd());
         }
 
-        if coinbase.is_applied() {
-            internal_cmds.insert(0, coinbase.as_internal_cmd());
+        let receiver = block.coinbase_receiver();
+        internal_cmds.append(&mut Self::from_pre_diff(
+            &receiver,
+            &block.pre_diff_coinbase(),
+            &block.commands_pre_diff(),
+            &block.completed_works_pre_diff(),
+        ));
+
+        if let Some(post_diff_coinbase) = block.post_diff_coinbase() {
+            internal_cmds.append(&mut Self::from_pre_diff(
+                &receiver,
+                &post_diff_coinbase,
+                &block.commands_post_diff(),
+                &block.completed_works_post_diff().unwrap_or_default(),
+            ));
         }
 
         internal_cmds
+    }
+
+    /// Fee transfers via coinbase and fee transfers of one pre-diff
+    fn from_pre_diff(
+        receiver: &PublicKey,
+        coinbase: &CoinbaseKind,
+        commands: &[UserCommandWithStatus],
+        completed_works: &[SnarkWorkSummary],
+    ) -> Vec<Self> {
+        // a coinbase fee transfer to the coinbase receiver is dropped
+        // (`Coinbase.create`)
+        let coinbase_fts: Vec<&CoinbaseFeeTransfer> = match coinbase {
+            CoinbaseKind::Zero => vec![],
+            CoinbaseKind::One(ft) => ft.iter().collect(),
+            CoinbaseKind::Two(ft1, ft2) => ft1.iter().chain(ft2.iter()).collect(),
+        }
+        .into_iter()
+        .filter(|ft| &ft.receiver_pk != receiver)
+        .collect();
+        let coinbase_work_fees: u64 = coinbase_fts.iter().map(|ft| ft.fee).sum();
+
+        // the receiver's own work is not paid
+        let works_others: Vec<_> = completed_works
+            .iter()
+            .filter(|work| &work.prover != receiver)
+            .collect();
+        let work_fees: u64 = works_others.iter().map(|work| work.fee.0).sum();
+        let budget: u64 = commands.iter().map(|cmd| cmd.fee()).sum();
+        let remainder = budget.saturating_sub(work_fees.saturating_sub(coinbase_work_fees));
+
+        let mut fees = BTreeMap::<PublicKey, u64>::new();
+        if remainder > 0 {
+            fees.insert(receiver.clone(), remainder);
+        }
+        for work in works_others.into_iter().filter(|work| work.fee.0 > 0) {
+            *fees.entry(work.prover.clone()).or_default() += work.fee.0;
+        }
+
+        // the work paid via coinbase is already part of the coinbase
+        for ft in &coinbase_fts {
+            if let Some(fee) = fees.get_mut(&ft.receiver_pk) {
+                *fee = fee.saturating_sub(ft.fee);
+                if *fee == 0 {
+                    fees.remove(&ft.receiver_pk);
+                }
+            }
+        }
+
+        let via_coinbase = coinbase_fts
+            .into_iter()
+            .map(|ft| Self::FeeTransferViaCoinbase {
+                sender: receiver.clone(),
+                receiver: ft.receiver_pk.clone(),
+                amount: ft.fee,
+            });
+        let fee_transfers = fees.into_iter().map(|(pk, amount)| Self::FeeTransfer {
+            sender: receiver.clone(),
+            receiver: pk,
+            amount,
+        });
+
+        via_coinbase.chain(fee_transfers).collect()
     }
 }
 
@@ -244,64 +254,10 @@ impl DbInternalCommandWithData {
 
 impl DbInternalCommand {
     pub fn from_precomputed(block: &PrecomputedBlock) -> Vec<Self> {
-        let internal_cmd_parts = InternalCommand::from_precomputed(block);
-
-        let mut coinbase: Option<Self> = None;
-        let mut fee_transfers = <HashMap<PublicKey, Self>>::new();
-        let mut fee_transfers_via_coinbase = <HashMap<PublicKey, Self>>::new();
-
-        for cmd in internal_cmd_parts {
-            match cmd {
-                InternalCommand::Coinbase { .. } => {
-                    coinbase = Some(cmd.into());
-                }
-                InternalCommand::FeeTransfer {
-                    ref receiver,
-                    amount: amt,
-                    ..
-                } => match fee_transfers.get_mut(receiver) {
-                    Some(Self::FeeTransfer { amount, .. }) => {
-                        *amount += amt;
-                    }
-                    None => {
-                        fee_transfers.insert(receiver.clone(), cmd.into());
-                    }
-                    _ => unimplemented!(),
-                },
-                InternalCommand::FeeTransferViaCoinbase {
-                    ref sender,
-                    amount: amt,
-                    ..
-                } => match fee_transfers_via_coinbase.get_mut(sender) {
-                    Some(Self::FeeTransferViaCoinbase { amount, .. }) => {
-                        *amount += amt;
-                    }
-                    None => {
-                        fee_transfers_via_coinbase.insert(sender.clone(), cmd.into());
-                    }
-                    _ => unimplemented!(),
-                },
-            }
-        }
-
-        // coinbase
-        let mut internal_commands = vec![];
-        if let Some(cb) = coinbase {
-            internal_commands.push(cb);
-        }
-
-        // fee transfers via coinbase
-        let mut ftvc = fee_transfers_via_coinbase.into_values().collect::<Vec<_>>();
-        ftvc.sort();
-
-        // fee transfers
-        let mut ft = fee_transfers.into_values().collect::<Vec<_>>();
-        ft.sort();
-
-        internal_commands.append(&mut ftvc);
-        internal_commands.append(&mut ft);
-
-        internal_commands
+        InternalCommand::from_precomputed(block)
+            .into_iter()
+            .map(Into::into)
+            .collect()
     }
 }
 
@@ -359,7 +315,7 @@ mod tests {
                     amount: 720000000000
                 },
                 InternalCommand::FeeTransfer {
-                    sender: "B62qre3erTHfzQckNuibViWQGyyKwZseztqrjPZBv6SQF384Rg6ESAy".into(),
+                    sender: "B62qs2YyNuo1LbNo5sbhPByDDAB7NZiejFM6H1ctND5ui7wH4PWa7qm".into(),
                     receiver: "B62qs2YyNuo1LbNo5sbhPByDDAB7NZiejFM6H1ctND5ui7wH4PWa7qm".into(),
                     amount: 20000000
                 }
@@ -411,6 +367,47 @@ mod tests {
                     block_height: block.blockchain_length(),
                     date_time: block.timestamp() as i64,
                 }
+            ]
+        );
+
+        Ok(())
+    }
+
+    /// Block with SNARK work: 3 works by one prover at 0.004 MINA, one paid
+    /// via coinbase, and 0.01 MINA of user command fees. The values are the
+    /// archive node's internal commands for this block.
+    #[test]
+    fn net_fee_transfers_with_snark_work() -> anyhow::Result<()> {
+        let path = std::path::PathBuf::from("./tests/data/devnet/devnet-587491-3NLeYAKahDjfbtnJetWiEnQXfGSukVt87ER8tbkXPJJwGkYDnieG.json");
+        let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2(CurrencyEncoding::DecimalMina))?;
+
+        let producer: PublicKey = "B62qnGoNQ1gJ4h97wMZeKr6Nk3PY6qQPH5kAGnkuuqbRqKPpDkG6pYu".into();
+        let prover: PublicKey = "B62qoXucNXRjjG1SmWvogDQTeC17GRNsdhvhsBUEcsMy6CAXhWSgmTV".into();
+        assert_eq!(block.coinbase_receiver(), producer);
+        assert_eq!(block.tx_fees(), 10_000_000);
+        assert_eq!(block.snark_fees(), 12_000_000);
+
+        let mut fee_transfers = DbInternalCommand::from_precomputed(&block);
+        assert!(matches!(
+            fee_transfers.remove(0),
+            DbInternalCommand::Coinbase { receiver, .. } if receiver == producer
+        ));
+        fee_transfers.sort();
+        assert_eq!(
+            fee_transfers,
+            vec![
+                DbInternalCommand::FeeTransfer {
+                    receiver: producer,
+                    amount: 2_000_000
+                },
+                DbInternalCommand::FeeTransfer {
+                    receiver: prover.clone(),
+                    amount: 8_000_000
+                },
+                DbInternalCommand::FeeTransferViaCoinbase {
+                    receiver: prover,
+                    amount: 4_000_000
+                },
             ]
         );
 

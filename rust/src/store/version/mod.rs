@@ -38,7 +38,10 @@ impl IndexerStoreVersion {
     // built before this kept only the first of each update, and the rest cannot
     // be recovered without replaying the blocks. zkApp commands are also keyed
     // by the protocol's transaction hash, where they had a stand-in digest.
-    pub const MINOR: u32 = 20;
+    // 21: fee transfers are stored as the protocol's net internal commands,
+    // with the fee transfers via coinbase. Databases built before this hold
+    // gross fee flows in blocks with SNARK work and must be rebuilt.
+    pub const MINOR: u32 = 21;
     pub const PATCH: u32 = 0;
 
     /// Output as `MAJOR`.`MINOR`.`PATCH`
