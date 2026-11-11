@@ -12,6 +12,8 @@
   recover an instance.
 - [disaster-recovery.md](disaster-recovery.md) — DR runbook: RTO/RPO, off-host backups
   ([`ops/dr/`](../ops/dr/)), restore procedures, and the failover playbook.
+- [releasing.md](releasing.md) — the release process: rc tag, devnet check, final tag
+  and release page.
 - [../ops/README.md](../ops/README.md) — the turnkey per-network configless OCI images
   (mainnet / devnet).
 - [../ops/OBSERVABILITY.md](../ops/OBSERVABILITY.md) — Prometheus metrics, structured
