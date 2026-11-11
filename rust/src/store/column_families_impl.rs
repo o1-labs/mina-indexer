@@ -1448,6 +1448,16 @@ impl ColumnFamilyHelpers for IndexerStore {
             .expect("snarks-prover column family exists")
     }
 
+    /// CF for storing the number of SNARKs per prover in [snarks_prover_cf]
+    /// ```
+    /// key: [PublicKey] bytes
+    /// val: [u32] BE bytes
+    fn snarks_prover_num_cf(&self) -> &ColumnFamily {
+        self.database
+            .cf_handle("snarks-prover-num")
+            .expect("snarks-prover-num column family exists")
+    }
+
     /// CF for storing SNARK total fees by prover
     /// ```
     /// key: [PublicKey] bytes
@@ -2111,7 +2121,7 @@ impl ColumnFamilyHelpers for IndexerStore {
             .expect("internal-commands-epoch column family exists")
     }
 
-    /// CF for storing per epoch per account SNARK counts
+    /// CF for storing per epoch per account canonical SNARK counts
     /// ```
     /// key: {genesis}{epoch}{pk}
     /// val: [u32] BE bytes
@@ -2127,7 +2137,7 @@ impl ColumnFamilyHelpers for IndexerStore {
             .expect("snarks-pk-epoch column family exists")
     }
 
-    /// CF for storing per account total SNARK counts
+    /// CF for storing per account total canonical SNARK counts
     /// ```
     /// key: [PublicKey] bytes
     /// val: [u32] BE bytes

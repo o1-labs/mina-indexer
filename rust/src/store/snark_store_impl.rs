@@ -95,8 +95,6 @@ impl SnarkStore for IndexerStore {
             .collect();
 
         for pk in block.prover_keys() {
-            // get pk's next index
-            let n = self.get_snarks_pk_total_count(&pk)?;
             let block_pk_snarks: Vec<_> = completed_works_state_hash
                 .iter()
                 .filter(|snark| snark.contains_pk(&pk))
@@ -112,14 +110,16 @@ impl SnarkStore for IndexerStore {
                     )?
                     .is_none()
                 {
+                    // append at pk's next index: a skipped SNARK leaves no gap
                     self.database.put_cf(
                         self.snarks_prover_cf(),
-                        pk_index_key(&pk, n + index as u32),
+                        pk_index_key(&pk, self.get_snarks_prover_num(&pk)?),
                         serde_json::to_vec(snark)?,
                     )?;
 
                     let snark: SnarkWorkSummary = snark.clone().into();
                     self.set_snark_by_prover_block_height(&snark, block_height, index as u32)?;
+                    self.increment_snarks_prover_num(&pk)?;
                     self.increment_snarks_counts(&snark, epoch, &genesis_state_hash)?;
                 }
             }
@@ -135,7 +135,7 @@ impl SnarkStore for IndexerStore {
         trace!("Getting SNARK work pk {}", pk);
 
         let mut snarks = vec![];
-        for index in 0..self.get_snarks_pk_total_count(pk)? {
+        for index in 0..self.get_snarks_prover_num(pk)? {
             snarks.push(
                 self.database
                     .get_cf(self.snarks_prover_cf(), pk_index_key(pk, index))?
@@ -886,6 +886,12 @@ impl SnarkStore for IndexerStore {
                 .expect("block genesis state hash");
 
             self.decrement_snarks_total_canonical_count(snark_update.works.len() as u32)?;
+            self.update_snarks_pk_counts(
+                snark_update.epoch,
+                &genesis_state_hash,
+                &snark_update.works,
+                SnarkApplication::Unapply,
+            )?;
             self.update_snark_prover_fees(
                 snark_update.epoch,
                 snark_update.blockchain_length,
@@ -902,6 +908,12 @@ impl SnarkStore for IndexerStore {
                 .expect("block genesis state hash");
 
             self.increment_snarks_total_canonical_count(snark_update.works.len() as u32)?;
+            self.update_snarks_pk_counts(
+                snark_update.epoch,
+                &genesis_state_hash,
+                &snark_update.works,
+                SnarkApplication::Apply,
+            )?;
             self.update_snark_prover_fees(
                 snark_update.epoch,
                 snark_update.blockchain_length,
@@ -1202,24 +1214,30 @@ impl SnarkStore for IndexerStore {
             }))
     }
 
-    fn increment_snarks_pk_epoch_count(
+    fn update_snarks_pk_epoch_count(
         &self,
         pk: &PublicKey,
         epoch: u32,
         genesis_state_hash: &StateHash,
+        count: u32,
+        apply: &SnarkApplication,
     ) -> Result<()> {
         trace!(
-            "Incrementing SNARK count pk {} epoch {} genesis {}",
+            "Updating SNARK count pk {} epoch {} genesis {}",
             pk,
             epoch,
             genesis_state_hash,
         );
 
         let old = self.get_snarks_pk_epoch_count(pk, Some(epoch), Some(genesis_state_hash))?;
+        let new = match apply {
+            SnarkApplication::Apply => old + count,
+            SnarkApplication::Unapply => old.saturating_sub(count),
+        };
         Ok(self.database.put_cf(
             self.snarks_pk_epoch_cf(),
             snarks_pk_epoch_key(genesis_state_hash, epoch, pk),
-            (old + 1).to_be_bytes(),
+            new.to_be_bytes(),
         )?)
     }
 
@@ -1234,14 +1252,23 @@ impl SnarkStore for IndexerStore {
             }))
     }
 
-    fn increment_snarks_pk_total_count(&self, pk: &PublicKey) -> Result<()> {
-        trace!("Incrementing pk total SNARKs count {pk}");
+    fn update_snarks_pk_total_count(
+        &self,
+        pk: &PublicKey,
+        count: u32,
+        apply: &SnarkApplication,
+    ) -> Result<()> {
+        trace!("Updating pk total SNARKs count {pk}");
 
         let old = self.get_snarks_pk_total_count(pk)?;
+        let new = match apply {
+            SnarkApplication::Apply => old + count,
+            SnarkApplication::Unapply => old.saturating_sub(count),
+        };
         Ok(self.database.put_cf(
             self.snarks_pk_total_cf(),
             pk.0.as_bytes(),
-            (old + 1).to_be_bytes(),
+            new.to_be_bytes(),
         )?)
     }
 
@@ -1271,14 +1298,11 @@ impl SnarkStore for IndexerStore {
         genesis_state_hash: &StateHash,
     ) -> Result<()> {
         trace!(
-            "Incrementing SNARK count epoch {} genesis {}",
+            "Incrementing SNARK count epoch {} genesis {} prover {}",
             epoch,
             genesis_state_hash,
+            snark.prover,
         );
-
-        // prover epoch & total
-        self.increment_snarks_pk_epoch_count(&snark.prover, epoch, genesis_state_hash)?;
-        self.increment_snarks_pk_total_count(&snark.prover)?;
 
         // epoch & total counts
         self.increment_snarks_epoch_count(epoch, genesis_state_hash)?;
@@ -1287,6 +1311,49 @@ impl SnarkStore for IndexerStore {
 }
 
 impl IndexerStore {
+    /// Updates the per prover epoch & total counts of canonical `snarks`: a
+    /// block's snarks are added when it becomes canonical and subtracted
+    /// when a reorg takes it out of the canonical chain
+    fn update_snarks_pk_counts(
+        &self,
+        epoch: u32,
+        genesis_state_hash: &StateHash,
+        snarks: &[SnarkWorkSummary],
+        apply: SnarkApplication,
+    ) -> Result<()> {
+        let mut prover_counts: HashMap<&PublicKey, u32> = HashMap::new();
+        for snark in snarks {
+            *prover_counts.entry(&snark.prover).or_default() += 1;
+        }
+
+        for (prover, count) in prover_counts {
+            self.update_snarks_pk_epoch_count(prover, epoch, genesis_state_hash, count, &apply)?;
+            self.update_snarks_pk_total_count(prover, count, &apply)?;
+        }
+
+        Ok(())
+    }
+
+    /// Number of SNARKs of `pk` in [ColumnFamilyHelpers::snarks_prover_cf]
+    /// (all blocks, also non-canonical ones)
+    fn get_snarks_prover_num(&self, pk: &PublicKey) -> Result<u32> {
+        Ok(self
+            .database
+            .get_cf(self.snarks_prover_num_cf(), pk.0.as_bytes())?
+            .map_or(0, |bytes| {
+                u32_from_be_bytes(&bytes).expect("prover SNARK num")
+            }))
+    }
+
+    fn increment_snarks_prover_num(&self, pk: &PublicKey) -> Result<()> {
+        let old = self.get_snarks_prover_num(pk)?;
+        Ok(self.database.put_cf(
+            self.snarks_prover_num_cf(),
+            pk.0.as_bytes(),
+            (old + 1).to_be_bytes(),
+        )?)
+    }
+
     /// Reads the current all-time and epoch fees of `prover` and deletes their
     /// rows. A missing value reads as total 0, max 0, min `u64::MAX`.
     fn take_old_snark_fees(
@@ -1368,10 +1435,14 @@ mod tests {
     use super::SnarkStore;
     use crate::{
         base::{amount::Amount, public_key::PublicKey, state_hash::StateHash},
+        block::{
+            precomputed::{PcbVersion, PrecomputedBlock},
+            store::BlockStore,
+        },
         snark_work::{store::SnarkApplication, SnarkWorkSummary},
         store::IndexerStore,
     };
-    use std::env;
+    use std::{collections::HashMap, env, path::Path};
     use tempfile::TempDir;
 
     fn create_indexer_store() -> anyhow::Result<IndexerStore> {
@@ -1434,6 +1505,76 @@ mod tests {
         // the first block goes: no fees are left at all
         store.update_snark_prover_fees(1, 10, &genesis, &work(30), SnarkApplication::Unapply)?;
         assert_eq!(fees(1)?, (None, None, None, None, None, None));
+
+        Ok(())
+    }
+
+    /// Only the SNARK work of canonical blocks is sold: a block that is not
+    /// on the best chain adds nothing, and a reorg subtracts the work of the
+    /// blocks it takes out of the best chain
+    #[test]
+    fn snarks_sold_count_only_canonical_work() -> anyhow::Result<()> {
+        let store = create_indexer_store()?;
+        let add_block = |name: &str| -> anyhow::Result<PrecomputedBlock> {
+            let path = Path::new("./tests/data/sequential_blocks").join(name);
+            let block = PrecomputedBlock::parse_file(&path, PcbVersion::V1)?;
+            store.add_block(&block, path.metadata()?.len())?;
+            Ok(block)
+        };
+        let prover_counts = |block: &PrecomputedBlock| {
+            let mut counts: HashMap<PublicKey, u32> = HashMap::new();
+            for snark in SnarkWorkSummary::from_precomputed(block) {
+                *counts.entry(snark.prover).or_default() += 1;
+            }
+            counts
+        };
+
+        // the parent is the best tip
+        let parent =
+            add_block("mainnet-105491-3NKizDx3nnhXha2WqHDNUvJk9jW7GsonsEGYs26tCPW2Wow1ZoR3.json")?;
+        store.set_best_block(&parent.state_hash())?;
+
+        // two children of the parent, both with SNARK work
+        let a =
+            add_block("mainnet-105492-3NKAqzELKDp2BbdKKwdRWEoMNehyMrxJGCoGCyH1t1PyyH7VQMgk.json")?;
+        let b =
+            add_block("mainnet-105492-3NKTUzjMZ8GD89XKD4qhnKZVXEfUSRGjHTYncZVQTxipZA9mnKZu.json")?;
+        let (a_counts, b_counts) = (prover_counts(&a), prover_counts(&b));
+        assert!(!a_counts.is_empty() && !b_counts.is_empty());
+        assert!(a_counts.keys().any(|pk| !b_counts.contains_key(pk)));
+
+        let epoch = a.epoch_count();
+        let genesis = a.genesis_state_hash();
+        assert_eq!((epoch, &genesis), (b.epoch_count(), &b.genesis_state_hash()));
+
+        let check_sold = |canonical: &HashMap<PublicKey, u32>| -> anyhow::Result<()> {
+            for pk in a_counts.keys().chain(b_counts.keys()) {
+                let expected = canonical.get(pk).copied().unwrap_or_default();
+                assert_eq!(store.get_snarks_pk_total_count(pk)?, expected, "{pk}");
+                assert_eq!(
+                    store.get_snarks_pk_epoch_count(pk, Some(epoch), Some(&genesis))?,
+                    expected,
+                    "{pk}"
+                );
+            }
+            Ok(())
+        };
+
+        // neither child is canonical: no work is sold
+        check_sold(&HashMap::new())?;
+
+        // a becomes the best tip: only a's work is sold
+        store.set_best_block(&a.state_hash())?;
+        check_sold(&a_counts)?;
+
+        // a reorg to b: a's work goes, b's work is sold
+        store.set_best_block(&b.state_hash())?;
+        check_sold(&b_counts)?;
+
+        // the prover lists keep the work of non-canonical blocks
+        for (pk, count) in &a_counts {
+            assert!(store.get_snark_work_by_public_key(pk)?.len() as u32 >= *count);
+        }
 
         Ok(())
     }
