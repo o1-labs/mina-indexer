@@ -398,8 +398,11 @@ pub trait ColumnFamilyHelpers {
     fn snarks_cf(&self) -> &ColumnFamily;
 
     /// CF for storing SNARKs per prover & index
-    /// [snarks_pk_total_cf] stores per prover SNARK counts
+    /// [snarks_prover_num_cf] stores the number of SNARKs per prover
     fn snarks_prover_cf(&self) -> &ColumnFamily;
+
+    /// CF for storing the number of SNARKs per prover in [snarks_prover_cf]
+    fn snarks_prover_num_cf(&self) -> &ColumnFamily;
 
     /// CF for storing all SNARK prover fee totals
     fn snark_prover_fees_cf(&self) -> &ColumnFamily;
@@ -550,10 +553,10 @@ pub trait ColumnFamilyHelpers {
     /// CF for per epoch SNARK totals
     fn snarks_epoch_cf(&self) -> &ColumnFamily;
 
-    /// CF for per epoch per acccount SNARK totals
+    /// CF for per epoch per acccount canonical SNARK totals
     fn snarks_pk_epoch_cf(&self) -> &ColumnFamily;
 
-    /// CF for per acccount SNARK totals
+    /// CF for per acccount canonical SNARK totals
     fn snarks_pk_total_cf(&self) -> &ColumnFamily;
 
     /////////////////////

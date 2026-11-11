@@ -56,7 +56,7 @@ pub struct DbUpdate<T> {
 impl IndexerStore {
     /// Add the corresponding CF helper to [ColumnFamilyHelpers]
     /// & modify [IndexerStoreVersion] as needed!
-    const COLUMN_FAMILIES: [&'static str; 180] = [
+    const COLUMN_FAMILIES: [&'static str; 181] = [
         //////////////////////
         // Blocks store CFs //
         //////////////////////
@@ -283,6 +283,7 @@ impl IndexerStore {
         "snarks-epoch",
         "snarks-pk-epoch",
         "snarks-pk-total",
+        "snarks-prover-num",
     ];
 
     /// Creates a new _primary_ indexer store

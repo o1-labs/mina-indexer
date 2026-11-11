@@ -334,15 +334,18 @@ pub trait SnarkStore {
     /// Get snarks total count
     fn get_snarks_total_count(&self) -> Result<u32>;
 
-    /// Increment snarks per epoch per account count
-    fn increment_snarks_pk_epoch_count(
+    /// Add (apply) or subtract (unapply) `count` canonical snarks to the per
+    /// epoch per account count
+    fn update_snarks_pk_epoch_count(
         &self,
         pk: &PublicKey,
         epoch: u32,
         genesis_state_hash: &StateHash,
+        count: u32,
+        apply: &SnarkApplication,
     ) -> Result<()>;
 
-    /// Get snarks per epoch per account count
+    /// Get canonical snarks per epoch per account count
     fn get_snarks_pk_epoch_count(
         &self,
         pk: &PublicKey,
@@ -350,10 +353,16 @@ pub trait SnarkStore {
         genesis_state_hash: Option<&StateHash>,
     ) -> Result<u32>;
 
-    /// Increment snarks per account total
-    fn increment_snarks_pk_total_count(&self, pk: &PublicKey) -> Result<()>;
+    /// Add (apply) or subtract (unapply) `count` canonical snarks to the per
+    /// account total
+    fn update_snarks_pk_total_count(
+        &self,
+        pk: &PublicKey,
+        count: u32,
+        apply: &SnarkApplication,
+    ) -> Result<()>;
 
-    /// Get snarks per account total
+    /// Get canonical snarks per account total
     fn get_snarks_pk_total_count(&self, pk: &PublicKey) -> Result<u32>;
 
     /// Set SNARK count for a block
@@ -362,7 +371,9 @@ pub trait SnarkStore {
     /// Get num SNARKs per block
     fn get_block_snarks_count(&self, state_hash: &StateHash) -> Result<Option<u32>>;
 
-    /// Increment snarks counts given `snark` in `epoch`
+    /// Increment the epoch & total snarks counts given `snark` in `epoch`.
+    /// They count the snarks of all blocks. The per account counts count only
+    /// canonical snarks, see [SnarkStore::update_snarks].
     fn increment_snarks_counts(
         &self,
         snark: &SnarkWorkSummary,
