@@ -69,7 +69,8 @@ impl BlockStore for IndexerStore {
         // increment block production counts
         self.increment_block_production_count_batch(block, &mut batch)?;
 
-        // add comparison data before user commands, SNARKs, and internal commands
+        // add comparison data before user commands, SNARKs, and internal
+        // commands
         self.set_block_comparison_batch(&state_hash, &BlockComparison::from(block))?;
 
         // add to blockchain length index

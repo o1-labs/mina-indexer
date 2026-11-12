@@ -324,7 +324,22 @@ impl IndexerStore {
             IndexerStoreVersion::PATCH,
         )?;
 
-        let version = primary.get_db_version().expect("db version exists");
+        // An existing database keeps the store version it was built with.
+        // Refuse one this binary does not write, or it starts and serves old
+        // data (the layout or the meaning of stored values changed between
+        // versions).
+        let version = primary.get_db_version()?;
+        if !version.matches_binary() {
+            bail!(
+                "database {path:#?} has store version {}, but this binary needs {}.{}.{}. \
+                 Delete the database directory and start again (the first boot restores \
+                 a matching snapshot or builds from blocks).",
+                version.major_minor_patch(),
+                IndexerStoreVersion::MAJOR,
+                IndexerStoreVersion::MINOR,
+                IndexerStoreVersion::PATCH,
+            );
+        }
         persist_indexer_version(&version, path)?;
 
         if creation {
@@ -345,9 +360,10 @@ impl IndexerStore {
         let mut snapshot_temp_dir = output_file.to_path_buf();
         snapshot_temp_dir.set_extension("tmp-snapshot");
 
-        // Read before the checkpoint: a running indexer may ingest in between, so
-        // the manifest's best tip is at or below the snapshot's, never above it.
-        // A restore that fetches from the manifest height then never leaves a gap.
+        // Read before the checkpoint: a running indexer may ingest in between,
+        // so the manifest's best tip is at or below the snapshot's, never above
+        // it. A restore that fetches from the manifest height then never leaves
+        // a gap.
         let manifest = SnapshotManifest::of(self)?;
 
         Checkpoint::new(&self.database)?
@@ -638,12 +654,14 @@ impl IndexerStore {
             .unwrap_or(0)
     }
 
-    /// Bytes of RAM the speedb block cache is currently using (read working set).
+    /// Bytes of RAM the speedb block cache is currently using (read working
+    /// set).
     pub fn block_cache_usage(&self) -> u64 {
         self.u64_property(speedb::properties::BLOCK_CACHE_USAGE)
     }
 
-    /// Estimated bytes of RAM held by SST index/filter blocks ("table readers").
+    /// Estimated bytes of RAM held by SST index/filter blocks ("table
+    /// readers").
     pub fn table_readers_mem(&self) -> u64 {
         self.u64_property(speedb::properties::ESTIMATE_TABLE_READERS_MEM)
     }
@@ -653,7 +671,8 @@ impl IndexerStore {
         self.u64_property(speedb::properties::NUM_RUNNING_COMPACTIONS)
     }
 
-    /// `1` if at least one compaction is pending, else `0` (compaction backlog).
+    /// `1` if at least one compaction is pending, else `0` (compaction
+    /// backlog).
     pub fn compaction_pending(&self) -> u64 {
         self.u64_property(speedb::properties::COMPACTION_PENDING)
     }

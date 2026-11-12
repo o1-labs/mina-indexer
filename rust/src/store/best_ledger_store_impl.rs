@@ -253,11 +253,7 @@ impl BestLedgerStore for IndexerStore {
         self.update_best_accounts(state_hash, account_updates)
     }
 
-    fn update_best_accounts(
-        &self,
-        state_hash: &StateHash,
-        updates: DbAccountUpdate,
-    ) -> Result<()> {
+    fn update_best_accounts(&self, state_hash: &StateHash, updates: DbAccountUpdate) -> Result<()> {
         trace!("Updating best ledger accounts for best tip {state_hash}");
 
         // count all accounts

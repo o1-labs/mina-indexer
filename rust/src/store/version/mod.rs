@@ -31,8 +31,8 @@ impl IndexerStoreVersion {
     // read `"V2"`. Databases built before this also hold devnet balances that
     // were a billionth of their real size, and have to be rebuilt regardless.
     // 19: adds the `zkapp-verification-key-history` column family (per-account
-    // VK change log, keyed by block height + state hash). Databases built before
-    // this have no VK-history index and must be rebuilt to serve
+    // VK change log, keyed by block height + state hash). Databases built
+    // before this have no VK-history index and must be rebuilt to serve
     // `verificationKeyHistory` / `lastVerificationKeyChange`.
     // 20: a zkApp account update keeps all of its events and actions. Databases
     // built before this kept only the first of each update, and the rest cannot
