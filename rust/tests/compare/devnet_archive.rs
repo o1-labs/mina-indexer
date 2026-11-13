@@ -23,10 +23,16 @@
 //! - `COMPARE_MIN_HEIGHT`: low end of the range (default: the indexer's min).
 //! - `COMPARE_TIP_LAG`: blocks to trim below the shared tip (default 5).
 //!
+//! Known difference: the fork genesis block (`DEVNET_GENESIS_HASH`, height
+//! 545434). The archive writes the fixed genesis winner key as its creator; the
+//! indexer serves the creator of the embedded genesis block. The creator check
+//! skips this one block; all other fields of it are still compared.
+//!
 //! zkApp-command hashes are not compared yet (a separate `Zkapp_command` hasher
 //! is still to be ported) — they're covered by the count check instead.
 
 use anyhow::{anyhow, Context};
+use mina_indexer::constants::DEVNET_GENESIS_HASH;
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -235,7 +241,9 @@ fn compare_block(height: u32, a: &Block, i: &Block, hard: &mut Vec<String>) -> u
             a.state_hash, i.state_hash
         ));
     }
-    if a.creator != i.creator {
+    // the archive and the indexer name different creators for the fork genesis
+    // block (see the module docs)
+    if a.creator != i.creator && a.state_hash != DEVNET_GENESIS_HASH {
         hard.push(format!(
             "h{height}: creator archive={} indexer={}",
             a.creator, i.creator
