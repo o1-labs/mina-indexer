@@ -1545,7 +1545,10 @@ mod tests {
 
         let epoch = a.epoch_count();
         let genesis = a.genesis_state_hash();
-        assert_eq!((epoch, &genesis), (b.epoch_count(), &b.genesis_state_hash()));
+        assert_eq!(
+            (epoch, &genesis),
+            (b.epoch_count(), &b.genesis_state_hash())
+        );
 
         let check_sold = |canonical: &HashMap<PublicKey, u32>| -> anyhow::Result<()> {
             for pk in a_counts.keys().chain(b_counts.keys()) {

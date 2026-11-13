@@ -36,15 +36,15 @@ impl StagedLedgerStore for IndexerStore {
     ) -> Result<Option<Account>> {
         trace!("Getting {} staged ledger {} account", pk, state_hash);
 
-        // Fast path: an account with no stored staged copy anywhere AND absent from
-        // the best ledger has never existed -- skip the walk.
+        // Fast path: an account with no stored staged copy anywhere AND absent
+        // from the best ledger has never existed -- skip the walk.
         //
-        // We must NOT give up merely because the pk's first stored staged copy is
-        // above the query height (or absent). An account created after genesis and
-        // below the first cadence snapshot has no stored staged copy yet but still
-        // exists, and the reconstruction below builds it from block diffs. Querying
-        // below its creation height returns `None` naturally: no diff on the walked
-        // range creates it. (Issue #89.)
+        // We must NOT give up merely because the pk's first stored staged copy
+        // is above the query height (or absent). An account created after
+        // genesis and below the first cadence snapshot has no stored staged
+        // copy yet but still exists, and the reconstruction below builds it
+        // from block diffs. Querying below its creation height returns `None`
+        // naturally: no diff on the walked range creates it. (Issue #89.)
         if self.get_pk_min_staged_ledger_block(pk)?.is_none()
             && self.get_best_account(pk, token)?.is_none()
         {
@@ -67,8 +67,8 @@ impl StagedLedgerStore for IndexerStore {
             // A full staged ledger is stored here and the account is not in it:
             // it did not exist yet, so a diff collected above creates it. Stop
             // and reconstruct it from an empty base, as at the genesis base.
-            // Walking on to genesis would parse every block diff on the way, for
-            // each account created since the last stored ledger.
+            // Walking on to genesis would parse every block diff on the way,
+            // for each account created since the last stored ledger.
             if self
                 .database
                 .get_cf(
@@ -85,13 +85,14 @@ impl StagedLedgerStore for IndexerStore {
                     apply_block_diffs.push(curr_state_hash.clone());
                     curr_state_hash = parent_hash;
                 }
-                // No parent in the store. If we have reached the genesis base, the
-                // account is not among the genesis accounts, so it was created after
-                // genesis by one of the diffs collected above -- reconstruct it from
-                // an empty base. (The genesis staged ledger is keyed under the
-                // genesis *prev* state hash, which the walk reaches as the genesis
-                // block's parent; a genesis account is found there and never reaches
-                // this arm.) Any other missing parent is a genuinely broken chain.
+                // No parent in the store. If we have reached the genesis base,
+                // the account is not among the genesis accounts, so it was
+                // created after genesis by one of the diffs collected above --
+                // reconstruct it from an empty base. (The genesis staged ledger
+                // is keyed under the genesis *prev* state hash, which the walk
+                // reaches as the genesis block's parent; a genesis account is
+                // found there and never reaches this arm.) Any other missing
+                // parent is a genuinely broken chain.
                 None if is_genesis_prev_state_hash(&curr_state_hash) => break,
                 None => bail!("Block {} missing parent from store", curr_state_hash),
             }
@@ -99,10 +100,10 @@ impl StagedLedgerStore for IndexerStore {
 
         apply_block_diffs.reverse();
 
-        // Base: the stored staged account we stopped on, or `None` when we broke at
-        // the genesis base for a post-genesis account (created by a diff below).
-        // A corrupt stored account or a store error fails the query closed (a
-        // GraphQL/HTTP error) rather than panicking the worker.
+        // Base: the stored staged account we stopped on, or `None` when we
+        // broke at the genesis base for a post-genesis account (created by a
+        // diff below). A corrupt stored account or a store error fails the
+        // query closed (a GraphQL/HTTP error) rather than panicking the worker.
         let mut staged_account = match self.database.get_cf(
             self.staged_ledger_accounts_cf(),
             staged_account_key(&curr_state_hash, token, pk),
@@ -132,9 +133,9 @@ impl StagedLedgerStore for IndexerStore {
         );
 
         // Same rules as `get_staged_account`, for all accounts in one walk: an
-        // account's base is its stored staged copy at the nearest block, or none
-        // at a stored full ledger without it (or at the genesis base); the diffs
-        // of the blocks above its base then apply to it, oldest first.
+        // account's base is its stored staged copy at the nearest block, or
+        // none at a stored full ledger without it (or at the genesis base); the
+        // diffs of the blocks above its base then apply to it, oldest first.
         let mut staged = HashMap::with_capacity(accounts.len());
         let mut pending: HashSet<(PublicKey, TokenAddress)> = HashSet::new();
         for (pk, token) in accounts {
@@ -148,8 +149,8 @@ impl StagedLedgerStore for IndexerStore {
             }
         }
 
-        // blocks above the walk position, newest first; an account's base depth is
-        // the number of these blocks whose diffs apply to it
+        // blocks above the walk position, newest first; an account's base depth
+        // is the number of these blocks whose diffs apply to it
         let mut walked: Vec<StateHash> = vec![];
         let mut base_depth: HashMap<(PublicKey, TokenAddress), usize> = HashMap::new();
         let mut curr_state_hash = state_hash.clone();
@@ -200,8 +201,8 @@ impl StagedLedgerStore for IndexerStore {
             }
         }
 
-        // apply each walked block's diff once, oldest first, to the accounts based
-        // below it that the diff touches
+        // apply each walked block's diff once, oldest first, to the accounts
+        // based below it that the diff touches
         for (depth, block_hash) in walked.iter().enumerate().rev() {
             if !base_depth.values().any(|base| *base > depth) {
                 continue;
@@ -311,8 +312,8 @@ impl StagedLedgerStore for IndexerStore {
             )?;
         }
 
-        // the sort key carries the balance, so a re-write at a new balance lands
-        // beside the old key rather than on it
+        // the sort key carries the balance, so a re-write at a new balance
+        // lands beside the old key rather than on it
         self.delete_staged_account_balance_sort_key(pk, token, state_hash)?;
 
         // store staged ledger account bytes
@@ -795,8 +796,8 @@ impl StagedLedgerStore for IndexerStore {
         start[..StateHash::LEN].copy_from_slice(state_hash.0.as_bytes());
 
         if let Direction::Reverse = direction {
-            // need to go beyond all {state_hash}{token}{pk} keys for this staged ledger
-            // without going into the "next" staged ledger's data
+            // need to go beyond all {state_hash}{token}{pk} keys for this
+            // staged ledger without going into the "next" staged ledger's data
             start[StateHash::LEN..][..TokenAddress::LEN]
                 .copy_from_slice(&TokenAddress::upper_bound());
             start[StateHash::LEN..][TokenAddress::LEN..].copy_from_slice(b"C");

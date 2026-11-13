@@ -413,8 +413,9 @@ impl ZkappStore for IndexerStore {
         pk: &PublicKey,
         direction: Direction,
     ) -> DBIterator<'_> {
-        // Seek to this pk's rows. Reverse starts just past the pk's last possible
-        // key (max height + max state hash) so iteration yields newest-first.
+        // Seek to this pk's rows. Reverse starts just past the pk's last
+        // possible key (max height + max state hash) so iteration yields
+        // newest-first.
         let mut start = [0u8; PublicKey::LEN + U32_LEN + StateHash::LEN];
         start[..PublicKey::LEN].copy_from_slice(pk.0.as_bytes());
         if let Direction::Reverse = direction {
@@ -801,7 +802,8 @@ mod tests {
             .collect();
         assert_eq!(heights, vec![20, 10]);
 
-        // rollback (unapply) removes the height-20 record; last falls back to 10
+        // rollback (unapply) removes the height-20 record; last falls back to
+        // 10
         store.remove_zkapp_verification_key_change(&pk, 20, &sh2)?;
         let (h, sh, last) = store
             .get_last_zkapp_verification_key_change(&pk)?

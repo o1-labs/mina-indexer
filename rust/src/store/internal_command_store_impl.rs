@@ -664,7 +664,8 @@ mod tests {
         let store = create_indexer_store()?;
 
         let path = PathBuf::from("./data/genesis_blocks/mainnet-359605-3NK4BpDSekaqsG6tx8Nse2zJchRft2JpnbvMiog55WCr5xJZaKeP.json");
-        let block = PrecomputedBlock::parse_file(&path, PcbVersion::V2(CurrencyEncoding::Nanomina))?;
+        let block =
+            PrecomputedBlock::parse_file(&path, PcbVersion::V2(CurrencyEncoding::Nanomina))?;
 
         let pk: PublicKey = "B62qiy32p8kAKnny8ZFwoMhYpBppM1DWVCqAPBYNcXnsAHhnfAAuXgg".into();
         let state_hash = block.state_hash();
