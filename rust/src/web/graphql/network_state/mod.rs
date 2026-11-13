@@ -103,9 +103,10 @@ mod tests {
         assert_eq!(heights(0, 0), (0, 0));
     }
 
-    /// Run the query through the full GraphQL schema on an empty store and check
-    /// the type names (`__typename`), the field names and the heights (0, as
-    /// there is no best block). Clients that select these names must not break.
+    /// Run the query through the full GraphQL schema on an empty store and
+    /// check the type names (`__typename`), the field names and the heights (0,
+    /// as there is no best block). Clients that select these names must not
+    /// break.
     #[tokio::test]
     async fn query_has_the_expected_shape() {
         let dir = tempfile::TempDir::new().unwrap();
