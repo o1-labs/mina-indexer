@@ -14,6 +14,7 @@ pub mod charts;
 pub mod events;
 pub mod gen;
 pub mod internal_commands;
+pub mod network_state;
 pub mod snarks;
 pub mod staged_ledgers;
 pub mod stakes;
@@ -61,6 +62,7 @@ pub struct Root(
     charts::ChartsQueryRoot,
     verification_key::VerificationKeyQueryRoot,
     version::VersionQueryRoot,
+    network_state::NetworkStateQueryRoot,
 );
 
 /// Extension that aborts a GraphQL request exceeding a wall-clock budget — a guard

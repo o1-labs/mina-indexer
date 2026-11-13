@@ -880,6 +880,21 @@ type InternalCommandWithMeta {
 
 scalar Long
 
+type MaxBlockHeightInfo {
+	"""
+	Highest final block (k blocks below the best tip)
+	"""
+	canonicalMaxBlockHeight: Int!
+	"""
+	Highest block (the best tip)
+	"""
+	pendingMaxBlockHeight: Int!
+}
+
+type NetworkStateOutput {
+	maxBlockHeight: MaxBlockHeightInfo!
+}
+
 type NextEpochData {
 	"""
 	Value next epoch seed
@@ -1095,6 +1110,10 @@ type Root {
 	lastVerificationKeyChange(address: String!): VerificationKeyChangeEntry
 	version: String!
 	dbVersion: String!
+	"""
+	Archive-node-api compatible network state
+	"""
+	networkState: NetworkStateOutput!
 }
 
 type SnarkBlock {
