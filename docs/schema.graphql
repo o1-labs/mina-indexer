@@ -1111,7 +1111,7 @@ type Root {
 	version: String!
 	dbVersion: String!
 	"""
-	Archive-node-api compatible network state
+	Best tip and final block heights
 	"""
 	networkState: NetworkStateOutput!
 }

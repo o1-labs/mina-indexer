@@ -1,10 +1,9 @@
-//! GraphQL `networkState` endpoint, compatible with archive-node-api
+//! GraphQL `networkState` endpoint
 //!
-//! The archive-node-api gives two heights:
-//! - `pendingMaxBlockHeight`: the highest block it stored (the best tip)
-//! - `canonicalMaxBlockHeight`: the highest block it marked canonical, i.e.
-//!   final. The archive marks a block canonical when it leaves the transition
-//!   frontier, k blocks below the best tip.
+//! It gives two heights:
+//! - `pendingMaxBlockHeight`: the highest block (the best tip)
+//! - `canonicalMaxBlockHeight`: the highest final block. A block is final when
+//!   it leaves the transition frontier, k blocks below the best tip.
 //!
 //! The indexer marks every best-chain block canonical, up to the best tip, so
 //! its canonical flag is not used here: the final height is `best tip - k`,
@@ -37,18 +36,20 @@ pub struct MaxBlockHeightInfo {
 
 #[Object]
 impl NetworkStateQueryRoot {
-    /// Archive-node-api compatible network state
+    /// Best tip and final block heights
     async fn network_state(&self, ctx: &Context<'_>) -> anyhow::Result<NetworkState> {
         network_state(db(ctx))
     }
 }
 
 fn network_state(db: &IndexerStore) -> anyhow::Result<NetworkState> {
-    let pending = db.get_best_block_height()?.unwrap_or_default();
+    // no best block yet (empty store, before the first block is ingested)
+    // gives height 0
+    let pending = db.get_best_block_height()?.unwrap_or(0);
 
     // the genesis (or fork root) block is final from the start
     let genesis = match db.get_best_block_genesis_hash()? {
-        Some(hash) => db.get_block_height(&hash)?.unwrap_or_default(),
+        Some(hash) => db.get_block_height(&hash)?.unwrap_or(0),
         None => 0,
     };
 
@@ -86,7 +87,7 @@ mod tests {
 
     #[test]
     fn canonical_is_k_below_the_best_tip() {
-        // live devnet values from archive-node-api
+        // live devnet values
         assert_eq!(heights(589_131, 545_434), (588_841, 589_131));
     }
 
@@ -102,8 +103,11 @@ mod tests {
         assert_eq!(heights(0, 0), (0, 0));
     }
 
+    /// Run the query through the full GraphQL schema on an empty store and check
+    /// the type names (`__typename`), the field names and the heights (0, as
+    /// there is no best block). Clients that select these names must not break.
     #[tokio::test]
-    async fn query_has_the_archive_shape() {
+    async fn query_has_the_expected_shape() {
         let dir = tempfile::TempDir::new().unwrap();
         let store = std::sync::Arc::new(IndexerStore::new(dir.path(), true).unwrap());
         let schema = crate::web::graphql::build_schema(store, 0, 0, 0, false);
