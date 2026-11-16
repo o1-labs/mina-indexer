@@ -569,13 +569,15 @@ impl StagedLedgerStore for IndexerStore {
             }
         }
 
-        // initialize account/zkapp/token counts
-        let count = genesis_ledger.len() as u32;
+        // initialize account/zkapp/token counts: a fork genesis ledger holds
+        // custom token and zkApp accounts too
+        let num_mina_accounts = genesis_ledger.mina_account_len() as u32;
 
-        self.set_num_accounts(count)?;
-        self.set_num_mina_accounts(count)?;
-        self.set_mina_token_holders_num(count)?;
-        self.set_num_zkapp_accounts(0)?;
+        self.set_num_accounts(genesis_ledger.len() as u32)?;
+        self.set_num_mina_accounts(num_mina_accounts)?;
+        self.set_mina_token_holders_num(num_mina_accounts)?;
+        self.set_num_zkapp_accounts(genesis_ledger.zkapp_account_len() as u32)?;
+        self.set_num_mina_zkapp_accounts(genesis_ledger.zkapp_mina_account_len() as u32)?;
 
         // initialize genesis token
         if let Some(token) = genesis_token {
@@ -850,4 +852,67 @@ fn is_genesis_prev_state_hash(state_hash: &StateHash) -> bool {
         || state_hash.0 == HARDFORK_GENESIS_PREV_STATE_HASH
         || state_hash.0 == DEVNET_GENESIS_PREV_STATE_HASH
         || state_hash.0 == MAINNET_MESA_GENESIS_PREV_STATE_HASH
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mina_blocks::v2::ZkappAccount;
+    use tempfile::TempDir;
+
+    fn account(pk: &str, token: &TokenAddress, zkapp: bool) -> anyhow::Result<Account> {
+        Ok(Account {
+            public_key: PublicKey::new(pk)?,
+            token: Some(token.clone()),
+            zkapp: zkapp.then(ZkappAccount::default),
+            ..Default::default()
+        })
+    }
+
+    /// A fork genesis ledger holds custom token and zkApp accounts. The account
+    /// counts must count each kind once, and the MINA counts only MINA
+    /// accounts.
+    #[test]
+    fn genesis_ledger_counts_each_kind_of_account() -> anyhow::Result<()> {
+        let dir = TempDir::new()?;
+        let store = IndexerStore::new(dir.path(), true)?;
+
+        let mina = TokenAddress::default();
+        let custom =
+            TokenAddress::new("weihj2SSP7Z96acs56ygP64Te6wauzvWWfAPHKb1gzqem9J4Ne").unwrap();
+        let pk0 = "B62qqmveaSLtpcfNeaF9KsEvLyjsoKvnfaHy4LHyApihPVzR3qDNNEG";
+        let pk1 = "B62qjoDXHMPZx8AACUrdaKVyDcn7uxbym1kxodgMXztn6iJC2yqEKbs";
+
+        // 2 MINA accounts (1 zkApp) + 2 custom token accounts (1 zkApp)
+        let mut ledger = Ledger::new();
+        ledger.insert_account(account(pk0, &mina, false)?, &mina);
+        ledger.insert_account(account(pk1, &mina, true)?, &mina);
+        ledger.insert_account(account(pk0, &custom, true)?, &custom);
+        ledger.insert_account(account(pk1, &custom, false)?, &custom);
+
+        let state_hash = StateHash::new(DEVNET_GENESIS_PREV_STATE_HASH)?;
+        store.add_genesis_ledger(&state_hash, &ledger, 1, None)?;
+
+        assert_eq!(store.get_num_accounts()?, Some(4));
+        assert_eq!(store.get_num_mina_accounts()?, Some(2));
+        assert_eq!(store.get_token_holders_num(&mina)?, Some(2));
+        assert_eq!(store.get_num_zkapp_accounts()?, Some(2));
+        assert_eq!(store.get_num_mina_zkapp_accounts()?, Some(1));
+
+        // the recount agrees with the genesis counts
+        assert!(!store.recount_best_ledger_accounts()?);
+
+        // a store with the old wrong genesis counts is corrected
+        store.set_num_mina_accounts(4)?;
+        store.set_mina_token_holders_num(4)?;
+        store.set_num_zkapp_accounts(0)?;
+        assert!(store.recount_best_ledger_accounts()?);
+
+        assert_eq!(store.get_num_accounts()?, Some(4));
+        assert_eq!(store.get_num_mina_accounts()?, Some(2));
+        assert_eq!(store.get_token_holders_num(&mina)?, Some(2));
+        assert_eq!(store.get_num_zkapp_accounts()?, Some(2));
+        assert_eq!(store.get_num_mina_zkapp_accounts()?, Some(1));
+        Ok(())
+    }
 }
