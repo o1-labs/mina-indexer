@@ -151,6 +151,12 @@ pub trait BestLedgerStore {
     /// Check whether a a token account is a zkapp account
     fn is_zkapp_account(&self, pk: &PublicKey, token: &TokenAddress) -> Result<Option<bool>>;
 
+    /// Count the best ledger accounts and set the account, MINA account, MINA
+    /// token holder, zkApp account and MINA zkApp account counts. It corrects
+    /// a store whose genesis ledger was counted wrong. Returns `true` if a
+    /// count changed.
+    fn recount_best_ledger_accounts(&self) -> Result<bool>;
+
     /////////////////////////
     // Best ledger builder //
     /////////////////////////

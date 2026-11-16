@@ -26,7 +26,7 @@ use crate::{
         ledger::best::*,
     },
 };
-use log::trace;
+use log::{info, trace};
 use speedb::{DBIterator, IteratorMode};
 use std::collections::{HashMap, HashSet};
 
@@ -640,6 +640,50 @@ impl BestLedgerStore for IndexerStore {
 
         let old = self.get_num_zkapp_accounts()?.unwrap_or_default();
         self.set_num_zkapp_accounts(old + 1)
+    }
+
+    fn recount_best_ledger_accounts(&self) -> Result<bool> {
+        trace!("Recounting best ledger accounts");
+
+        // key: {token}{pk}, value: [Account] serde bytes
+        let (mut all, mut mina, mut zkapp, mut mina_zkapp) = (0u32, 0u32, 0u32, 0u32);
+        for item in self
+            .database
+            .iterator_cf(self.best_ledger_accounts_cf(), IteratorMode::Start)
+        {
+            let (key, value) = item?;
+            let is_mina = key.starts_with(MINA_TOKEN_ADDRESS.as_bytes());
+            let is_zkapp = serde_json::from_slice::<Account>(&value)?.is_zkapp_account();
+
+            all += 1;
+            mina += is_mina as u32;
+            zkapp += is_zkapp as u32;
+            mina_zkapp += (is_mina && is_zkapp) as u32;
+        }
+
+        let mina_token = TokenAddress::default();
+        let before = (
+            self.get_num_accounts()?.unwrap_or_default(),
+            self.get_num_mina_accounts()?.unwrap_or_default(),
+            self.get_token_holders_num(&mina_token)?.unwrap_or_default(),
+            self.get_num_zkapp_accounts()?.unwrap_or_default(),
+            self.get_num_mina_zkapp_accounts()?.unwrap_or_default(),
+        );
+        let after = (all, mina, mina, zkapp, mina_zkapp);
+        if before == after {
+            return Ok(false);
+        }
+
+        info!(
+            "Corrected best ledger counts (accounts, MINA accounts, MINA holders, \
+             zkApp accounts, MINA zkApp accounts): {before:?} -> {after:?}"
+        );
+        self.set_num_accounts(all)?;
+        self.set_num_mina_accounts(mina)?;
+        self.set_mina_token_holders_num(mina)?;
+        self.set_num_zkapp_accounts(zkapp)?;
+        self.set_num_mina_zkapp_accounts(mina_zkapp)?;
+        Ok(true)
     }
 
     fn is_zkapp_account(&self, pk: &PublicKey, token: &TokenAddress) -> Result<Option<bool>> {

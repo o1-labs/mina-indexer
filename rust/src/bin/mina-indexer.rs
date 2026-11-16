@@ -13,7 +13,7 @@ use mina_indexer::{
     },
     client,
     constants::*,
-    ledger::genesis::GenesisLedger,
+    ledger::{genesis::GenesisLedger, store::best::BestLedgerStore},
     server::{GenesisVersion, IndexerConfiguration, IndexerVersion, InitializationMode},
     store::{
         restore_snapshot,
@@ -253,6 +253,10 @@ impl ServerCommand {
 
         info!("Starting the mina indexer filesystem watchers & UDS server");
         let db = Arc::new(IndexerStore::new(&database_dir, false)?);
+
+        // a store built before the genesis account counts were fixed holds wrong
+        // counts: correct them before the indexer and web server start
+        db.recount_best_ledger_accounts()?;
         let store = db.clone();
 
         subsys.start(SubsystemBuilder::new("Indexer", move |s| {
