@@ -1602,6 +1602,7 @@ test_hurl_v1() {
 	test_file_url_pairs=(
 		"$SRC/tests/hurl/v1/*.hurl" "http://localhost:$port/graphql"
 		"$SRC/tests/hurl/v1/rest/summary.hurl" "http://localhost:$port/summary"
+		"$SRC/tests/hurl/v1/rest/block_proof.hurl" "http://localhost:$port"
 	)
 
 	# Loop through the array in pairs (file path and URL)
